@@ -11,6 +11,8 @@ dist-ssr/
 build/
 coverage/
 .github-release/
+github-release/
+bun.lock
 *.apk
 *.ipa
 *.exe
