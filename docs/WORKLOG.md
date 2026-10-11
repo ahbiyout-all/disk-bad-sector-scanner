@@ -1,6 +1,6 @@
 # DiskSentinel Pro - Developer Work Log (작업 로그)
 
-### 2026-10-11 (v4.4.0 GitHub Actions CI/CD Lockfile & Workflow Resiliency Patch)
+### 2026-10-11 (v4.4.0 GitHub Actions CI/CD Lockfile, Release Installer & Workflow Resiliency Patch)
 - **GitHub Actions Runner 의존성 락파일 및 크로스 플랫폼 옵셔널 패키지(`npm ci`) 오류 해결**:
   - **오류 원인**: 
     1. 1차: `actions/setup-node@v4`에서 `package-lock.json` 누락 시 캐시 실패.
@@ -8,7 +8,13 @@
   - **`npm install` 표준 채택**: `npm ci`의 과도하게 엄격한 전 플랫폼 대상 락파일 검사 대신, CI 러너의 실제 OS(Ubuntu Linux x64)에 필요한 패키지만 안전하게 설치 및 캐시하는 `npm install`로 전면 교체하여 어떤 운영체제 환경에서도 무결하게 빌드 통과.
   - **GitHub CI/CD 워크플로 3종 완전 적용 (`ci.yml`, `ci-cd.yml`, `release.yml`)**:
     - `actions/setup-node@v4`의 안전 캐싱(`cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}`)과 `npm install` 파이프라인으로 일원화.
-  - **핵심 릴리스 번들러 (`scripts/bundle-essential-release.mjs`) 및 `git-push-auto.bat` 동기화 완료**.
+- **모바일(APK/iOS) 부적합 패키징 제거 및 데스크톱 전용 인스톨러 에셋 일원화**:
+  - 디스크 배드섹터 검사기 특성상 모바일 샌드박스 정책으로 물리 디스크 로우 레벨 접근이 불가능하므로, `ci-cd.yml`, `release.yml`, `scripts/package-cross-platform.mjs`에서 부적합한 APK / iOS 패키지 제거 완료.
+  - GitHub Releases에는 순수 데스크톱 설치 패키지(`DiskSentinel-Pro-v4.4.0-Desktop-Setup-Package.zip`)만 생성 및 업로드되도록 간소화.
+- **Inno Setup 전처리기 매크로(`{#AppVersion}`) 및 무인 설치/방화벽 규칙 완비 (`setup.iss`)**:
+  - `build.bat`의 `/DAppVersion` 파라미터와 유기적으로 연동되는 Inno Setup 동적 매크로 구성.
+  - 기본 방화벽 규칙 및 버전 표기 규칙 동시 등록, 무인 설치(`/SILENT`, `/VERYSILENT /NORESTART`) 완비.
+- **핵심 릴리스 번들러 (`scripts/bundle-essential-release.mjs`) 및 `git-push-auto.bat` 동기화 완료**.
 
 ### 2026-10-11 (v4.4.0 GitHub Essential Release Bundler & Staging Automation)
 - **GitHub 핵심 빌드 소스 전용 번들러 및 가시적/비가시적 전용 폴더 (`scripts/bundle-essential-release.mjs`, `github-release/`, `.github-release/`)**:

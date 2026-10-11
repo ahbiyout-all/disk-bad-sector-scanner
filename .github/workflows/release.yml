@@ -38,7 +38,7 @@ jobs:
       - name: Build Web Application
         run: npm run build
 
-      - name: Package Cross-Platform Installers (PC / APK / iOS)
+      - name: Package Official Desktop Installer Asset
         run: node scripts/package-cross-platform.mjs
 
       - name: Generate Release Notes
@@ -51,20 +51,21 @@ jobs:
 
           [제작자 및 공식 채널 안내]
           - 개발자: AhBiYout
-          - GitHub 저장소: https://github.com/AhBiYout-all
+          - GitHub 저장소: https://github.com/AhBiYout-all/disk-bad-sector-scanner
           - 공식 구글 블로그: https://ahbiyoutvibe.blogspot.com/
           - 소속: https://www.cisnet.co.kr
 
           ### 📦 배포 설치 파일 목록 (Release Assets)
-          1. **PC Standalone Package**: `DiskSentinel-Pro-PC-Windows-macOS-Linux.zip`
-          2. **Android APK/PWA Package**: `DiskSentinel-Pro-Android.apk.zip`
-          3. **iOS WebBundle Package**: `DiskSentinel-Pro-iOS-WebBundle.zip`
-          4. **Universal Web Installer**: `DiskSentinel-Pro-Universal-WebInstaller.tar.gz`
+          1. **Desktop Setup Installer**: `DiskSentinel-Pro-v4.4.0-Desktop-Setup-Package.zip`
+             - Inno Setup 네이티브 인스톨러 컴파일 지원 (`setup.iss`, `build.bat`)
+             - Windows 조용한 방화벽 규칙 사전 등록 (기본 이름 및 버전 포함 이름)
+             - 무인 설치 지원 (`/SILENT`, `/VERYSILENT /NORESTART`)
+             - *(안내: 모바일 APK / iOS 환경은 로우 레벨 디스크 하드웨어 직접 접근이 불가하므로 제외되었습니다.)*
 
           ### 🛡️ 변경 사항 및 보안
           - Node.js 22 LTS / 24 런타임 적용 완료
           - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 분석 기능
-          - 크로스 플랫폼 오프라인 실행 지원
+          - 오프라인 단독 실행 지원
           EOF
 
       - name: Publish Release to GitHub Releases
@@ -78,6 +79,5 @@ jobs:
           prerelease: false
           files: |
             dist-packages/*.zip
-            dist-packages/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
