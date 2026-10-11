@@ -57,7 +57,7 @@ if /i "%CONFIRM%" NEQ "Y" (
 
 echo.
 echo [STEP 5] Staging only essential core project files...
-git add package.json tsconfig.json vite.config.ts index.html metadata.json .env.example .gitignore setup.iss build.bat git-push-auto.bat
+git add package.json package-lock.json tsconfig.json vite.config.ts index.html metadata.json .env.example .gitignore setup.iss build.bat git-push-auto.bat
 git add src/ public/ docs/ .github/ scripts/
 git status
 

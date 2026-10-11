@@ -1,5 +1,15 @@
 # DiskSentinel Pro - Developer Work Log (작업 로그)
 
+### 2026-10-11 (v4.4.0 GitHub Actions CI/CD Lockfile & Workflow Resiliency Patch)
+- **GitHub Actions Runner 의존성 락파일 누락 오류 (`actions/setup-node@v4`) 해결**:
+  - **오류 원인**: `actions/setup-node@v4`에서 `cache: 'npm'` 사용 시 레포지토리에 `package-lock.json`이 누락되어 `Error: Dependencies lock file is not found`로 러너가 즉시 종료되는 현상 발생.
+  - **`package-lock.json` 표준 생성 및 추적**: 최신 npm(229개 패키지, 보안 취약점 0건) 기반 정규 `package-lock.json`을 생성하고 Git 트래킹 및 배포 스테이징에 포함.
+  - **핵심 릴리스 번들러 (`scripts/bundle-essential-release.mjs`) 동기화**: `ESSENTIAL_FILES` 목록에 `package-lock.json`을 공식 추가하여 `github-release/` 및 `.github-release/` 폴더에 항상 무결하게 배치되도록 개선.
+  - **`git-push-auto.bat` 동기화**: `git add` 명령어에 `package-lock.json`을 명시하여 푸시 시 락파일 누락 방지.
+  - **GitHub CI/CD 워크플로 3중 복원력(Fallback) 확보 (`ci.yml`, `ci-cd.yml`, `release.yml`)**:
+    - `cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}`: 락파일 존재 여부에 따라 안전하게 캐시 활성화.
+    - `Install Dependencies` 스텝 개선: `package-lock.json` 존재 시 고속 `npm ci`, 부재 시 `npm install`로 자동 전환되어 어떤 상황에서도 빌드 실패가 발생하지 않도록 방어 로직 내재화.
+
 ### 2026-10-11 (v4.4.0 GitHub Essential Release Bundler & Staging Automation)
 - **GitHub 핵심 빌드 소스 전용 번들러 및 가시적/비가시적 전용 폴더 (`scripts/bundle-essential-release.mjs`, `github-release/`, `.github-release/`)**:
   - 깃허브 푸시 시 빌드에 불필요한 캐시, 빌드 산출물(`dist/`, `dist-packages/`), 패키지(`node_modules/`), 임시 로그 파일의 유입을 원천 차단하고 순수 핵심 빌드 소스만을 추출해 독립적으로 관리하는 전용 스테이징 환경 구축.

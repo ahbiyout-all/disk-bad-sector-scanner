@@ -27,6 +27,7 @@ const dotReleaseDir = path.join(rootDir, '.github-release');
 // List of exact core files and directories essential for clean build & documentation
 const ESSENTIAL_FILES = [
   'package.json',
+  'package-lock.json',
   'tsconfig.json',
   'vite.config.ts',
   'index.html',
