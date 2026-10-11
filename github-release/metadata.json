@@ -1,0 +1,6 @@
+{
+  "name": "디스크 배드섹터 검사기 (Disk Bad Sector Scanner)",
+  "description": "실시간 디스크 및 외부 저장장치(USB/외장 SSD/SD) 배드섹터 표면 검사, S.M.A.R.T. 건강 요약 그래프, 실시간 알림 및 이전 검사 기록 비교 대시보드",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

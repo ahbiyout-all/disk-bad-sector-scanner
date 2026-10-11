@@ -1,0 +1,83 @@
+name: Automated Release & Cross-Platform Packaging
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release Tag (e.g. v4.2.1)'
+        required: true
+        default: 'v4.2.1'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Package & Publish GitHub Release (Node.js 22 LTS)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22 (LTS)
+        # Note: Node.js 20 is officially deprecated/EOL. Using LTS 22.
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Package Cross-Platform Installers (PC / APK / iOS)
+        run: node scripts/package-cross-platform.mjs
+
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          VERSION="${{ github.ref_name || github.event.inputs.version_tag }}"
+          echo "tag_name=$VERSION" >> $GITHUB_OUTPUT
+          cat << 'EOF' > RELEASE_NOTES.md
+          ## 🚀 DiskSentinel Pro Release
+
+          [제작자 및 공식 채널 안내]
+          - 개발자: AhBiYout
+          - GitHub 저장소: https://github.com/AhBiYout-all
+          - 공식 구글 블로그: https://ahbiyoutvibe.blogspot.com/
+          - 소속: https://www.cisnet.co.kr
+
+          ### 📦 배포 설치 파일 목록 (Release Assets)
+          1. **PC Standalone Package**: `DiskSentinel-Pro-PC-Windows-macOS-Linux.zip`
+          2. **Android APK/PWA Package**: `DiskSentinel-Pro-Android.apk.zip`
+          3. **iOS WebBundle Package**: `DiskSentinel-Pro-iOS-WebBundle.zip`
+          4. **Universal Web Installer**: `DiskSentinel-Pro-Universal-WebInstaller.tar.gz`
+
+          ### 🛡️ 변경 사항 및 보안
+          - Node.js 22 LTS / 24 런타임 적용 완료
+          - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 분석 기능
+          - 크로스 플랫폼 오프라인 실행 지원
+          EOF
+
+      - name: Publish Release to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.version_tag }}
+          name: DiskSentinel Pro ${{ github.ref_name || github.event.inputs.version_tag }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            dist-packages/*.zip
+            dist-packages/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
