@@ -26,6 +26,7 @@ const dotReleaseDir = path.join(rootDir, '.github-release');
 
 // List of exact core files and directories essential for clean build & documentation
 const ESSENTIAL_FILES = [
+  'README.md',
   'package.json',
   'package-lock.json',
   'tsconfig.json',
@@ -36,7 +37,8 @@ const ESSENTIAL_FILES = [
   '.gitignore',
   'setup.iss',
   'build.bat',
-  'git-push-auto.bat',
+  'build-dll.bat',
+  'build-rust.bat',
 ];
 
 const ESSENTIAL_DIRECTORIES = [
@@ -45,6 +47,7 @@ const ESSENTIAL_DIRECTORIES = [
   'docs',
   '.github',
   'scripts',
+  'src-tauri',
 ];
 
 // Patterns to exclude strictly to prevent bloating or security leakage
@@ -63,6 +66,7 @@ const EXCLUDE_PATTERNS = [
   '.DS_Store',
   '*.tmp',
   '*.log',
+  'git-push-auto.bat',
 ];
 
 function shouldExclude(relPath) {

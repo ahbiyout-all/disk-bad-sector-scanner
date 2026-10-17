@@ -31,9 +31,9 @@ export interface ReleaseInfo {
 export const PROJECT_INFO = {
   appName: 'DiskSentinel Pro',
   appKoreanName: '디스크 배드섹터 검사기',
-  version: 'v4.4.0',
-  versionNumber: '4.4.0',
-  buildDate: '2026-10-11',
+  version: 'v4.5.0',
+  versionNumber: '4.5.0',
+  buildDate: '2026-10-15',
   
   // Developer & Official Channels
   developer: {

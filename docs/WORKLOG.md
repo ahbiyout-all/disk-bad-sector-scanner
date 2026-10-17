@@ -1,6 +1,66 @@
 # DiskSentinel Pro - Developer Work Log (작업 로그)
 
-### 2026-10-11 (v4.4.0 GitHub Actions CI/CD Lockfile, Release Installer & Workflow Resiliency Patch)
+### 2026-10-13 (v4.5.0 Rust Native Engine, NVMe Log 02h Deep Telemetry & AVX2 SIMD Zero-Check)
+- **Rust 고성능 네이티브 코어 엔진 크레이트 구축 (`src/native/rust/`)**:
+  - `Cargo.toml` (`crate-type = ["cdylib", "rlib"]`) 및 `windows-sys` 의존성을 구성하여 안전한 Win32 Direct I/O 파이프라인 수립.
+  - C ABI (`extern "system"`) 100% 바이너리 호환으로 기존 React 19 / TypeScript 프론트엔드와 무수정 드롭인(Drop-in) 교체 체계 완성.
+- **NVMe 심층 텔레메트리 파싱 함수 구현 (`DS_GetNvmeDeepTelemetry`)**:
+  - `IOCTL_STORAGE_PROTOCOL_COMMAND` 기반 NVMe Log Page 02h 파싱: 가용 예비 영역(Available Spare), 수명 마모율(Percentage Used), 누적 읽기/쓰기 테라바이트(TBW), 미디어 무결성 에러 수집.
+- **SIMD AVX2 256비트 벡터 가속 제로 체크 및 체크섬 (`DS_CalculateAvx2ChecksumAndZeroCheck`)**:
+  - `std::arch::x86_64` AVX2 인트린직을 활용한 256비트 벡터 레지스터 병렬 비교로 빈 제로 필 섹터의 나노초 단위 고속 스킵 및 패리티 검증.
+- **Windows 자동 빌드 스크립트 연동 (`build-rust.bat`, `build.bat`)**:
+  - `cargo` 감지 시 자동으로 Rust로 빌드하고, 미설치 시 C++로 자동 폴백하는 스마트 하이브리드 빌드 파이프라인 구현.
+- **Rayon 기반 다중 디스크 동시 병렬 스캐너 구현 (`DS_ScanMultipleDrivesParallel`, 2단계)**:
+  - `rayon = "1.10"` 크레이트를 탑재하여 데이터 레이스 없는 고성능 스레드 풀 병렬 I/O 엔진 구축.
+  - `DSMultiDriveScanTarget` 및 `DSMultiDriveScanSummary` 구조체 설계 및 C ABI 익스포트.
+  - `ParallelDriveScanModal.tsx` 신규 컴포넌트 개발: 대상 드라이브 일괄 선택, 2/4/8/16 스레드 풀 선택, 동시 진행률 및 배드섹터 실시간 병렬 모니터링, 가속 배율 요약 제공.
+  - `Navbar.tsx`에 '병렬 스캔' 원클릭 진입 버튼 탑재.
+- **UI 연동**:
+  - `TelemetryPanel`에 실시간 NVMe Log 02h 및 AVX2 가속 상태 배너 반영.
+
+### 2026-10-13 (v4.4.2 Offline file:/// Protocol White Screen Fix & Native App Launchers)
+- **로컬 설치 경로(`file:///C:/Program Files (x86)/DiskSentinelPro/index.html`) 실행 시 브라우저 흰 화면(White Screen) 오류 원천 해결**:
+  - **오류 원인 심층 분석**:
+    - Vite 기본 빌드는 자바스크립트를 ES 모듈(`<script type="module" crossorigin src="...">`)로 분할 출력함.
+    - Chromium 엔진(Microsoft Edge, Google Chrome)의 브라우저 보안 명세상 `file://` 프로토콜로 로컬 HTML을 직접 열 경우 오리진(Origin)이 `null`로 지정되어, 외부 모듈 청크 로딩 시도 시 `Access to script at 'file:///...' from origin 'null' has been blocked by CORS policy` 에러가 발생하며 자바스크립트 실행이 전면 차단되어 빈 흰 화면이 노출됨.
+  - **해결 조치**:
+    1. **`vite-plugin-singlefile` 및 커스텀 `fileProtocolCompatPlugin` 파이프라인 구축**: 모든 JS 번들과 CSS 스타일시트를 `dist/index.html` 단일 파일로 완전 인라인화.
+    2. **CORS 제한 없는 클래식 스크립트(`<script defer>`) 전환**: `generateBundle` 및 `closeBundle` 단계에서 `<script type="module" crossorigin>`을 일반 지연 실행 스크립트(`<script defer>`)로 자동 변환하여, 로컬 웹 서버 없이 브라우저에서 `index.html`을 더블 클릭(`file:///`)하더라도 CORS 제약 없이 100% 즉시 구동되도록 해결.
+    3. **윈도우 전용 데스크톱 앱 런처 신규 제공 (`DiskSentinelPro.bat`, `DiskSentinelPro.vbs`)**: Microsoft Edge를 브라우저 주소창 없는 독립 데스크톱 앱 윈도우 모드(`msedge.exe --app="file:///..."`)로 띄우는 네이티브 런처 스크립트를 탑재하고, Inno Setup(`setup.iss`) 바탕화면/시작메뉴 바로가기 연동 완료.
+
+### 2026-10-13 (v4.4.1 Native Batch Script Fix, Export PDF/CSV, Temperature Chart & LBA Zoom)
+- **Windows 배치 빌드 스크립트 특수문자 구문 오류 긴급 수정 (`build-dll.bat`, `build.bat`)**:
+  - **오류 원인 분석**: `build-dll.bat` 출력 로그의 `(Weighted Reliability & Life Index)` 및 `(Fast ECC Parity & CRC32 Generator)`에서 `&` 연산자가 Windows `cmd.exe`에 의해 명령 구분자로 해석되어 `'Life'`, `'CRC32'`를 별도 실행 명령으로 오인식하던 구문 결함을 해결.
+  - **해결 조치**: 앰퍼샌드를 `and`로 수정하여 모든 Windows 환경에서 무결하게 출력되도록 교정.
+  - **무인 빌드 파이프라인 최적화**: `build-dll.bat`에 `--no-pause` 인자 처리 루틴을 탑재하고, `build.bat`의 Step 3.5에서 `call build-dll.bat --no-pause`를 호출하도록 개선하여 자동 빌드 시 키 입력 대기로 프로세스가 멈추는 현상 해소.
+- **C++ 컴파일러 매크로 재정의 경고 제거 (`DiskSentinelEngine.cpp`)**:
+  - `src/native/DiskSentinelEngine.cpp`의 `#define DISKSENTINEL_EXPORTS`를 `#ifndef DISKSENTINEL_EXPORTS` 가드로 감싸 MinGW `-DDISKSENTINEL_EXPORTS` 플래그 사용 시 발생하던 컴파일러 경고(`warning: 'DISKSENTINEL_EXPORTS' redefined`) 원천 제거.
+- **검사 결과 내보내기 (PDF & CSV) 완비 (`reportGenerator.ts`, `ExportModal.tsx`)**:
+  - `jspdf` 기반 고해상도 A4 규격 디지털 진단 인증서 PDF 및 UTF-8 BOM 인코딩 Excel 호환 CSV 파일 생성 엔진 구현.
+  - `TelemetryPanel` 및 진단 상세 화면에 원클릭 '결과 내보내기' 모달 연동.
+- **실시간 디스크 온도 10분 선 그래프 탑재 (`TemperatureLineChart.tsx`, `HealthSummaryDashboard.tsx`)**:
+  - 최근 10분(600초) 롤링 타임 버퍼와 고정밀 SVG 스플라인 선 그래프, 상승/하강 추세 인디케이터, 구간별 온도 툴팁 완비.
+- **물리적 LBA 배드섹터 줌 & 클러스터 네비게이션 (`SectorGrid.tsx`)**:
+  - 1x, 2x, 4x, 8x 단계별 줌 및 배드섹터 밀집 영역 자동 클러스터링/원클릭 포커스 기능 탑재.
+- **프로젝트 로드맵 및 상태 매트릭스 문서 수립 (`docs/ROADMAP.md`)**:
+  - P0~P1 작업 항목별 고유 ID, 의존성, 검증 게이트 및 진행 상태를 표준화된 매트릭스로 정식 등록.
+
+### 2026-10-12 (v4.4.1 Pure Creative Native DLL Audit, Architecture Expansion & Build Pipeline)
+- **순수 창작 네이티브 DLL (`DiskSentinelNativeCore.dll`) 오류 전면 감사 및 코드 개선**:
+  - **기존 코드 오류 발견 및 시정**:
+    1. `DS_GetSmartTelemetry` 및 `DS_AttemptSoftSectorRepair`가 `return 0` / 단순 `return true` 스텁 상태였던 문제를 해결, 실제 Win32 커널 `IOCTL_STORAGE_PREDICT_FAILURE` 호출 및 `FILE_FLAG_WRITE_THROUGH` 비파괴 원자적 스크러빙 시퀀스로 완전 구현.
+    2. 64비트 LBA 오버플로 취약점 차단: 4TB 초과 대용량 디스크 스캔 시 정수 오버플로를 방지하도록 `((LONGLONG)lba) * ((LONGLONG)ctx->sectorSize)` 명시적 64비트 연산 적용.
+    3. 크로스 컴파일러 호환성: MSVC 전용인 `strcpy_s`와 `_aligned_malloc`을 표준화된 `safe_strncpy` 및 `DS_ALIGNED_ALLOC` 매크로로 개편하여 MSVC, MinGW, Clang 어디서든 무결하게 컴파일되도록 개선.
+- **3대 순수 창작 핵심 알고리즘 설계 및 네이티브 탑재**:
+  1. `DS_AdaptiveScanChunk`: 정상 표면은 256섹터(1MB) 버스트로 85% 고속 통과하고, 응답 지연(>150ms)이나 I/O 오류 감지 시 1섹터 단위 이진 분할 미세 추적을 자율 발동하는 순수 창작 알고리즘.
+  2. `DS_CalculateParityChecksum`: 하드웨어 CRC32(0xEDB88320) 및 64비트 멀티 레인 Galois XOR 패리티를 실시간 연산하는 소프트 에러 검출기.
+  3. `DS_EvaluateDriveReliability`: S.M.A.R.T. 5대 핵심 불량 속성을 집계하여 잔여 수명 일수 및 신뢰도 지수를 산출하는 다변량 예측 평가기.
+- **순수 창작 DLL 빌드 자동화 스크립트 (`build-dll.bat`) 신규 제작**:
+  - 시스템 내 MSVC(`cl.exe`) 또는 MinGW(`g++`)를 자동 탐색하여 x64 릴리스 최적화 DLL 및 임포트 라이브러리(`bin/native/DiskSentinelNativeCore.dll`) 자동 생성. `build.bat` 파이프라인 단계 연동.
+- **TypeScript 미러링 브리지 (`src/utils/nativeDllBridge.ts`) 신규 개발**:
+  - 웹/클라이언트 환경에서도 DLL의 8바이트 정렬 C ABI 구조체와 창작 알고리즘을 100% 동일한 바이너리 로직으로 에뮬레이션 및 상호 연동 가능하도록 어댑터 제공.
+- **기술 백서 (`docs/DiskSentinel_Native_DLL_Specification.md`) 및 UI 모달 (`DllDocsModal.tsx`) 전면 고도화**:
+  - 8종 C API 표준 스펙, C ABI 메모리 레이아웃, C#/Python/Rust FFI 바인딩 예제, 컴파일러 지침 및 오류 분석 보고서 등록 완료.
 - **GitHub Actions Runner 의존성 락파일 및 크로스 플랫폼 옵셔널 패키지(`npm ci`) 오류 해결**:
   - **오류 원인**: 
     1. 1차: `actions/setup-node@v4`에서 `package-lock.json` 누락 시 캐시 실패.

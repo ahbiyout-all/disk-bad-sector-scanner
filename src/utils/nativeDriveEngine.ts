@@ -187,6 +187,9 @@ export async function createNativeHostDrive(): Promise<DiskDrive> {
     defaultBadSectorProbability: 0.0001,
     seededBadSectors: [],
     seededSlowSectors: [],
+    usedPercentage: sysInfo.usedPercentage,
+    usedBytes: sysInfo.usageBytes,
+    isDemoPreset: false,
     smartAttributes: smartAttrs
   };
 }

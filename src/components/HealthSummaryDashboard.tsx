@@ -2,6 +2,7 @@ import React from 'react';
 import { DiskDrive, ScanTelemetry } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
 import { detectVendor, getVendorProfile, getDriveMediaAnalysis, getTailoredActionMethods } from '../utils/vendorDiagnostics';
+import { TemperatureLineChart } from './TemperatureLineChart';
 import { ShieldCheck, ShieldAlert, AlertTriangle, Thermometer, Clock, HardDrive, Cpu, CheckCircle2, AlertOctagon, RefreshCw, Usb, Zap, Disc, Wrench, Sparkles, ArrowRight } from 'lucide-react';
 
 interface HealthSummaryDashboardProps {
@@ -27,6 +28,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   const vendorProfile = getVendorProfile(vendorKey);
   const mediaAnalysis = getDriveMediaAnalysis(drive);
   const tailoredActions = getTailoredActionMethods(drive, telemetry);
+  const vitals = calculateHardwareVitals(drive, telemetry, 1, isThermalStress);
   // Latency breakdown data
   const totalScanned = Math.max(1, telemetry.goodCount + telemetry.normalCount + telemetry.slowCount + telemetry.criticalCount + telemetry.badCount);
   const goodPct = ((telemetry.goodCount / totalScanned) * 100).toFixed(1);
@@ -248,48 +250,51 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
           </div>
 
           {/* Compute hardware vitals */}
-          {(() => {
-            const vitals = calculateHardwareVitals(drive, telemetry, 1, isThermalStress);
-            return (
-              <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-slate-200 dark:border-slate-800 text-xs">
-                <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  <Thermometer className={`w-3.5 h-3.5 ${vitals.temperatureC > 45 ? 'text-amber-500' : 'text-blue-500'}`} />
-                  <div>
-                    <div className="text-[9px] uppercase font-semibold text-slate-500">작동 온도</div>
-                    <div className="text-xs font-bold font-mono text-slate-900 dark:text-slate-100">{vitals.temperatureC.toFixed(1)}°C</div>
-                  </div>
-                </div>
+          <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-slate-200 dark:border-slate-800 text-xs">
+            <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <Thermometer className={`w-3.5 h-3.5 ${vitals.temperatureC > 45 ? 'text-amber-500' : 'text-blue-500'}`} />
+              <div>
+                <div className="text-[9px] uppercase font-semibold text-slate-500">작동 온도</div>
+                <div className="text-xs font-bold font-mono text-slate-900 dark:text-slate-100">{vitals.temperatureC.toFixed(1)}°C</div>
+              </div>
+            </div>
 
-                <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  <Zap className="w-3.5 h-3.5 text-amber-500" />
-                  <div>
-                    <div className="text-[9px] uppercase font-semibold text-slate-500">소비 전력</div>
-                    <div className="text-xs font-bold font-mono text-amber-600 dark:text-amber-400">{vitals.powerWatts.toFixed(2)}W</div>
-                  </div>
-                </div>
+            <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <Zap className="w-3.5 h-3.5 text-amber-500" />
+              <div>
+                <div className="text-[9px] uppercase font-semibold text-slate-500">소비 전력</div>
+                <div className="text-xs font-bold font-mono text-amber-600 dark:text-amber-400">{vitals.powerWatts.toFixed(2)}W</div>
+              </div>
+            </div>
 
-                <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  {vitals.isMechanicalHdd ? <Disc className="w-3.5 h-3.5 text-indigo-500" /> : <Cpu className="w-3.5 h-3.5 text-cyan-500" />}
-                  <div className="truncate">
-                    <div className="text-[9px] uppercase font-semibold text-slate-500">{vitals.isMechanicalHdd ? '회전 속도' : '스토리지 엔진'}</div>
-                    <div className="text-[11px] font-bold font-mono text-slate-900 dark:text-slate-100 truncate">{vitals.rpmDisplay}</div>
-                  </div>
-                </div>
+            <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              {vitals.isMechanicalHdd ? <Disc className="w-3.5 h-3.5 text-indigo-500" /> : <Cpu className="w-3.5 h-3.5 text-cyan-500" />}
+              <div className="truncate">
+                <div className="text-[9px] uppercase font-semibold text-slate-500">{vitals.isMechanicalHdd ? '회전 속도' : '스토리지 엔진'}</div>
+                <div className="text-[11px] font-bold font-mono text-slate-900 dark:text-slate-100 truncate">{vitals.rpmDisplay}</div>
+              </div>
+            </div>
 
-                <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  <Clock className="w-3.5 h-3.5 text-indigo-500" />
-                  <div>
-                    <div className="text-[9px] uppercase font-semibold text-slate-500">사용 시간</div>
-                    <div className="text-xs font-bold font-mono text-slate-900 dark:text-slate-100">
-                      {drive.powerOnHours.toLocaleString()}h
-                    </div>
-                  </div>
+            <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <Clock className="w-3.5 h-3.5 text-indigo-500" />
+              <div>
+                <div className="text-[9px] uppercase font-semibold text-slate-500">사용 시간</div>
+                <div className="text-xs font-bold font-mono text-slate-900 dark:text-slate-100">
+                  {drive.powerOnHours.toLocaleString()}h
                 </div>
               </div>
-            );
-          })()}
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* Real-time 10-Minute Disk Temperature Trend Line Chart */}
+      <TemperatureLineChart
+        drive={drive}
+        currentTemperature={vitals.temperatureC}
+        isScanning={telemetry.status === 'scanning'}
+        isThermalStress={isThermalStress}
+      />
 
       {/* Vendor & Storage Media Tailored Action Banner */}
       <div className="p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/80 via-white to-slate-50 dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">

@@ -1,15 +1,15 @@
-name: Automated Release & Cross-Platform Packaging
+name: Desktop Installer Build & GitHub Release Packaging
 
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Release Tag (e.g. v4.2.1)'
+        description: 'Release Tag (e.g. v4.4.1)'
         required: true
-        default: 'v4.2.1'
+        default: 'v4.4.1'
 
 permissions:
   contents: write

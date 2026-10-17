@@ -66,7 +66,8 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
   const handleAddPreset = (preset: typeof EXTERNAL_DRIVE_PRESETS[0]) => {
     const newDrive: DiskDrive = {
       ...preset,
-      id: `drive-ext-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+      id: `drive-ext-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      isDemoPreset: true
     };
     onAddDrive(newDrive);
     onSelectDrive(newDrive.id);

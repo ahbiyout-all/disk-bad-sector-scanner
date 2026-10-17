@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SavedScanRecord, SectorBlock } from '../types';
-import { X, Printer, Download, FileSpreadsheet, ShieldAlert, CheckCircle2, HardDrive, Calendar, Check, Activity, ShieldCheck } from 'lucide-react';
-import { exportCsvReport, exportJsonReport, exportOtelMetricsReport } from '../utils/reportGenerator';
+import { X, Printer, Download, FileSpreadsheet, ShieldAlert, CheckCircle2, HardDrive, Calendar, Check, Activity, ShieldCheck, FileText, Loader2 } from 'lucide-react';
+import { exportCsvReport, exportPdfReport, exportJsonReport, exportOtelMetricsReport } from '../utils/reportGenerator';
 
 interface ReportModalProps {
   record: SavedScanRecord;
@@ -14,8 +14,21 @@ export const ReportModal: React.FC<ReportModalProps> = ({
   badBlocks = [],
   onClose
 }) => {
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleExportPdf = async () => {
+    setIsExportingPdf(true);
+    try {
+      await exportPdfReport(record, badBlocks);
+    } catch (e) {
+      console.error('Failed to export PDF:', e);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   const handleExportCsv = () => {
@@ -46,21 +59,31 @@ export const ReportModal: React.FC<ReportModalProps> = ({
 
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
-              onClick={handlePrint}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors border border-slate-300 dark:border-slate-700 cursor-pointer"
-              title="보고서 인쇄"
+              onClick={handleExportPdf}
+              disabled={isExportingPdf}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              title="A4 규격 공식 PDF 인증서 다운로드 (.pdf)"
             >
-              <Printer className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">인쇄</span>
+              {isExportingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+              <span>{isExportingPdf ? 'PDF 생성 중...' : 'PDF 내보내기'}</span>
             </button>
 
             <button
               onClick={handleExportCsv}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shadow-xs"
-              title="CSV 파일로 배드섹터 목록 다운로드"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shadow-xs"
+              title="Excel 호환 UTF-8 BOM CSV 파일 다운로드 (.csv)"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">CSV</span>
+              <span>CSV 내보내기</span>
+            </button>
+
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors border border-slate-300 dark:border-slate-700 cursor-pointer"
+              title="보고서 인쇄 또는 브라우저 PDF 인쇄"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">인쇄</span>
             </button>
 
             <button
@@ -78,7 +101,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
               title="OpenTelemetry / Prometheus 호환 메트릭 내보내기"
             >
               <Activity className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">OTel Metrics</span>
+              <span className="hidden sm:inline">OTel</span>
             </button>
 
             <button

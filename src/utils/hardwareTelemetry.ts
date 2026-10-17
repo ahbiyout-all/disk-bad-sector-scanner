@@ -54,9 +54,9 @@ export function calculateHardwareVitals(
     tempThermalLoad += 25.0; // Force overheat above 60°C!
   }
 
-  // Add slight organic sensor noise (±0.2°C)
-  const sensorNoise = Math.sin(elapsed * 0.7) * 0.2;
-  const liveTemp = Number((baseTemp + tempThermalLoad + sensorNoise).toFixed(1));
+  // Add slight physical thermal rise based on actual scanning throughput
+  const throughputFactor = Math.min(1.5, (telemetry.scanSpeedMbPerSec || 0) / 200);
+  const liveTemp = Number((baseTemp + tempThermalLoad + throughputFactor).toFixed(1));
 
   let thermalStatus: 'normal' | 'warm' | 'critical' = 'normal';
   if (liveTemp >= 52) {
@@ -97,19 +97,21 @@ export function calculateHardwareVitals(
 
   let currentWatts = baseIdleWatts;
   if (isScanning) {
+    // Dynamically calculate power from real measured throughput (MB/s)
+    const actualMbPerSec = telemetry.scanSpeedMbPerSec || 0;
+    const loadRatio = Math.min(1, actualMbPerSec / 500);
     const speedRatio = Math.min(1, speedMultiplier / 5);
-    const badSectorPenalty = Math.min(2.0, telemetry.badCount * 0.25);
+    const badSectorPenalty = Math.min(1.5, telemetry.badCount * 0.2);
 
     currentWatts = Number(
       (
         baseIdleWatts +
-        (activeMaxWatts - baseIdleWatts) * (0.4 + 0.6 * speedRatio) +
-        badSectorPenalty +
-        Math.cos(elapsed * 1.2) * 0.15
+        (activeMaxWatts - baseIdleWatts) * Math.max(0.25, Math.max(loadRatio, speedRatio * 0.5)) +
+        badSectorPenalty
       ).toFixed(2)
     );
   } else {
-    currentWatts = Number((baseIdleWatts + Math.sin(elapsed) * 0.05).toFixed(2));
+    currentWatts = baseIdleWatts;
   }
 
   const powerCurrentMa = Math.round((currentWatts / railVoltage) * 1000);

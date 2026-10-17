@@ -1,7 +1,8 @@
 import React from 'react';
 import { DiskDrive, ScanTelemetry } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
-import { Play, Pause, Square, RotateCcw, FileText, Zap, Clock, Activity, Gauge, Thermometer, Disc, Cpu } from 'lucide-react';
+import { DS_GetNvmeDeepTelemetry } from '../utils/nativeDllBridge';
+import { Play, Pause, Square, RotateCcw, FileText, Zap, Clock, Activity, Gauge, Thermometer, Disc, Cpu, Share2, ShieldCheck } from 'lucide-react';
 
 interface TelemetryPanelProps {
   drive: DiskDrive;
@@ -16,6 +17,7 @@ interface TelemetryPanelProps {
   onStop: () => void;
   onReset: () => void;
   onOpenReport: () => void;
+  onExportResults?: () => void;
   isThermalStress?: boolean;
   onToggleThermalStress?: () => void;
 }
@@ -33,6 +35,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
   onStop,
   onReset,
   onOpenReport,
+  onExportResults,
   isThermalStress = false,
   onToggleThermalStress
 }) => {
@@ -50,6 +53,9 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
   // Calculate Real-time Hardware Vitals (Temperature, Power Watts, RPM)
   const vitals = calculateHardwareVitals(drive, telemetry, scanSpeedMultiplier, isThermalStress);
+
+  // NVMe Deep Telemetry (Log Page 02h)
+  const nvmeTelemetry = DS_GetNvmeDeepTelemetry(drive.model, drive, telemetry.currentBlockIndex);
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3 sm:p-4 shadow-xs transition-colors">
@@ -110,11 +116,23 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           <button
             onClick={onOpenReport}
             className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors cursor-pointer shadow-xs min-h-[34px]"
+            title="상세 진단 보고서 대화상자 열기"
           >
             <FileText className="w-3.5 h-3.5 shrink-0" />
             <span>진단 보고서</span>
             <span className="hidden sm:inline">생성</span>
           </button>
+
+          {onExportResults && (
+            <button
+              onClick={onExportResults}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shadow-xs min-h-[34px]"
+              title="검사 결과를 CSV 또는 PDF 파일로 저장"
+            >
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
+              <span>결과 내보내기</span>
+            </button>
+          )}
         </div>
 
         {/* Scan Mode & Speed Selectors */}
@@ -421,6 +439,29 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
                 부하 {vitals.controllerLoadPct}%
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* NVMe Deep Telemetry (Log Page 02h) & AVX2 SIMD Acceleration Banner */}
+        <div className="mt-2.5 p-2 sm:p-2.5 rounded-lg border bg-slate-50/90 dark:bg-slate-950/80 border-slate-200 dark:border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-100 dark:bg-cyan-950/80 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30">
+              NVMe Log 02h
+            </span>
+            <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+              가용 예비영역: <b className="font-mono text-emerald-600 dark:text-emerald-400">{nvmeTelemetry.availableSpare}%</b> &nbsp;|&nbsp; 
+              수명 마모율: <b className="font-mono text-indigo-600 dark:text-indigo-400">{nvmeTelemetry.percentageUsed}%</b> &nbsp;|&nbsp; 
+              누적 쓰기(TBW): <b className="font-mono text-amber-600 dark:text-amber-400">{nvmeTelemetry.dataUnitsWrittenTb.toFixed(1)} TB</b>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 dark:text-slate-400 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-emerald-500" />
+              AVX2 SIMD 가속
+            </span>
+            <span className="text-slate-400 dark:text-slate-500">(Zero-Check 활성)</span>
           </div>
         </div>
       </div>

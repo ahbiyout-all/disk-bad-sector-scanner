@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file. This projec
 
 ---
 
+## [v4.5.0] - 2026-10-15
+### Added & Refactored
+- **기존 앱 설치 감지 및 덮어쓰기/삭제 여부 선택 체크 로직 구현**:
+  - `setup.iss` (Inno Setup) 및 `Install.bat` (Unpacked Installer)에 기존 설치 감지 로직 탑재 (64비트/32비트 레지스트리 `HKLM`/`HKCU` 및 기본 설치 디렉터리 동시 검사).
+  - 기존 버전 감지 시 대화창을 통해 3가지 분기 제공:
+    1. **[예 (Yes)]**: 기존 버전을 완전히 자동 삭제/제거 후 새 버전으로 새로 깨끗하게 설치 (Clean Reinstall).
+    2. **[아니오 (No)]**: 기존 버전을 삭제하지 않고 새 버전 파일로 그대로 덮어쓰기 (In-place Overwrite).
+    3. **[취소 (Cancel)]**: 설치 중단 및 안전한 종료.
+  - 무인 설치(`/SILENT`, `/VERYSILENT`, `/S`) 실행 시 대화창을 건너뛰고 무인 클린 업그레이드를 자동 수행하도록 지원.
+- **방화벽 규칙 사전 무음 자동 등록 (Dual Firewall Rules)**:
+  - 인스톨러 설치 시 기본 앱 이름(`DiskSentinel Pro`)과 버전 표기 앱 이름(`DiskSentinel Pro v4.5.0`)을 윈도우 방화벽 인바운드 허용 규칙으로 백그라운드에서 조용히 등록하고, 삭제 시 깔끔하게 자동 해제.
+- **포터블/인스톨러 배포용 빌드 스크립트 8단계 완전 자동화 (`build.bat`, `package-cross-platform.mjs`)**:
+  - 불필요한 임시 문서 및 포터블 전용 아티팩트가 인스톨러에 혼입되지 않도록 격리 필터링.
+  - 포터블 ZIP 아카이브(`DiskSentinel-Pro-v4.5.0-Portable.zip`) 및 폴더 풀림(Unpacked Multi-File) 인스톨러 패키지 생성.
+  - Windows 내장 `.NET csc.exe` 또는 C++ 컴파일러를 통한 네이티브 런처(`DiskSentinelPro.exe`) 자동 빌드 및 Inno Setup(`ISCC.exe`) 자동 컴파일 지원.
+- **창 크기 800x600 고정 및 탭 기반 메뉴 분산 배치**:
+  - `src-tauri/tauri.conf.json`에 데스크톱 앱 창 크기를 800x600으로 고정 및 리사이즈 비활성화 설정.
+  - 고정된 800x600 공간에 맞추어 상단 메뉴 및 고급 도구(Rayon 병렬 스캔, 트레이 가디언, 비트 카빙, 외장 관리, 제조사 특성)를 직관적인 풀다운 탭 및 퀵 셀렉트 칩(Quick Select Chips)으로 분산 재배치.
+- **Rust 네이티브 코어 및 실시간 텔레메트리 연동**:
+  - NVMe 심층 텔레메트리, SIMD AVX2 제로 체크, Rayon 다중 드라이브 동시 병렬 스캔 엔진 탑재.
+
+---
+
+## [v4.4.2] - 2026-10-13
+### Fixed
+- **로컬 설치 경로(`file:///.../index.html`) 직접 실행 시 브라우저 흰 화면(White Screen) 오류 원천 해결**:
+  - Chromium(Edge/Chrome)의 `file://` 프로토콜 오리진 `null` 보안 정책에 따른 ES 모듈 CORS 차단 문제를 해결.
+  - `vite-plugin-singlefile` 및 커스텀 빌드 플러그인을 도입하여 JS와 CSS를 `dist/index.html` 단일 파일로 완전 인라인화하고, `<script defer>` 클래식 스크립트로 변환하여 로컬 웹 서버 없이 브라우저에서 `index.html`을 직접 열어도 100% 정상 작동하도록 개편.
+  - 윈도우 데스크톱 전용 런처(`DiskSentinelPro.bat`, `DiskSentinelPro.vbs`) 추가 및 Inno Setup 바로가기 연동.
+
+---
+
+## [v4.4.1] - 2026-10-13
+### Fixed
+- **Windows 배치 빌드 스크립트 특수문자 구문 파싱 오류 수정 (`build-dll.bat`)**:
+  - `(Weighted Reliability & Life Index)` 및 `(Fast ECC Parity & CRC32 Generator)`에서 Windows CMD 연산자 `&`로 인해 발생하던 `'Life'`, `'CRC32'은(는) 내부 또는 외부 명령이 아닙니다` 실행 에러 완벽 해결.
+- **배치 무인 빌드 파이프라인 정지 방지 (`build.bat`, `build-dll.bat`)**:
+  - `build.bat`에서 `build-dll.bat --no-pause`를 인자로 전달하여 자동 빌드 파이프라인 실행 중 불필요한 일시 중지(Pause) 대기를 건너뛰도록 개선.
+- **C++ 컴파일러 매크로 중복 정의 경고 제거 (`src/native/DiskSentinelEngine.cpp`)**:
+  - `#ifndef DISKSENTINEL_EXPORTS` 전처리기 가드를 추가하여 MinGW 및 MSVC 컴파일러에서 발생하던 `'DISKSENTINEL_EXPORTS' redefined` 경고를 0건으로 완전 해소.
+
+---
+
 ## [v4.4.0] - 2026-10-11
 ### Added
 - **GitHub 핵심 빌드 전용 자동 번들링 스크립트 및 전용 스테이징 폴더 구축**:
@@ -19,6 +62,20 @@ All notable changes to this project will be documented in this file. This projec
   - 중요 데이터 백업 권장 가이드라인을 제공하는 모달 팝업 워크플로우를 통합하여 데이터 보존 확인 후 안전하게 복구가 진행되도록 보장.
 - **순수 데스크톱 전용 특화 아키텍처 확립**:
   - 모바일 가상 진단 요소를 제거하고 실제 PC 호스트 드라이브(`createNativeHostDrive`), 로컬 스토리지 파일(`createNativeDriveFromFile`), Web Memory DMA 벤치마크 및 외장 USB/SSD/HDD 데스크톱 환경 진단에 전념하도록 구조 최적화.
+- **검사 결과 내보내기 (Export Diagnostic Results: CSV 및 PDF 파일 저장 지원)**:
+  - **A4 규격 공식 PDF 인증서 내보내기 (`exportPdfReport`)**: HTML5 고해상도 캔버스 렌더러와 `jsPDF` 엔진을 연동하여 시스템 한글 글꼴이 온전히 보존된 고해상도 하드웨어 진단 인증서 PDF 파일을 원클릭 생성 및 저장.
+  - **정밀 CSV 데이터 내보내기 (`exportCsvReport`)**: Microsoft Excel 및 외부 스프레드시트 호환 UTF-8 BOM(`\uFEFF`) 인코딩을 적용하여 하드웨어 기본 사양, S.M.A.R.T. 스냅샷, 전체 검출 결함 LBA 블록 목록, 응답 지연시간(ms), 에러 코드 및 전문 진단 소견이 완벽히 기록된 CSV 파일 생성.
+  - **전용 결과 내보내기 모달 (`ExportModal.tsx`)**: 실시간 표면 검사 패널(`TelemetryPanel`), 진단 보고서 모달(`ReportModal`), 과거 검사 기록 카드(`HistoryAndComparison`) 어디에서나 원클릭으로 PDF, CSV, 인쇄(Print to PDF), JSON 원본, OTel/Prometheus 지표를 선택 다운로드할 수 있는 통합 UI 제공.
+- **최근 10분간 디스크 온도 변화 실시간 선 그래프 (`TemperatureLineChart.tsx`)**:
+  - `HealthSummaryDashboard` 컴포넌트에 최근 10분(600초) 롤링 윈도우 기반 실시간 온도 추이 SVG 인터랙티브 선 그래프 신규 구현.
+  - 45°C(주의 경계선) 및 60°C(과열 한계선) 수평 기준선, 실시간 발열 상태에 따른 동적 그라데이션 영역 채움 및 우측 끝 현재 시점 펄스 비콘 효과 적용.
+  - 마우스 호버 시 정확한 경과 시각(-X분 X초 전)과 온도(°C), 상태 등급을 표시하는 크로스헤어 툴팁 지원.
+  - 현재 온도, 10분간 최저(Min)/최고(Max)/평균(Avg) 온도 및 증감 변화량(Delta) 실시간 통계 배지 제공.
+- **SectorGrid 물리 LBA 영역별 줌(1x/2x/4x/8x) 및 배드섹터 클러스터 정밀 확대 네비게이터 (`SectorGrid.tsx`)**:
+  - **다단계 줌 레벨 (1x, 2x, 4x, 8x)**: 전체 디스크 개요(1x), 광역 뷰(2x), 상세 타일 뷰(4x), 서브 LBA 및 응답 시간(ms) 표시 초정밀 미세 뷰(8x) 완벽 구현.
+  - **배드섹터 결함 클러스터 원클릭 점퍼 (Defective LBA Clusters)**: 물리 주소별 배드섹터 군집을 자동 판별하여 해당 결함 구간으로 4x/8x 즉시 확대 점프하는 전용 퀵 버튼 제공.
+  - **전체 디스크 LBA 미니맵 네비게이터 (Interactive Mini-Map)**: 0% ~ 100% LBA 스펙트럼 바 위에 배드섹터 위치를 붉은 마커로 실시간 표시하고, 현재 관측 중인 줌 렌즈 뷰포트를 시각화하며 원클릭 패닝 지원.
+  - **실시간 스캔 헤드 추적 모드 (`Follow Scan Head`)**: 줌 확대 상태에서도 현재 I/O가 수행 중인 읽기 헤드를 따라 화면이 자동 추적 이동하도록 토글 기능 제공.
 
 ### Fixed
 - **불필요한 아이콘 임포트 및 미사용 참조 정리**:

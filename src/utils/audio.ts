@@ -1,3 +1,5 @@
+import { safeStorage } from './safeStorage';
+
 class SoundManager {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
@@ -5,11 +7,9 @@ class SoundManager {
 
   constructor() {
     // AudioContext is initialized on first user gesture
-    if (typeof window !== 'undefined') {
-      const savedMute = localStorage.getItem('disk_scanner_muted');
-      if (savedMute !== null) {
-        this.isMuted = savedMute === 'true';
-      }
+    const savedMute = safeStorage.getItem('disk_scanner_muted');
+    if (savedMute !== null) {
+      this.isMuted = savedMute === 'true';
     }
   }
 
@@ -27,9 +27,7 @@ class SoundManager {
 
   public setMuted(muted: boolean) {
     this.isMuted = muted;
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('disk_scanner_muted', String(muted));
-    }
+    safeStorage.setItem('disk_scanner_muted', String(muted));
   }
 
   public getMuted(): boolean {

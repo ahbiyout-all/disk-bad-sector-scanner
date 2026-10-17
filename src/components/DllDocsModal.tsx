@@ -26,7 +26,7 @@ export const DllDocsModal: React.FC<DllDocsModalProps> = ({
   isOpen,
   onClose
 }) => {
-  const [activeSection, setActiveSection] = useState<'architecture' | 'modules' | 'api' | 'usage'>('architecture');
+  const [activeSection, setActiveSection] = useState<'architecture' | 'modules' | 'api' | 'usage' | 'audit'>('architecture');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -37,24 +37,51 @@ export const DllDocsModal: React.FC<DllDocsModalProps> = ({
     setTimeout(() => setCopiedCode(null), 2500);
   };
 
-  const headerCodeSample = `// DiskSentinelEngine.h - Pure Creative DLL
+  const headerCodeSample = `// DiskSentinelEngine.h - Pure Creative DLL (DiskSentinelNativeCore.dll)
 #include <stdint.h>
 #include <stdbool.h>
 
-// 1. OS 캐시 우회 다이렉트 디스크 핸들 획득
-void* DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* outSectorSize);
+// 1. OS 캐시 우회 다이렉트 디스크 핸들 획득 (DirectStorageRawIO)
+DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* outSectorSize);
 
 // 2. 마이크로초(µs) 단위 고정밀 단일/버스트 LBA 검사
-bool  DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult);
+DS_API bool  DS_CALL DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult);
 
-// 3. NVMe Log Page 02h & ATA Pass-Through 텔레메트리 파싱
-int32_t DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntries, int32_t maxEntries);
+// 3. [순수 창작] 적응형 버스트 점핑 & 이진 분할 미세 추적 스캔 (AdaptiveBurstSeeker)
+DS_API bool  DS_CALL DS_AdaptiveScanChunk(void* hDrive, uint64_t chunkStartLba, uint32_t chunkSectorCount, uint32_t burstStep, DSBlockResult* outBadResults, uint32_t maxBadResults, uint32_t* outDetectedBadCount);
 
-// 4. 비파괴 소프트 배드섹터 안전 복구 및 재할당 트리거
-bool  DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t* outRecoveredStatus);
+// 4. NVMe Log Page 02h & ATA Pass-Through 텔레메트리 파싱
+DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntries, int32_t maxEntries);
 
-// 5. 리소스 해제
-void  DS_CloseDrive(void* hDrive);`;
+// 5. [순수 창작] 다변량 가중치 기반 수명 예측 및 신뢰도 지수 연산 (Weibull Hazard)
+DS_API bool  DS_CALL DS_EvaluateDriveReliability(const DSSmartEntry* entries, int32_t entryCount, DSDriveHealthReport* outReport);
+
+// 6. [순수 창작] 초고속 하드웨어 ECC 패리티 및 CRC32 생성기
+DS_API bool  DS_CALL DS_CalculateParityChecksum(const uint8_t* pBuffer, uint32_t bufferLength, uint32_t* outCrc32, uint64_t* outEccParity);
+
+// 7. 비파괴 소프트 배드섹터 안전 복구 및 재할당 트리거
+DS_API bool  DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t* outRecoveredStatus);
+
+// 8. 디스크 핸들 및 4096B 정렬 메모리 해제
+DS_API void  DS_CALL DS_CloseDrive(void* hDrive);
+
+// 9. [Rust/C++] NVMe Log Page 02h 심층 텔레메트리 (Available Spare, TBW, 마모율)
+DS_API bool  DS_CALL DS_GetNvmeDeepTelemetry(void* hDrive, DSNvmeHealthLog* outLog);
+
+// 10. [Rust SIMD/AVX2] 초고속 256비트 벡터 제로 체크 및 패리티 검증
+DS_API bool  DS_CALL DS_CalculateAvx2ChecksumAndZeroCheck(const uint8_t* pBuffer, uint32_t bufferLength, bool* outIsAllZeros, uint32_t* outCrc32, uint64_t* outAvxParity);
+
+// 11. [Rust Rayon] Data Race 없는 초고속 다중 디스크 동시 병렬 스캐너
+DS_API bool  DS_CALL DS_ScanMultipleDrivesParallel(const DSMultiDriveScanTarget* targets, uint32_t targetCount, DSMultiDriveScanSummary* outSummaries, uint32_t concurrencyLimit);
+
+// 12. [Rust Guardian] 시스템 트레이 백그라운드 가디언 데몬 정책 설정
+DS_API bool  DS_CALL DS_ConfigureTrayGuardian(uint32_t pollIntervalSec, uint32_t tempThresholdC, bool alertOnPendingSector);
+
+// 13. [Rust Guardian] 트레이 상주 데몬 디스크 실시간 건전성 폴링
+DS_API bool  DS_CALL DS_RunTrayGuardianCheck(DSTrayGuardianStatus* outStatus);
+
+// 14. [Rust Bit Carving] 휴리스틱 매직 바이트 시그니처 분석 및 ECC 패리티 비트 카빙 수복
+DS_API bool  DS_CALL DS_ExecuteBitCarvingRecovery(void* hDrive, uint64_t targetLba, uint32_t clusterSpan, DSCarvedSectorResult* outResult);`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
@@ -90,10 +117,10 @@ void  DS_CloseDrive(void* hDrive);`;
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium">
+        <div className="flex items-center gap-1 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium overflow-x-auto">
           <button
             onClick={() => setActiveSection('architecture')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
               activeSection === 'architecture'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
@@ -105,38 +132,50 @@ void  DS_CloseDrive(void* hDrive);`;
 
           <button
             onClick={() => setActiveSection('modules')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
               activeSection === 'modules'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
             <Zap className="w-3.5 h-3.5" />
-            4대 창작 핵심 모듈
+            창작 핵심 알고리즘
+          </button>
+
+          <button
+            onClick={() => setActiveSection('audit')}
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+              activeSection === 'audit'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+            오류 분석 및 개선 내역
           </button>
 
           <button
             onClick={() => setActiveSection('api')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
               activeSection === 'api'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
-            C/C++ API 명세
+            C/C++ API 명세 (8종)
           </button>
 
           <button
             onClick={() => setActiveSection('usage')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
               activeSection === 'usage'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
             <Terminal className="w-3.5 h-3.5" />
-            활용 및 FFI 바인딩
+            빌드 & FFI 연동
           </button>
         </div>
 
@@ -226,7 +265,52 @@ void  DS_CloseDrive(void* hDrive);`;
             </div>
           )}
 
-          {/* 3. C/C++ API Section */}
+          {/* 3. Audit Findings & Improvements Section */}
+          {activeSection === 'audit' && (
+            <div className="space-y-3">
+              <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5">
+                <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 mb-2 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                  기존 DLL 코드 오류 정밀 감사 및 개선 사항 (v4.4.0)
+                </h4>
+                <div className="space-y-2 text-[11px]">
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-rose-500 mr-2">[수정 완료]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">64비트 LBA 오버플로 취약점 차단:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      기존 <code>offset.QuadPart = (LONGLONG)(lba * ctx-&gt;sectorSize)</code>에서 4TB 이상 대용량 디스크 스캔 시 정수 오버플로가 발생할 수 있던 연산을 <code>((LONGLONG)lba) * ((LONGLONG)ctx-&gt;sectorSize)</code>로 명시적 64비트 캐스팅 처리하였습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-amber-500 mr-2">[수정 완료]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">크로스 컴파일러 호환성 확보:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      MSVC 전용인 `strcpy_s` 및 `_aligned_malloc`이 GCC/MinGW에서 컴파일 에러를 일으키는 문제를 해결하기 위해 이식성 높은 `safe_strncpy` 및 `DS_ALIGNED_ALLOC` 매크로를 구축했습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-emerald-500 mr-2">[신규 구현]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">3대 순수 창작 알고리즘 완비:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      적응형 고속 버스트 및 1섹터 이진 분할 탐색기(`DS_AdaptiveScanChunk`), 하드웨어 CRC32 & 64비트 XOR 패리티 연산기(`DS_CalculateParityChecksum`), 다변량 수명 예측기(`DS_EvaluateDriveReliability`)를 순수 창작하여 네이티브 코어에 탑재했습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-indigo-500 mr-2">[도구 배치]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">원클릭 DLL 빌더(build-dll.bat):</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      MSVC(`cl.exe`) 또는 MinGW(`g++`)를 자동 감지하여 릴리스 최적화된 `DiskSentinelNativeCore.dll`을 생성하는 배치 스크립트를 제공합니다.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 4. C/C++ API Section */}
           {activeSection === 'api' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">

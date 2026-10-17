@@ -1,36 +1,116 @@
-# Dependencies
-node_modules/
-.pnp
-.pnp.js
+# ===================================================================
+# DiskSentinel Pro - Comprehensive Git Ignore Specification
+# Repository: https://github.com/AhBiYout-all/disk-bad-sector-scanner
+# Strictly keeps only essential source code, configurations, and docs.
+# All temporary, generated, binary, IDE, and build artifacts are excluded.
+# ===================================================================
 
-# Production & Packaging Builds
+# -------------------------------------------------------------------
+# 1. Dependency Directories & Package Managers
+# -------------------------------------------------------------------
+node_modules/
+.pnp/
+.pnp.js
+bun.lock
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+
+# -------------------------------------------------------------------
+# 2. Production & Distribution Build Artifacts
+# -------------------------------------------------------------------
 dist/
+dist-*/
+dist_*/
 dist-packages/
 dist_packages/
 dist-ssr/
 build/
+bin/
+obj/
+Release/
+Debug/
+x64/
+x86/
+target/
+src-tauri/target/
+Output/
+_iscc_temp/
 coverage/
+.nyc_output/
+
+# Dedicated Staging Directories (Internal release bundles)
 .github-release/
 github-release/
-bun.lock
+
+# -------------------------------------------------------------------
+# 3. Compiled Executables, Binaries & Packaging Archives
+# -------------------------------------------------------------------
+*.exe
+*.dll
+*.so
+*.dylib
 *.apk
 *.ipa
-*.exe
 *.dmg
 *.appimage
+*.msi
+*.pkg
+*.deb
+*.rpm
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.iso
 
-# Local Environment & Secrets
+# -------------------------------------------------------------------
+# 4. Native Compiler Intermediates & Debug Symbols
+# -------------------------------------------------------------------
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.o
+*.a
+*.res
+*.idb
+*.pch
+*.ipch
+*.tlog
+*.lastcodeanalysissucceeded
+*.ncb
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+
+# -------------------------------------------------------------------
+# 5. Environment Variables, Secrets & Keys
+# -------------------------------------------------------------------
 .env
 .env.local
+.env.*.local
 .env.development.local
 .env.test.local
 .env.production.local
 *.pem
 *.key
 *.cert
+*.crt
 *.p12
+*.pfx
+secrets/
 
-# Logs
+# Keep example configuration template
+!.env.example
+
+# -------------------------------------------------------------------
+# 6. Logs & Diagnostics
+# -------------------------------------------------------------------
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -38,24 +118,51 @@ pnpm-debug.log*
 lerna-debug.log*
 *.log
 
-# Editor & OS Metadata
+# -------------------------------------------------------------------
+# 7. IDE, Editor & OS Specific Files
+# -------------------------------------------------------------------
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
-Thumbs.db
-ehthumbs.db
+._*
+.Spotlight-V100
+.Trashes
+
+# VS Code & JetBrains
 .idea/
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
 *.sw?
+*~
 
-# Temporary files
+# Visual Studio / Visual C++ / C#
+*.sln
+*.njsproj
+*.ntvs*
+
+# -------------------------------------------------------------------
+# 8. Temporary & Cache Files
+# -------------------------------------------------------------------
 *.tmp
 *.temp
+*.bak
+*.old
+*.orig
+*.rej
 .cache/
 .eslintcache
+*.tsbuildinfo
+.aistudio/
+
+# -------------------------------------------------------------------
+# 9. Local Deployment & Push Automation Scripts (User Excluded)
+# -------------------------------------------------------------------
+git-push-auto.bat

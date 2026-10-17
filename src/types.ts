@@ -78,6 +78,9 @@ export interface DiskDrive {
   seededSlowSectors?: number[]; // indices of blocks that will be slow
   // External Storage Specific Fields
   isExternal?: boolean;
+  isDemoPreset?: boolean;
+  usedPercentage?: number;
+  usedBytes?: number;
   connectionType?: 'internal' | 'usb' | 'thunderbolt' | 'sd_card';
   usbProtocol?: 'BOT (Bulk-Only Transport)' | 'USB 2.0 BOT (Bulk-Only Transport 480Mbps)' | 'UASP (USB Attached SCSI Protocol)' | 'NVMe over USB (UASP 10Gbps)' | 'SDIO UHS-I' | 'Thunderbolt 4 / PCIe Direct';
   isUsb2?: boolean;

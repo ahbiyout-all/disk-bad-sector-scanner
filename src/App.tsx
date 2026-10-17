@@ -10,6 +10,7 @@ import { ErrorLogStream } from './components/ErrorLogStream';
 import { HealthSummaryDashboard } from './components/HealthSummaryDashboard';
 import { HistoryAndComparison } from './components/HistoryAndComparison';
 import { ReportModal } from './components/ReportModal';
+import { ExportModal } from './components/ExportModal';
 import { AlertBanner } from './components/AlertBanner';
 import { UpdateModal } from './components/UpdateModal';
 import { AboutModal } from './components/AboutModal';
@@ -17,6 +18,9 @@ import { DllDocsModal } from './components/DllDocsModal';
 import { ExternalDeviceModal } from './components/ExternalDeviceModal';
 import { VendorDiagnosticsModal } from './components/VendorDiagnosticsModal';
 import { SupportedProductsCatalogModal } from './components/SupportedProductsCatalogModal';
+import { ParallelDriveScanModal } from './components/ParallelDriveScanModal';
+import { TrayGuardianModal } from './components/TrayGuardianModal';
+import { BitCarvingRecoveryModal } from './components/BitCarvingRecoveryModal';
 import { ScanMethodSelector } from './components/ScanMethodSelector';
 import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
@@ -24,20 +28,19 @@ import { SCAN_METHOD_DEFINITIONS, getDefaultMethodForDrive, inspectSectorBlock }
 import { 
   createNativeHostDrive, 
   createNativeDriveFromFile, 
+  createNativeDriveFromDirectoryHandle,
   executeRealPhysicalSectorProbe 
 } from './utils/nativeDriveEngine';
 import { calculateHardwareVitals } from './utils/hardwareTelemetry';
+import { safeStorage } from './utils/safeStorage';
 import { Github, BookOpen, Building2, Sparkles, ExternalLink, ShieldCheck, Cpu, Usb, Thermometer, X, FolderOpen, HardDrive } from 'lucide-react';
 
 export default function App() {
   // Theme state
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('disk_scanner_dark_mode');
-      if (saved !== null) return saved === 'true';
-      return true; // Default to dark mode for diagnostic monitors
-    }
-    return true;
+    const saved = safeStorage.getItem('disk_scanner_dark_mode');
+    if (saved !== null) return saved === 'true';
+    return true; // Default to dark mode for diagnostic monitors
   });
 
   useEffect(() => {
@@ -46,7 +49,7 @@ export default function App() {
     } else {
       document.documentElement.classList.remove('dark');
     }
-    localStorage.setItem('disk_scanner_dark_mode', String(isDarkMode));
+    safeStorage.setItem('disk_scanner_dark_mode', String(isDarkMode));
   }, [isDarkMode]);
 
   // Audio mute state
@@ -95,8 +98,33 @@ export default function App() {
     }
   }, []);
 
+const INITIAL_HOST_DRIVE: DiskDrive = {
+  id: 'drive-native-host-real',
+  name: '🖥️ 로컬 시스템 저장장치 (OS Storage)',
+  model: 'Native Host System Storage',
+  serialNumber: 'HOST-SYS-PROBING',
+  firmware: 'NATIVE-1.0.0',
+  type: 'NVMe',
+  isExternal: false,
+  connectionType: 'internal',
+  capacityGb: 512,
+  totalSectors: 1073741824,
+  interface: 'PCIe Direct Host Memory Controller',
+  healthScore: 100,
+  temperatureC: 36,
+  powerOnHours: 120,
+  mountPoint: 'C:',
+  fileSystem: 'NTFS',
+  defaultBadSectorProbability: 0,
+  smartAttributes: [],
+  seededBadSectors: [],
+  seededSlowSectors: [],
+  isDemoPreset: false
+};
+
   // Drive Selection & Management
-  const [drives, setDrives] = useState<DiskDrive[]>(INITIAL_DRIVES);
+  const [showDemoPresets, setShowDemoPresets] = useState<boolean>(false);
+  const [drives, setDrives] = useState<DiskDrive[]>([INITIAL_HOST_DRIVE]);
   const [selectedDriveId, setSelectedDriveId] = useState<string>('drive-native-host-real');
   const [isExternalModalOpen, setIsExternalModalOpen] = useState<boolean>(false);
   const activeDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
@@ -109,8 +137,8 @@ export default function App() {
     createNativeHostDrive().then(nativeDrive => {
       if (mounted) {
         setDrives(prev => {
-          const filtered = prev.filter(d => d.id !== nativeDrive.id);
-          return [nativeDrive, ...filtered];
+          const nonHostDrives = prev.filter(d => d.id !== 'drive-native-host-real' && d.id !== nativeDrive.id);
+          return [nativeDrive, ...nonHostDrives];
         });
         setSelectedDriveId(nativeDrive.id);
         setSelectedMethodId(getDefaultMethodForDrive(nativeDrive));
@@ -120,6 +148,48 @@ export default function App() {
       mounted = false;
     };
   }, []);
+
+  const handleToggleDemoPresets = useCallback(() => {
+    setShowDemoPresets(prev => {
+      const nextState = !prev;
+      setDrives(currentDrives => {
+        if (nextState) {
+          const demoDrivesToAdd = INITIAL_DRIVES.map(d => ({ ...d, isDemoPreset: true }));
+          const existingIds = new Set(currentDrives.map(d => d.id));
+          const newDrives = demoDrivesToAdd.filter(d => !existingIds.has(d.id));
+          return [...currentDrives, ...newDrives];
+        } else {
+          const realDrivesOnly = currentDrives.filter(d => !d.isDemoPreset);
+          if (realDrivesOnly.length > 0 && currentDrives.find(d => d.id === selectedDriveId)?.isDemoPreset) {
+            setSelectedDriveId(realDrivesOnly[0].id);
+          }
+          return realDrivesOnly;
+        }
+      });
+      return nextState;
+    });
+  }, [selectedDriveId]);
+
+  const handlePickDirectoryVolume = async () => {
+    if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+      try {
+        // @ts-expect-error - W3C File System Access API
+        const dirHandle = await window.showDirectoryPicker({
+          id: 'disk-sentinel-volume-mount',
+          mode: 'readwrite'
+        });
+        const realDrive = await createNativeDriveFromDirectoryHandle(dirHandle);
+        handleAddDrive(realDrive);
+        dispatchNotification('실제 로컬 볼륨 마운트 완료', `[${dirHandle.name}] 볼륨이 검사 장치로 마운트되었습니다.`);
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          console.error('Directory volume mount error:', err);
+        }
+      }
+    } else {
+      fileInputRef.current?.click();
+    }
+  };
 
   const handleAddDrive = useCallback((newDrive: DiskDrive) => {
     setDrives(prev => {
@@ -160,7 +230,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'scan' | 'health' | 'history'>('scan');
 
   // Storage Media Tailored Inspection Method State
-  const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_DRIVES[1]));
+  const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_HOST_DRIVE));
 
   // Blocks State
   const [blocks, setBlocks] = useState<SectorBlock[]>([]);
@@ -285,69 +355,43 @@ export default function App() {
   const [isThermalStress, setIsThermalStress] = useState<boolean>(false);
   const [isOverheatDismissed, setIsOverheatDismissed] = useState<boolean>(false);
 
-  // Scan History & Report State
+  // Scan History & Report State (Stores only genuine user-performed scan records)
   const [scanRecords, setScanRecords] = useState<SavedScanRecord[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('disk_scan_records');
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch {
-          // parse error
+    const saved = safeStorage.getItem('disk_scan_records');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(r => r.id !== 'scan-baseline-seagate');
         }
+      } catch {
+        // parse error
       }
     }
-    // Seed with a realistic baseline record 2 weeks prior so comparison works right away!
-    const baselineDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-    return [
-      {
-        id: 'scan-baseline-seagate',
-        driveId: 'drive-seagate-barracuda',
-        driveModel: 'ST2000DM008-2FR102',
-        driveSerial: 'ZFL2KB90',
-        driveCapacityGb: 2000,
-        date: baselineDate.toLocaleDateString('ko-KR', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        }),
-        timestamp: baselineDate.getTime(),
-        scanMode: 'full',
-        totalBlocks: 1000,
-        goodCount: 940,
-        normalCount: 45,
-        slowCount: 12,
-        criticalCount: 2,
-        badCount: 1, // Only 1 bad sector in baseline
-        badLbaList: [1094000000],
-        healthScore: 88,
-        durationSeconds: 185,
-        avgLatencyMs: 8.4,
-        maxLatencyMs: 420,
-        smartSnapshot: INITIAL_DRIVES[1].smartAttributes,
-        recommendation: '주의: 1개의 배드섹터가 발견되었으나 예비 섹터로 안전하게 격리되었습니다.'
-      }
-    ];
+    return [];
   });
 
   useEffect(() => {
-    localStorage.setItem('disk_scan_records', JSON.stringify(scanRecords));
+    safeStorage.setItem('disk_scan_records', JSON.stringify(scanRecords));
   }, [scanRecords]);
 
   // Active Report Modal
   const [activeReportRecord, setActiveReportRecord] = useState<SavedScanRecord | null>(null);
+  const [exportTargetRecord, setExportTargetRecord] = useState<SavedScanRecord | null>(null);
 
   // GitHub Real-time Update System State
   const [updateRelease, setUpdateRelease] = useState<ReleaseInfo>(PROJECT_INFO.sampleLatestRelease);
-  const [hasUpdate, setHasUpdate] = useState<boolean>(true); // Default to showing update notification available
+  const [hasUpdate, setHasUpdate] = useState<boolean>(false); // Only true when real GitHub newer version detected
   const [updateSource, setUpdateSource] = useState<'github-live' | 'fallback'>('fallback');
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
   const [isAboutModalOpen, setIsAboutModalOpen] = useState<boolean>(false);
   const [isDllDocsOpen, setIsDllDocsOpen] = useState<boolean>(false);
   const [isVendorModalOpen, setIsVendorModalOpen] = useState<boolean>(false);
   const [isCatalogModalOpen, setIsCatalogModalOpen] = useState<boolean>(false);
+  const [isParallelScanOpen, setIsParallelScanOpen] = useState<boolean>(false);
+  const [isTrayGuardianOpen, setIsTrayGuardianOpen] = useState<boolean>(false);
+  const [isBitCarvingOpen, setIsBitCarvingOpen] = useState<boolean>(false);
+  const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(1048576);
 
   // Real-time Update Checker
   const checkUpdates = useCallback(async (manual = false) => {
@@ -664,6 +708,16 @@ export default function App() {
     setActiveReportRecord(record);
   };
 
+  // Open Export Modal (CSV / PDF / Print / JSON)
+  const handleOpenExportModal = (record?: SavedScanRecord) => {
+    if (record) {
+      setExportTargetRecord(record);
+    } else {
+      const current = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
+      setExportTargetRecord(current);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-150">
       {/* Top Navigation */}
@@ -689,6 +743,17 @@ export default function App() {
         onOpenExternalDevicesModal={() => setIsExternalModalOpen(true)}
         onOpenVendorDiagnostics={() => setIsVendorModalOpen(true)}
         onOpenSupportedCatalog={() => setIsCatalogModalOpen(true)}
+        onOpenParallelScanModal={() => setIsParallelScanOpen(true)}
+        onOpenTrayGuardianModal={() => setIsTrayGuardianOpen(true)}
+        onOpenBitCarvingModal={() => {
+          const badLba = latestBadLba || (blocks.find(b => b.status === 'bad')?.lba) || 1048576;
+          setBitCarvingTargetLba(badLba);
+          setIsBitCarvingOpen(true);
+        }}
+        showDemoPresets={showDemoPresets}
+        onToggleDemoPresets={handleToggleDemoPresets}
+        onPickDirectoryVolume={handlePickDirectoryVolume}
+        onOpenRealFile={() => fileInputRef.current?.click()}
       />
 
       {/* Main Container */}
@@ -785,6 +850,7 @@ export default function App() {
               onStop={handleStopScan}
               onReset={handleResetScan}
               onOpenReport={handleOpenCurrentReport}
+              onExportResults={() => handleOpenExportModal()}
               isThermalStress={isThermalStress}
               onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
             />
@@ -795,6 +861,10 @@ export default function App() {
               activeBlockIndex={activeBlockIndex}
               selectedBlock={selectedBlock}
               onSelectBlock={(b) => setSelectedBlock(b)}
+              onTriggerBitCarving={(lba) => {
+                setBitCarvingTargetLba(lba);
+                setIsBitCarvingOpen(true);
+              }}
             />
 
             {/* Live Error Log Stream & Telemetry Events */}
@@ -837,6 +907,9 @@ export default function App() {
             onViewRecordReport={(record) => {
               setActiveReportRecord(record);
             }}
+            onExportRecord={(record) => {
+              handleOpenExportModal(record);
+            }}
           />
         )}
       </main>
@@ -847,6 +920,16 @@ export default function App() {
           record={activeReportRecord}
           badBlocks={blocks.filter(b => b.status === 'bad')}
           onClose={() => setActiveReportRecord(null)}
+        />
+      )}
+
+      {/* Export Diagnostic Results Modal (CSV / PDF / Print / JSON) */}
+      {exportTargetRecord && (
+        <ExportModal
+          isOpen={!!exportTargetRecord}
+          record={exportTargetRecord}
+          badBlocks={blocks.filter(b => b.status === 'bad')}
+          onClose={() => setExportTargetRecord(null)}
         />
       )}
 
@@ -921,6 +1004,38 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Rayon Multi-Drive Parallel Scanner Modal */}
+      {isParallelScanOpen && (
+        <ParallelDriveScanModal
+          isOpen={isParallelScanOpen}
+          onClose={() => setIsParallelScanOpen(false)}
+          drives={drives}
+        />
+      )}
+
+      {/* System Tray Lightweight Guardian Daemon Modal */}
+      {isTrayGuardianOpen && (
+        <TrayGuardianModal
+          isOpen={isTrayGuardianOpen}
+          onClose={() => setIsTrayGuardianOpen(false)}
+          drives={drives}
+          highestTemp={currentTemp}
+          hasBadSector={badCount > 0}
+          onTriggerNotification={dispatchNotification}
+        />
+      )}
+
+      {/* Bit Carving & ECC Parity Recovery Engine Modal */}
+      {isBitCarvingOpen && (
+        <BitCarvingRecoveryModal
+          isOpen={isBitCarvingOpen}
+          onClose={() => setIsBitCarvingOpen(false)}
+          initialLba={bitCarvingTargetLba}
+          driveModel={activeDrive.model}
+        />
+      )}
+
 
       {/* High Density Footer with Creator & Official Channels */}
       <footer className="border-t border-slate-200 dark:border-slate-800/80 py-2.5 bg-slate-100/60 dark:bg-slate-900/60 text-xs text-slate-500 dark:text-slate-400">

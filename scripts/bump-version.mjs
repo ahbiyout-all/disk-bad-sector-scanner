@@ -55,4 +55,39 @@ if (fs.existsSync(projectInfoPath)) {
   console.log(`✓ Updated src/config/projectInfo.ts -> ${taggedVersion}`);
 }
 
+// 4. Update src/native/rust/Cargo.toml
+const cargoPath = path.join(rootDir, 'src', 'native', 'rust', 'Cargo.toml');
+if (fs.existsSync(cargoPath)) {
+  let content = fs.readFileSync(cargoPath, 'utf8');
+  content = content.replace(/version\s*=\s*"[^"]+"/, `version = "${cleanVersion}"`);
+  fs.writeFileSync(cargoPath, content, 'utf8');
+  console.log(`✓ Updated src/native/rust/Cargo.toml -> ${cleanVersion}`);
+}
+
+// 5. Update setup.iss
+const setupIssPath = path.join(rootDir, 'setup.iss');
+if (fs.existsSync(setupIssPath)) {
+  let content = fs.readFileSync(setupIssPath, 'utf8');
+  content = content.replace(/#define\s+AppVersion\s+"[^"]+"/, `#define AppVersion "${cleanVersion}"`);
+  fs.writeFileSync(setupIssPath, content, 'utf8');
+  console.log(`✓ Updated setup.iss -> ${cleanVersion}`);
+}
+
+// 6. Update src-tauri/Cargo.toml and tauri.conf.json
+const tauriCargoPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
+if (fs.existsSync(tauriCargoPath)) {
+  let content = fs.readFileSync(tauriCargoPath, 'utf8');
+  content = content.replace(/version\s*=\s*"[^"]+"/, `version = "${cleanVersion}"`);
+  fs.writeFileSync(tauriCargoPath, content, 'utf8');
+  console.log(`✓ Updated src-tauri/Cargo.toml -> ${cleanVersion}`);
+}
+
+const tauriConfPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
+if (fs.existsSync(tauriConfPath)) {
+  const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+  conf.version = cleanVersion;
+  fs.writeFileSync(tauriConfPath, JSON.stringify(conf, null, 2) + '\n', 'utf8');
+  console.log(`✓ Updated src-tauri/tauri.conf.json -> ${cleanVersion}`);
+}
+
 console.log(`\n✅ Version synchronization complete! All channels linked to ${taggedVersion}.\n`);

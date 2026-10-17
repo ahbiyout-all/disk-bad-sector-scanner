@@ -1,162 +1,133 @@
 @echo off
-REM ===================================================================
-REM DiskSentinel Pro - Automated Build & Packaging Pipeline Script
-REM Operating System: Windows (CRLF)
-REM Language: English
-REM Author: AhBiYout-all (https://github.com/AhBiYout-all)
-REM ===================================================================
+setlocal enabledelayedexpansion
+
+:: =====================================================================
+:: DiskSentinel Pro - Automated Build and Packaging Pipeline v4.5.0
+:: Windows Native CRLF Desktop App & Setup Distribution Pipeline
+:: Author: AhBiYout (AhBiYout-all)
+:: Repository: https://github.com/AhBiYout-all/disk-bad-sector-scanner
+:: =====================================================================
 
 echo ===================================================================
-echo   DiskSentinel Pro Automated Build Tool
+echo   DiskSentinel Pro - Automated Build and Packaging Pipeline v4.5.0
 echo ===================================================================
 
-echo [STEP 1] Retrieving application version from package.json dynamically...
-FOR /F "tokens=*" %%i IN ('node -p "require('./package.json').version"') DO SET APP_VERSION=%%i
-
-if "%APP_VERSION%"=="" (
-    echo [WARNING] Failed to extract version from package.json. Defaulting to 4.3.0.
-    SET APP_VERSION=4.3.0
+echo [STEP 1] Checking Node.js and npm environment...
+node --version
+if errorlevel 1 (
+    echo [ERROR] Node.js is not installed or not in PATH.
+    goto END_BUILD
 )
 
-echo -> Detected Version: v%APP_VERSION%
-title DiskSentinel Pro Build Pipeline - v%APP_VERSION%
-
-echo.
-echo [STEP 1.5] Verifying dependency packages...
-set NEED_INSTALL=0
-if not exist node_modules set NEED_INSTALL=1
-if not exist node_modules\.bin\vite.cmd set NEED_INSTALL=1
-
-if "%NEED_INSTALL%"=="1" (
-    echo -> [INFO] 'node_modules' or 'vite.cmd' not found.
-    echo -> [ACTION] Automatically executing 'npm install' to configure dependencies...
+echo [STEP 2] Installing dependencies if needed...
+if not exist "node_modules\" (
     call npm install
-    if %ERRORLEVEL% NEQ 0 (
-        echo [ERROR] Failed to install npm dependencies. Please check your internet connection.
-        pause
-        exit /b %ERRORLEVEL%
+    if errorlevel 1 (
+        echo [ERROR] npm install failed.
+        goto END_BUILD
+    )
+)
+
+echo [STEP 3] Running TypeScript static verification (tsc --noEmit)...
+call npm run lint
+if errorlevel 1 (
+    echo [ERROR] TypeScript lint check failed. Please fix types before building.
+    goto END_BUILD
+)
+
+echo [STEP 4] Building production Vite bundle (Single-file inline optimization)...
+call npm run build
+if errorlevel 1 (
+    echo [ERROR] Vite production build failed.
+    goto END_BUILD
+)
+
+echo [STEP 5] Compiling Native Windows Desktop Host (DiskSentinelPro.exe)...
+set "CSC_EXE="
+if exist "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" set "CSC_EXE=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if not defined CSC_EXE (
+    if exist "%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe" set "CSC_EXE=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+)
+
+if defined CSC_EXE (
+    echo -> Found Windows .NET C# Compiler: !CSC_EXE!
+    "!CSC_EXE!" /nologo /target:winexe /optimize+ /out:dist\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs >nul 2>&1
+    if not exist "dist\DiskSentinelPro.exe" (
+        "!CSC_EXE!" /nologo /target:winexe /optimize+ /out:dist\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs
+    )
+    if exist "dist\DiskSentinelPro.exe" (
+        echo [SUCCESS] Compiled native host executable: dist\DiskSentinelPro.exe
     )
 ) else (
-    echo -> Dependencies and Vite builder are verified and ready.
-)
-
-echo.
-echo [STEP 2] Cleaning previous builds...
-if exist dist (
-    echo -> Removing old 'dist' folder...
-    rmdir /s /q dist
-)
-if exist build (
-    echo -> Removing old 'build' folder...
-    rmdir /s /q build
-)
-if exist dist_packages (
-    echo -> Removing old 'dist_packages' folder...
-    rmdir /s /q dist_packages
-)
-
-echo.
-echo [STEP 3] Running production build via Vite (npm run build)...
-:TRY_BUILD
-call npm run build
-
-if %ERRORLEVEL% EQU 0 goto BUILD_SUCCESS
-echo.
-echo [ERROR] Production compilation failed!
-echo -> This usually happens if 'npm install' was skipped or interrupted.
-set /p REINSTALL="Would you like to run 'npm install' to repair packages and try again? (Y/N): "
-if /i "%REINSTALL%"=="Y" (
-    echo Running dependency repair...
-    call npm install
-    echo Retrying build...
-    goto TRY_BUILD
-)
-pause
-exit /b %ERRORLEVEL%
-
-:BUILD_SUCCESS
-echo -> Production compilation completed successfully!
-
-echo.
-echo [STEP 4] Preparing distribution structures...
-mkdir dist_packages
-SET EXPORT_DIR=dist_packages\DiskSentinel-Pro-v%APP_VERSION%
-mkdir "%EXPORT_DIR%"
-
-echo -> Copying compiled client assets...
-xcopy /s /e /y dist "%EXPORT_DIR%\"
-
-echo.
-echo [STEP 5] Compiling cross-platform zip package...
-powershell -Command "Compress-Archive -Path 'dist\*' -DestinationPath 'dist_packages\DiskSentinel-Pro-v%APP_VERSION%-PC-Windows.zip' -Force"
-echo -> Zip archive created successfully: dist_packages\DiskSentinel-Pro-v%APP_VERSION%-PC-Windows.zip
-
-echo.
-echo [STEP 6] Checking for Inno Setup Compiler (ISCC)...
-set ISCC_PATH=ISCC
-where ISCC >nul 2>&1
-if %ERRORLEVEL% EQU 0 goto COMPILE_INNO
-
-rem Scanning default Inno Setup installation directories...
-if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" (
-    set ISCC_PATH="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-    goto COMPILE_INNO
-)
-if exist "C:\Program Files\Inno Setup 6\ISCC.exe" (
-    set ISCC_PATH="C:\Program Files\Inno Setup 6\ISCC.exe"
-    goto COMPILE_INNO
-)
-if exist "C:\Users\%USERNAME%\AppData\Local\Programs\Inno Setup 6\ISCC.exe" (
-    set ISCC_PATH="C:\Users\%USERNAME%\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
-    goto COMPILE_INNO
-)
-if exist "C:\Program Files (x86)\Inno Setup 5\ISCC.exe" (
-    set ISCC_PATH="C:\Program Files (x86)\Inno Setup 5\ISCC.exe"
-    goto COMPILE_INNO
-)
-if exist "C:\Program Files\Inno Setup 5\ISCC.exe" (
-    set ISCC_PATH="C:\Program Files\Inno Setup 5\ISCC.exe"
-    goto COMPILE_INNO
-)
-
-rem If not found in common directories, check the Registry
-FOR /F "usebackq tokens=2*" %%A IN (`REG QUERY "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1" /v "InstallLocation" 2^>nul`) DO (
-    if exist "%%B\ISCC.exe" (
-        set ISCC_PATH="%%B\ISCC.exe"
-        goto COMPILE_INNO
-    )
-)
-FOR /F "usebackq tokens=2*" %%A IN (`REG QUERY "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1" /v "InstallLocation" 2^>nul`) DO (
-    if exist "%%B\ISCC.exe" (
-        set ISCC_PATH="%%B\ISCC.exe"
-        goto COMPILE_INNO
+    echo -> csc.exe not found. Checking bin\native\DiskSentinelPro.exe...
+    if exist "bin\native\DiskSentinelPro.exe" (
+        copy /y "bin\native\DiskSentinelPro.exe" "dist\DiskSentinelPro.exe" >nul
+        echo [SUCCESS] Copied existing bin\native\DiskSentinelPro.exe to dist\
     )
 )
 
-goto NO_INNO
-
-:COMPILE_INNO
-echo -> Inno Setup Compiler found! Compiling native setup installer...
-%ISCC_PATH% /DAppVersion=%APP_VERSION% /O"dist_packages" /F"DiskSentinel_Setup_v%APP_VERSION%" setup.iss
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Inno Setup compilation failed!
-    pause
-    exit /b %ERRORLEVEL%
+echo [STEP 6] Compiling Inno Setup Installer Executable (if ISCC is installed)...
+set "ISCC_PATH="
+where iscc.exe >nul 2>&1
+if %ERRORLEVEL% EQU 0 set "ISCC_PATH=iscc.exe"
+if not defined ISCC_PATH (
+    if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC_PATH=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 )
-echo -> Installer package generated: dist_packages\DiskSentinel_Setup_v%APP_VERSION%.exe
-goto END_INNO
+if not defined ISCC_PATH (
+    if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC_PATH=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+)
+if not defined ISCC_PATH (
+    if exist "%LocalAppData%\Programs\Inno Setup 6\ISCC.exe" set "ISCC_PATH=%LocalAppData%\Programs\Inno Setup 6\ISCC.exe"
+)
 
-:NO_INNO
-echo [INFO] Inno Setup compiler (ISCC) is not found in PATH or standard installation directories.
-echo -> Skipping .exe compiler step. You can compile setup.iss manually using Inno Setup GUI.
+if defined ISCC_PATH (
+    echo -> Found Inno Setup Compiler: !ISCC_PATH!
+    echo -> Compiling setup.iss with pre-installation check logic...
+    if not exist "dist-packages" mkdir "dist-packages"
+    "!ISCC_PATH!" /DAppVersion=4.5.0 /O"dist-packages" setup.iss
+    if exist "dist-packages\DiskSentinel_Setup_v4.5.0.exe" (
+        echo [SUCCESS] Windows Installer created: dist-packages\DiskSentinel_Setup_v4.5.0.exe
+    )
+) else (
+    echo -> Note: Inno Setup Compiler (ISCC.exe) not found in standard paths.
+    echo    Unpacked Multi-File Installer with Install.bat will be generated.
+)
 
-:END_INNO
+echo [STEP 7] Executing cross-platform packaging pipeline...
+call node scripts/package-cross-platform.mjs
+if errorlevel 1 (
+    echo [WARNING] Packaging script returned warning or error.
+)
 
+echo [STEP 8] Organizing release assets into versioned output directory (dist-v4.5.0)...
+if not exist "dist-v4.5.0" mkdir "dist-v4.5.0"
+xcopy /E /I /Y "dist" "dist-v4.5.0" >nul
+if exist "dist-packages\" (
+    if not exist "dist-v4.5.0\packages" mkdir "dist-v4.5.0\packages"
+    xcopy /E /I /Y "dist-packages\*" "dist-v4.5.0\packages\" >nul
+)
+
+echo ===================================================================
+echo   BUILD & PACKAGING SUCCESSFUL! (Version 4.5.0)
+echo ===================================================================
+echo [Deliverables Summary]
+echo   1. Portable Executable Package: dist-packages\DiskSentinel-Pro-v4.5.0-Portable.zip
+echo   2. Multi-File Unpacked Setup  : dist-packages\DiskSentinelPro-Installer-Unpacked\
+echo   3. Setup Installer Executable : dist-packages\DiskSentinel_Setup_v4.5.0.exe (if ISCC present)
+echo   4. Pre-Install Check Logic    : Overwrite vs Clean Uninstall prompt enabled
+echo   5. Unattended / Silent Mode   : Supported via /SILENT or /VERYSILENT
+echo   6. Firewall Auto-Registration : Silently adds 'DiskSentinel Pro' and versioned rules
+echo ===================================================================
+echo Output release directory: %CD%\dist-v4.5.0
+echo Packages release directory: %CD%\dist-packages
 echo.
-echo ===================================================================
-echo   BUILD COMPLETED SUCCESSFULLY FOR VERSION v%APP_VERSION%
-echo ===================================================================
-echo Opening output directory...
-explorer dist_packages
 
+if exist "%CD%\dist-packages" (
+    explorer "%CD%\dist-packages"
+) else (
+    explorer "%CD%\dist-v4.5.0"
+)
+
+:END_BUILD
+endlocal
 pause

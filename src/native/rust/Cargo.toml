@@ -1,0 +1,38 @@
+[package]
+name = "disksentinel-core"
+version = "4.5.0"
+edition = "2021"
+authors = ["AhBiYout <https://github.com/AhBiYout-all>"]
+description = "High-Performance Pure Native Rust Core Engine for DiskSentinel Pro (Direct Win32 I/O, S.M.A.R.T. Telemetry, Bad Sector Healing)"
+license = "Apache-2.0"
+
+[lib]
+name = "disksentinel_core"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "DiskSentinelPro"
+path = "src/main.rs"
+
+[dependencies]
+rayon = "1.10"
+
+# For Windows Direct I/O and DeviceIoControl (when compiling on Windows)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_SystemInformation",
+    "Win32_System_Performance",
+    "Win32_System_Threading"
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

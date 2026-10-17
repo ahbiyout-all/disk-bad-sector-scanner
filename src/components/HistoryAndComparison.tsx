@@ -1,19 +1,21 @@
 import React, { useState } from 'react';
 import { SavedScanRecord } from '../types';
-import { History, GitCompare, Trash2, ArrowUpRight, ArrowDownRight, Minus, FileText, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { History, GitCompare, Trash2, ArrowUpRight, ArrowDownRight, Minus, FileText, CheckCircle2, AlertTriangle, ShieldAlert, Share2 } from 'lucide-react';
 
 interface HistoryAndComparisonProps {
   records: SavedScanRecord[];
   onDeleteRecord: (id: string) => void;
   onClearAll: () => void;
   onViewRecordReport: (record: SavedScanRecord) => void;
+  onExportRecord?: (record: SavedScanRecord) => void;
 }
 
 export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
   records,
   onDeleteRecord,
   onClearAll,
-  onViewRecordReport
+  onViewRecordReport,
+  onExportRecord
 }) => {
   const [selectedScanAId, setSelectedScanAId] = useState<string>(records[1]?.id || records[0]?.id || '');
   const [selectedScanBId, setSelectedScanBId] = useState<string>(records[0]?.id || '');
@@ -313,6 +315,16 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                       </td>
                       <td className="px-2.5 py-2 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">
+                          {onExportRecord && (
+                            <button
+                              onClick={() => onExportRecord(r)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-600 dark:text-emerald-400 transition-colors border border-emerald-200 dark:border-emerald-800/60 cursor-pointer"
+                              title="CSV/PDF 파일로 내보내기"
+                            >
+                              <Share2 className="w-3 h-3" />
+                              내보내기
+                            </button>
+                          )}
                           <button
                             onClick={() => onViewRecordReport(r)}
                             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-indigo-600 dark:text-indigo-400 transition-colors border border-indigo-200 dark:border-indigo-800/60 cursor-pointer"
