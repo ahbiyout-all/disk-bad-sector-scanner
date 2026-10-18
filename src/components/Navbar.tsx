@@ -65,6 +65,9 @@ interface NavbarProps {
   onToggleDemoPresets?: () => void;
   onPickDirectoryVolume?: () => void;
   onOpenRealFile?: () => void;
+  onOpenHardwareDetails?: () => void;
+  onRescanDrives?: () => Promise<void>;
+  isRescanning?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -97,6 +100,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleDemoPresets,
   onPickDirectoryVolume,
   onOpenRealFile,
+  onOpenHardwareDetails,
+  onRescanDrives,
+  isRescanning = false,
 }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState(false);
@@ -214,10 +220,33 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </optgroup>
                 )}
               </select>
+
+              {onRescanDrives && (
+                <button
+                  onClick={() => onRescanDrives()}
+                  disabled={isRescanning}
+                  className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                  title="디스크 장치 재검색 및 실시간 하드웨어 프로브 갱신"
+                  aria-label="장치 재검색"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin text-indigo-600 dark:text-indigo-400' : ''}`} />
+                </button>
+              )}
             </div>
 
-            {/* Quick Mount Action Chips */}
+            {/* Quick Mount & Hardware Specs Action Chips */}
             <div className="hidden lg:flex items-center gap-1.5 shrink-0">
+              {onOpenHardwareDetails && (
+                <button
+                  onClick={onOpenHardwareDetails}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-indigo-500/40 bg-indigo-50/70 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-[11px] font-semibold transition-colors cursor-pointer shadow-2xs"
+                  title="선택된 디스크의 상세 하드웨어 스펙, 4K 정렬, 컨트롤러 및 낸드 내구성 정보"
+                >
+                  <Cpu className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>장치 스펙</span>
+                </button>
+              )}
+
               {onPickDirectoryVolume && (
                 <button
                   onClick={onPickDirectoryVolume}
@@ -319,6 +348,32 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <span>전문가용 진단 & 수복 도구</span>
                     <span className="text-[10px] font-mono text-indigo-500">PRO TOOLS</span>
                   </div>
+
+                  {/* Detailed Hardware Specifications */}
+                  {onOpenHardwareDetails && (
+                    <button
+                      onClick={() => {
+                        setIsToolsDropdownOpen(false);
+                        onOpenHardwareDetails();
+                      }}
+                      className="w-full flex items-start gap-2.5 p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/80 text-left transition-colors cursor-pointer group"
+                    >
+                      <div className="w-7 h-7 rounded-md bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
+                        <Cpu className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs text-slate-900 dark:text-slate-100">하드웨어 상세 스펙 분석기</span>
+                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+                            {currentDrive.hardwareSpecs?.busType || 'NVMe'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                          4K AF, TRIM, 컨트롤러, 파티션 및 낸드 내구성
+                        </p>
+                      </div>
+                    </button>
+                  )}
 
                   {/* Rayon Multi-Drive Parallel Scan */}
                   {onOpenParallelScanModal && (
@@ -633,6 +688,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Quick Action Chips Group (퀵 셀렉트 칩 그룹) */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Quick Chip 0: Hardware Specs */}
+            {onOpenHardwareDetails && (
+              <button
+                onClick={onOpenHardwareDetails}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-indigo-500/40 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-[11px] font-bold transition-all cursor-pointer shadow-2xs"
+                title="선택된 디스크의 상세 하드웨어 스펙 및 4K 정렬 상태 열기"
+              >
+                <Cpu className="w-3 h-3 text-indigo-500" />
+                <span>장치 스펙</span>
+                <span className="px-1 rounded-full bg-indigo-200/80 dark:bg-indigo-900 text-[9px] font-mono">
+                  {currentDrive?.hardwareSpecs?.busType || currentDrive?.type || 'NVMe'}
+                </span>
+              </button>
+            )}
+
             {/* Quick Chip 1: Parallel Scan */}
             {onOpenParallelScanModal && (
               <button

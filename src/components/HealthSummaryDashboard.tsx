@@ -12,6 +12,7 @@ interface HealthSummaryDashboardProps {
   onRefreshSmart?: () => void;
   onOpenVendorModal?: () => void;
   onOpenRemapModal?: () => void;
+  onOpenHardwareDetails?: () => void;
   isThermalStress?: boolean;
 }
 
@@ -22,6 +23,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   onRefreshSmart,
   onOpenVendorModal,
   onOpenRemapModal,
+  onOpenHardwareDetails,
   isThermalStress = false
 }) => {
   const vendorKey = detectVendor(drive);
@@ -285,6 +287,20 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Detailed Hardware Specs Action Button */}
+          {onOpenHardwareDetails && (
+            <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
+              <button
+                onClick={onOpenHardwareDetails}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-bold transition-all cursor-pointer shadow-2xs"
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>디스크 장치 상세 스펙 & 하드웨어 정보 보기</span>
+                <ArrowRight className="w-3.5 h-3.5 ml-auto text-indigo-400" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

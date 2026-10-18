@@ -5,7 +5,7 @@ export interface SupportedProductSeries {
   vendor: StorageVendor;
   vendorNameKo: string;
   seriesName: string;
-  category: 'INTERNAL_NVME' | 'INTERNAL_SATA' | 'INTERNAL_HDD' | 'EXTERNAL_SSD' | 'EXTERNAL_HDD' | 'SD_FLASH' | 'MOBILE_DEVICE';
+  category: 'INTERNAL_NVME' | 'INTERNAL_SATA' | 'INTERNAL_HDD' | 'EXTERNAL_SSD' | 'EXTERNAL_HDD' | 'SD_FLASH';
   categoryKo: string;
   supportedModels: string[];
   precisionDiagnosticFeatures: string[];
@@ -329,20 +329,21 @@ export const SUPPORTED_VENDOR_CATALOG: SupportedProductSeries[] = [
     id: 'apple-silicon-apfs-nvme',
     vendor: 'apple',
     vendorNameKo: '애플 (Apple Inc.)',
-    seriesName: 'Apple Mac M1/M2/M3/M4 Custom NVMe & Mobile UFS',
-    category: 'MOBILE_DEVICE',
-    categoryKo: 'Mac / iPhone / iPad 통합 스토리지',
-    supportedModels: ['Apple APFS Fabric SSD', 'iPhone 15/16 Pro NVMe Storage', 'iPad Pro M4 UFS'],
+    seriesName: 'Apple Mac Studio / MacBook Pro Custom NVMe & Thunderbolt Storage',
+    category: 'INTERNAL_NVME',
+    categoryKo: 'Mac 워크스테이션 내장 NVMe',
+    supportedModels: ['Apple APFS Fabric SSD', 'Mac Studio M-Series SSD', 'MacBook Pro Custom Blade SSD'],
     precisionDiagnosticFeatures: [
       'APFS 파일시스템 스냅샷 및 컨테이너 무결성 패킷 검증',
       'Apple Silicon 통합 스토리지 컨트롤러 온칩 버스 상태 진단',
-      '모바일 MTP / WebUSB direct 소켓 통신 패킷 손실 모니터링'
+      'Thunderbolt 4 / USB4 외장 인클로저 대역폭 및 페이로드 전송률 검증'
     ],
     smartMonitoringIds: [
-      { id: 1, name: 'APFS Volume Integrity Status', targetMetric: 'APFS 컨테이너 무결성' }
+      { id: 1, name: 'APFS Volume Integrity Status', targetMetric: 'APFS 컨테이너 무결성' },
+      { id: 5, name: 'Reallocated Bad Blocks', targetMetric: '플래시 예비 블록 상태' }
     ],
-    hardwareFeatures: ['Apple Custom Storage Controller (SoC Integrated)', 'APFS Encrypted Snapshot Engine', 'MTP Packet Protocol'],
-    remediationCapabilities: ['macOS First Aid 컨테이너 수복', 'MTP 연결 유지 보수'],
+    hardwareFeatures: ['Apple Custom Storage Controller (SoC Integrated)', 'APFS Encrypted Snapshot Engine', 'Thunderbolt 4 Bridge'],
+    remediationCapabilities: ['macOS First Aid 컨테이너 수복', '디스크 볼륨 마운트 복구'],
     officialTool: 'Apple macOS Disk Utility & Diagnostics'
   },
 

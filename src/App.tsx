@@ -21,6 +21,7 @@ import { SupportedProductsCatalogModal } from './components/SupportedProductsCat
 import { ParallelDriveScanModal } from './components/ParallelDriveScanModal';
 import { TrayGuardianModal } from './components/TrayGuardianModal';
 import { BitCarvingRecoveryModal } from './components/BitCarvingRecoveryModal';
+import { DiskHardwareDetailsModal } from './components/DiskHardwareDetailsModal';
 import { ScanMethodSelector } from './components/ScanMethodSelector';
 import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
@@ -29,7 +30,9 @@ import {
   createNativeHostDrive, 
   createNativeDriveFromFile, 
   createNativeDriveFromDirectoryHandle,
-  executeRealPhysicalSectorProbe 
+  createNativeDriveFromFolderFiles,
+  executeRealPhysicalSectorProbe,
+  rescanAllDrives
 } from './utils/nativeDriveEngine';
 import { calculateHardwareVitals } from './utils/hardwareTelemetry';
 import { safeStorage } from './utils/safeStorage';
@@ -130,6 +133,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const activeDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Probe Real Native OS Hardware Storage on Mount
   useEffect(() => {
@@ -171,6 +175,26 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   }, [selectedDriveId]);
 
   const handlePickDirectoryVolume = async () => {
+    // Check if running inside cross-origin iframe (e.g. AI Studio preview)
+    const isCrossOriginIframe = (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+
+    // In cross-origin subframes, window.showDirectoryPicker is forbidden by browser security policy.
+    // Trigger standard HTML5 folder or file picker directly to prevent SecurityError.
+    if (isCrossOriginIframe) {
+      if (folderInputRef.current) {
+        folderInputRef.current.click();
+      } else {
+        fileInputRef.current?.click();
+      }
+      return;
+    }
+
     if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
       try {
         // @ts-expect-error - W3C File System Access API
@@ -182,12 +206,22 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         handleAddDrive(realDrive);
         dispatchNotification('실제 로컬 볼륨 마운트 완료', `[${dirHandle.name}] 볼륨이 검사 장치로 마운트되었습니다.`);
       } catch (err: any) {
-        if (err?.name !== 'AbortError') {
-          console.error('Directory volume mount error:', err);
+        if (err?.name === 'AbortError') {
+          return;
+        }
+        // Graceful fallback without throwing uncaught SecurityError
+        if (folderInputRef.current) {
+          folderInputRef.current.click();
+        } else {
+          fileInputRef.current?.click();
         }
       }
     } else {
-      fileInputRef.current?.click();
+      if (folderInputRef.current) {
+        folderInputRef.current.click();
+      } else {
+        fileInputRef.current?.click();
+      }
     }
   };
 
@@ -216,6 +250,21 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     }
   };
 
+  // Real local directory files selection handler (works inside cross-origin iframes)
+  const handleSelectFolderFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    try {
+      const realDrive = await createNativeDriveFromFolderFiles(files);
+      handleAddDrive(realDrive);
+      dispatchNotification('실제 디렉토리 볼륨 마운트 완료', `${realDrive.name}이(가) 로드되었습니다.`);
+    } catch (err: any) {
+      console.error('Folder load error:', err);
+    } finally {
+      e.target.value = '';
+    }
+  };
+
   const handleEjectDrive = useCallback((ejectDriveId: string) => {
     setDrives(prev => {
       const remaining = prev.filter(d => d.id !== ejectDriveId);
@@ -225,6 +274,27 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
       return remaining;
     });
   }, [selectedDriveId]);
+
+  // Hardware Details & Live Rescan State
+  const [isHardwareDetailsOpen, setIsHardwareDetailsOpen] = useState<boolean>(false);
+  const [isRescanningDrives, setIsRescanningDrives] = useState<boolean>(false);
+
+  const handleRescanDrives = useCallback(async () => {
+    setIsRescanningDrives(true);
+    try {
+      const updated = await rescanAllDrives(drives);
+      setDrives(updated);
+      if (!updated.some(d => d.id === selectedDriveId)) {
+        setSelectedDriveId(updated[0].id);
+      }
+      soundManager.playClick();
+      dispatchNotification('디스크 장치 재검색 완료', '로컬 스토리지 하드웨어 및 I/O 실측 프로브가 갱신되었습니다.');
+    } catch (err) {
+      console.error('Error rescanning drives:', err);
+    } finally {
+      setIsRescanningDrives(false);
+    }
+  }, [drives, selectedDriveId, dispatchNotification]);
 
   // Active Tab: 'scan' | 'health' | 'history'
   const [activeTab, setActiveTab] = useState<'scan' | 'health' | 'history'>('scan');
@@ -720,6 +790,22 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-150">
+      {/* Hidden Real File & Directory Inputs (Always available across all tabs & iframes) */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleSelectRealFile} 
+        className="hidden" 
+      />
+      <input 
+        type="file" 
+        ref={folderInputRef} 
+        {...({ webkitdirectory: '', directory: '' } as any)}
+        multiple 
+        onChange={handleSelectFolderFiles} 
+        className="hidden" 
+      />
+
       {/* Top Navigation */}
       <Navbar
         drives={drives}
@@ -754,6 +840,9 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         onToggleDemoPresets={handleToggleDemoPresets}
         onPickDirectoryVolume={handlePickDirectoryVolume}
         onOpenRealFile={() => fileInputRef.current?.click()}
+        onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
+        onRescanDrives={handleRescanDrives}
+        isRescanning={isRescanningDrives}
       />
 
       {/* Main Container */}
@@ -817,14 +906,6 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         {/* Tab 1: Live Surface Scan View */}
         {activeTab === 'scan' && (
           <div className="space-y-2.5">
-            {/* Hidden Real File Input */}
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleSelectRealFile} 
-              className="hidden" 
-            />
-
             {/* Storage Media Tailored Inspection Method Selector */}
             <ScanMethodSelector
               activeDrive={activeDrive}
@@ -890,6 +971,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
               soundManager.playClick();
             }}
             onOpenVendorModal={() => setIsVendorModalOpen(true)}
+            onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
             isThermalStress={isThermalStress}
           />
         )}
@@ -1036,6 +1118,16 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         />
       )}
 
+      {/* Advanced Disk Hardware Specification & Deep Diagnostics Modal */}
+      {isHardwareDetailsOpen && (
+        <DiskHardwareDetailsModal
+          isOpen={isHardwareDetailsOpen}
+          onClose={() => setIsHardwareDetailsOpen(false)}
+          drive={activeDrive}
+          onRescanHardware={handleRescanDrives}
+        />
+      )}
+
 
       {/* High Density Footer with Creator & Official Channels */}
       <footer className="border-t border-slate-200 dark:border-slate-800/80 py-2.5 bg-slate-100/60 dark:bg-slate-900/60 text-xs text-slate-500 dark:text-slate-400">
@@ -1090,6 +1182,14 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
 
           {/* Right: Trigger Update Check, DLL Docs, External Diagnostics */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsHardwareDetailsOpen(true)}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 font-medium transition-colors cursor-pointer"
+              title="디스크 장치 상세 스펙 및 하드웨어 텔레메트리"
+            >
+              <Cpu className="w-3 h-3 text-indigo-500" />
+              <span>장치 스펙</span>
+            </button>
             <button
               onClick={() => setIsVendorModalOpen(true)}
               className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-50/40 dark:bg-blue-950/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 font-medium transition-colors cursor-pointer"

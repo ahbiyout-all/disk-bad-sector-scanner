@@ -81,7 +81,10 @@ DS_API bool  DS_CALL DS_ConfigureTrayGuardian(uint32_t pollIntervalSec, uint32_t
 DS_API bool  DS_CALL DS_RunTrayGuardianCheck(DSTrayGuardianStatus* outStatus);
 
 // 14. [Rust Bit Carving] 휴리스틱 매직 바이트 시그니처 분석 및 ECC 패리티 비트 카빙 수복
-DS_API bool  DS_CALL DS_ExecuteBitCarvingRecovery(void* hDrive, uint64_t targetLba, uint32_t clusterSpan, DSCarvedSectorResult* outResult);`;
+DS_API bool  DS_CALL DS_ExecuteBitCarvingRecovery(void* hDrive, uint64_t targetLba, uint32_t clusterSpan, DSCarvedSectorResult* outResult);
+
+// 15. [고도화 하드웨어 정보 획득] 물리 디스크 열거 및 4K AF, TRIM, 지오메트리 심층 프로브
+DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDrives, uint32_t maxDrives);`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">

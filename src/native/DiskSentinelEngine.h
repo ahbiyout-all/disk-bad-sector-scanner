@@ -135,6 +135,24 @@ typedef struct {
     bool     isSalvaged;
     uint8_t  hexPreview[64];
 } DSCarvedSectorResult;
+
+// Physical Drive Advanced Hardware Discovery Details
+typedef struct {
+    uint32_t driveIndex;
+    char     devicePath[64];         // "\\\\.\\PhysicalDrive0"
+    char     model[64];              // e.g. "Samsung SSD 980 PRO 1TB"
+    char     serialNumber[64];       // e.g. "S5GXNF0R123456"
+    char     firmwareRev[32];        // e.g. "5B2QGXA7"
+    char     busType[32];            // "NVMe", "SATA", "USB", "SCSI"
+    uint64_t totalCapacityBytes;     // e.g. 1000204886016
+    uint32_t sectorSize;             // 512 or 4096
+    uint32_t physicalSectorSize;     // 4096 (4Kn/512e)
+    bool     isSsd;                  // true if seek penalty = 0
+    bool     isTrimSupported;        // true if DeviceTrimProperty supported
+    bool     isWriteCacheEnabled;
+    uint32_t temperatureCelsius;
+    uint32_t healthScore;
+} DSPhysicalDriveDetail;
 #pragma pack(pop)
 
 
@@ -248,6 +266,15 @@ DS_API bool DS_CALL DS_ExecuteBitCarvingRecovery(
     uint64_t targetLba,
     uint32_t clusterSpan,
     DSCarvedSectorResult* outResult
+);
+
+/**
+ * 15. Advanced Physical Drive Device Discovery & Hardware Detail Acquisition
+ *     Probes \\\\.\\PhysicalDrive0..N using Win32 Storage Property Queries.
+ */
+DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
+    DSPhysicalDriveDetail* outDrives,
+    uint32_t maxDrives
 );
 
 #ifdef __cplusplus

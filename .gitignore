@@ -166,3 +166,4 @@ $RECYCLE.BIN/
 # 9. Local Deployment & Push Automation Scripts (User Excluded)
 # -------------------------------------------------------------------
 git-push-auto.bat
+git-push.bat

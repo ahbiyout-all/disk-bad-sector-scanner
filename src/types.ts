@@ -90,6 +90,78 @@ export interface DiskDrive {
   isEjected?: boolean;
   attachedFile?: File;
   attachedFileHandle?: any;
+  hardwareSpecs?: DiskHardwareSpecs;
+}
+
+export interface DiskVolumePartition {
+  letterOrMount: string;
+  label: string;
+  fileSystem: string;
+  totalGb: number;
+  usedGb: number;
+  freeGb: number;
+  usedPercentage: number;
+}
+
+export interface DiskHardwareSpecs {
+  // Identification & Controller
+  devicePhysicalPath?: string; // e.g. '\\\\.\\PhysicalDrive0', '/dev/nvme0n1'
+  vendorName: string;
+  modelNumber: string;
+  serialNumber: string;
+  firmwareRevision: string;
+  busType: 'NVMe' | 'SATA' | 'USB' | 'PCIe' | 'SCSI' | 'ATAPI' | 'RAID' | 'Unknown';
+  busInterfaceSpeed: string;
+  formFactor: string;
+  controllerVendor?: string;
+  
+  // Physical Geometry & Addressing
+  totalCapacityBytes: number;
+  totalCapacityGb: number;
+  totalLbaSectors: number;
+  logicalSectorSize: number; // 512 or 4096
+  physicalSectorSize: number; // 4096 (4Kn or 512e Advanced Format)
+  isAdvancedFormat: boolean;
+  partitionStyle: 'GPT (GUID Partition Table)' | 'MBR (Master Boot Record)';
+  alignmentStatus: 'Aligned (4K sector boundary)' | 'Misaligned';
+
+  // Protocols & Capabilities
+  mediaType: 'SSD (Non-Volatile NAND Flash)' | 'Mechanical HDD (Magnetic Platter)' | 'Flash Memory Card / USB BOT';
+  rotationalSpeedRpm: number;
+  trimSupported: boolean;
+  trimActive: boolean;
+  smartSupported: boolean;
+  smartActive: boolean;
+  ncqSupported: boolean;
+  queueDepth: number;
+  volatileWriteCache: boolean;
+  writeCacheFlushSupported: boolean;
+  readLookAheadSupported: boolean;
+  apmAamSupported: boolean;
+
+  // Real-time Reliability & Endurance
+  hostReadsTb: number;
+  hostWritesTb: number;
+  percentageUsed: number;
+  availableSparePercent: number;
+  powerOnHours: number;
+  powerCycles: number;
+  unsafeShutdowns: number;
+  mediaErrors: number;
+  currentTempC: number;
+  maxTempRecordedC: number;
+  warningTempThresholdC: number;
+
+  // Real Hardware Direct I/O Measurements
+  measuredKernelLatencyUs: number;
+  measuredSequentialReadMbSec: number;
+  measuredSequentialWriteMbSec: number;
+  measuredRandom4kReadIops: number;
+  probeTimestamp: number;
+  probeMethod: 'Native Direct Win32 IOCTL' | 'W3C StorageManager & OPFS Buffer Probe' | 'WebUSB Hardware Pipe' | 'Real File Slice Direct IO' | 'HTML5 Directory File Slicing & Storage Probe';
+
+  // Partitions & Volumes
+  partitions?: DiskVolumePartition[];
 }
 
 export interface ScanTelemetry {

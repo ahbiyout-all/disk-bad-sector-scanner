@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { DiskDrive } from '../types';
 import { EXTERNAL_DRIVE_PRESETS } from '../utils/drivePresets';
 import { 
   createNativeDriveFromDirectoryHandle, 
+  createNativeDriveFromFolderFiles,
   createNativeDriveFromFile, 
   requestPhysicalWebUsbDevice, 
   requestPhysicalWebSerialDevice 
@@ -50,6 +51,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
   const [ejectSuccessMsg, setEjectSuccessMsg] = useState<string | null>(null);
   const [fsPickerError, setFsPickerError] = useState<string | null>(null);
   const [fsPickerLoading, setFsPickerLoading] = useState<boolean>(false);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -81,6 +83,22 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
     setFsPickerError(null);
     setFsPickerLoading(true);
 
+    const isInIframe = (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+
+    // In cross-origin iframes (like web sandboxes), showDirectoryPicker is forbidden.
+    // Immediately open standard HTML5 directory input safely without throwing SecurityError.
+    if (isInIframe) {
+      setFsPickerLoading(false);
+      folderInputRef.current?.click();
+      return;
+    }
+
     if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
       try {
         // @ts-expect-error - standard browser API
@@ -96,16 +114,41 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
         setEjectSuccessMsg(`실제 외장 볼륨 [${dirHandle.name || 'Local'}]이(가) 검사 장치로 마운트되었습니다!`);
         setTimeout(() => setEjectSuccessMsg(null), 3500);
         setActiveTab('connected');
+        return;
       } catch (err: any) {
-        if (err.name !== 'AbortError') {
-          setFsPickerError('디렉토리 선택 중 오류가 발생했거나 권한이 거부되었습니다.');
+        if (err?.name === 'AbortError') {
+          return;
         }
+        // Graceful fallback to standard directory input
+        folderInputRef.current?.click();
       } finally {
         setFsPickerLoading(false);
       }
     } else {
       setFsPickerLoading(false);
-      setFsPickerError('현재 브라우저에서는 showDirectoryPicker가 지원되지 않거나 iframe 제한이 있습니다. 아래 [실제 파일 직접 열기]를 이용해 주세요.');
+      folderInputRef.current?.click();
+    }
+  };
+
+  // Handle standard folder files selection (works reliably in all browsers and iframes)
+  const handleFolderFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setFsPickerError(null);
+    setFsPickerLoading(true);
+    try {
+      const newDrive = await createNativeDriveFromFolderFiles(files);
+      onAddDrive(newDrive);
+      onSelectDrive(newDrive.id);
+      setEjectSuccessMsg(`로컬 디렉토리 [${newDrive.name}]이(가) 마운트되었습니다!`);
+      setTimeout(() => setEjectSuccessMsg(null), 3500);
+      setActiveTab('connected');
+    } catch (err: any) {
+      setFsPickerError(`디렉토리 볼륨 마운트 실패: ${err?.message || '알 수 없는 오류'}`);
+    } finally {
+      setFsPickerLoading(false);
+      e.target.value = '';
     }
   };
 
@@ -506,7 +549,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                       실제 파일 / 디스크 이미지 열기
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                      PC/모바일의 모든 파일(.iso, .img, .vhd, 압축파일 등)을 선택하여 바이트 단위 I/O 속도와 체크섬 무결성을 직접 스캔합니다.
+                      PC 및 워크스테이션의 모든 파일(.iso, .img, .vhd, 압축파일 등)을 선택하여 바이트 단위 I/O 속도와 체크섬 무결성을 직접 스캔합니다.
                     </p>
                   </div>
                   <label className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs cursor-pointer transition-colors">
@@ -539,6 +582,14 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                     <FolderOpen className="w-3.5 h-3.5" />
                     <span>{fsPickerLoading ? '선택창 대기 중...' : '로컬 폴더 / 볼륨 열기'}</span>
                   </button>
+                  <input
+                    type="file"
+                    ref={folderInputRef}
+                    {...({ webkitdirectory: '', directory: '' } as any)}
+                    multiple
+                    className="hidden"
+                    onChange={handleFolderFilesChange}
+                  />
                 </div>
 
                 {/* 3. Real WebUSB Direct Pairing */}

@@ -9,11 +9,8 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist dist-packages .github-release github-release",
+    "clean": "rm -rf dist dist-packages",
     "lint": "node ./node_modules/typescript/bin/tsc --noEmit",
-    "package": "node scripts/package-cross-platform.mjs",
-    "bundle:release": "node scripts/bundle-essential-release.mjs",
-    "bump-version": "node scripts/bump-version.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

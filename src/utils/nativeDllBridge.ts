@@ -604,3 +604,45 @@ export async function DS_ExecuteBitCarvingRecovery(
   };
 }
 
+export interface DSPhysicalDriveDetail {
+  driveIndex: number;
+  devicePath: string;
+  model: string;
+  serialNumber: string;
+  firmwareRev: string;
+  busType: string;
+  totalCapacityBytes: bigint;
+  sectorSize: number;
+  physicalSectorSize: number;
+  isSsd: boolean;
+  isTrimSupported: boolean;
+  isWriteCacheEnabled: boolean;
+  temperatureCelsius: number;
+  healthScore: number;
+}
+
+/**
+ * TypeScript Emulation of DS_EnumeratePhysicalDrives
+ */
+export function DS_EnumeratePhysicalDrives(): DSPhysicalDriveDetail[] {
+  return [
+    {
+      driveIndex: 0,
+      devicePath: '\\\\.\\PhysicalDrive0',
+      model: 'Samsung SSD 990 PRO 1TB',
+      serialNumber: 'S6B0NF0T982341',
+      firmwareRev: '0B2QGXA7',
+      busType: 'NVMe',
+      totalCapacityBytes: 1000204886016n,
+      sectorSize: 512,
+      physicalSectorSize: 4096,
+      isSsd: true,
+      isTrimSupported: true,
+      isWriteCacheEnabled: true,
+      temperatureCelsius: 36,
+      healthScore: 99
+    }
+  ];
+}
+
+

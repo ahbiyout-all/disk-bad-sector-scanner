@@ -9,7 +9,6 @@ import {
   HardDrive, 
   Cpu, 
   Usb,
-  Smartphone,
   Layers, 
   Sparkles, 
   Download,
@@ -176,15 +175,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({
                 </p>
               </div>
 
-              <div className="p-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
-                <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1 text-purple-500">
-                  <Smartphone className="w-3.5 h-3.5" />
-                  모바일 장치 (UFS/eMMC/MTP/배터리) 정밀 점검
-                </div>
-                <p className="text-slate-500 dark:text-slate-400 leading-relaxed text-[10px]">
-                  UFS 4.0/3.1, eMMC 5.1 플래시 마모도(Wear Leveling), MTP 세션 지터, 배터리 온동 & 충방전 사이클, zRAM 압축 무결성을 원스톱 진단합니다.
-                </p>
-              </div>
+
 
               <div className="p-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 col-span-1 sm:col-span-2">
                 <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1 text-rose-500">

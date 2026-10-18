@@ -11,7 +11,6 @@ import {
   Cpu, 
   HardDrive, 
   Usb, 
-  Smartphone, 
   ShieldCheck, 
   Zap, 
   Wrench, 
@@ -52,8 +51,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
     { id: 'INTERNAL_SATA', label: '내장 SATA', icon: HardDrive },
     { id: 'EXTERNAL_SSD', label: '외장 SSD', icon: Usb },
     { id: 'EXTERNAL_HDD', label: '외장 HDD', icon: HardDrive },
-    { id: 'SD_FLASH', label: 'SD / 플래시', icon: Activity },
-    { id: 'MOBILE_DEVICE', label: '모바일 / Mac', icon: Smartphone }
+    { id: 'SD_FLASH', label: 'SD / 플래시', icon: Activity }
   ];
 
   const vendorsList = [

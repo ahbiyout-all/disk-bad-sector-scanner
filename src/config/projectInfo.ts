@@ -72,31 +72,17 @@ export const PROJECT_INFO = {
     assets: [
       {
         name: 'DiskSentinel-Pro-v4.3.2-PC-Windows-macOS-Linux.zip',
-        platform: 'PC (Windows/Mac/Linux)',
+        platform: 'PC & Workstation (Windows/Mac/Linux)',
         downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.3.2/DiskSentinel-Pro-v4.3.2-PC-Windows-macOS-Linux.zip',
         sizeMb: 15.3,
-        description: '데스크톱 PC 전용 독립 실행 오프라인 설치 패키지'
-      },
-      {
-        name: 'DiskSentinel-Pro-v4.3.2-Android.apk.zip',
-        platform: 'Android (APK/PWA)',
-        downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.3.2/DiskSentinel-Pro-v4.3.2-Android.apk.zip',
-        sizeMb: 8.5,
-        description: '안드로이드 모바일 & 태블릿 최적화 패키지'
-      },
-      {
-        name: 'DiskSentinel-Pro-v4.3.2-iOS-WebBundle.zip',
-        platform: 'iOS (WebBundle)',
-        downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.3.2/DiskSentinel-Pro-v4.3.2-iOS-WebBundle.zip',
-        sizeMb: 8.1,
-        description: 'iOS Safari / 홈 화면 바로가기 패키지'
+        description: '데스크톱 및 워크스테이션 PC 전용 독립 실행 오프라인 설치 패키지'
       },
       {
         name: 'DiskSentinel-Pro-v4.3.2-Universal-WebInstaller.tar.gz',
         platform: 'Universal',
         downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.3.2/DiskSentinel-Pro-v4.3.2-Universal-WebInstaller.tar.gz',
         sizeMb: 11.9,
-        description: '모든 OS에서 동작하는 유니버설 웹 인스톨러'
+        description: '데스크톱 브라우저 및 Tauri 네이티브 런타임 유니버설 인스톨러'
       }
     ]
   } as ReleaseInfo
