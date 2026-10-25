@@ -17,11 +17,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
-// 1. Read package.json version
+// 1. Read package.json version & handle CLI overrides
+const args = process.argv.slice(2);
 const pkgPath = path.join(rootDir, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-const version = pkg.version || '4.5.0';
-const versionTag = `v${version}`;
+
+// Use CLI argument if provided, otherwise fallback to package.json
+const rawVersion = args[0] || pkg.version || '4.5.0';
+const versionTag = rawVersion.startsWith('v') || rawVersion === 'latest-snapshot' ? rawVersion : `v${rawVersion}`;
+const version = versionTag.startsWith('v') ? versionTag.substring(1) : versionTag;
 
 console.log(`\n========================================================`);
 console.log(`📦 DiskSentinel Pro Release Packaging: ${versionTag}`);

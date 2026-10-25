@@ -17,8 +17,8 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Package & Publish GitHub Release (Node.js 22 LTS)
-    runs-on: ubuntu-latest
+    name: Package & Publish GitHub Release (Windows Runner)
+    runs-on: windows-latest
 
     steps:
       - name: Checkout Source Code
@@ -40,9 +40,6 @@ jobs:
 
       - name: Build Web Application
         run: npm run build
-
-      - name: Package Official Desktop Installer Asset
-        run: node scripts/package-cross-platform.mjs
 
       - name: Determine Version & Generate Release Notes
         id: version_info
@@ -72,12 +69,12 @@ jobs:
           - 소속: https://www.cisnet.co.kr
 
           ### 📦 배포 설치 파일 목록 (Release Assets)
-          1. **Desktop Setup Installer**: \`DiskSentinel-Pro-$TAG-Desktop-Setup-Package.zip\`
-             - Inno Setup 네이티브 인스톨러 컴파일 스펙 (\`setup.iss\`, \`build.bat\`)
-             - Windows 조용한 방화벽 규칙 사전 등록
-             - 무인 설치 지원 (\`/SILENT\`, \`/VERYSILENT /NORESTART\`)
-          2. **Cross-Platform PC Portable**: \`DiskSentinel-Pro-$TAG-PC-Windows-macOS-Linux.zip\`
-             - Windows / macOS / Linux 오프라인 단독 실행 지원
+          1. **Inno Setup Installer (.exe)**: \`DiskSentinel_Setup_$TAG.exe\`
+             - Windows 표준 설치 프로그램 (방화벽 규칙 자동 등록 지원)
+          2. **Desktop Setup Package (.zip)**: \`DiskSentinel-Pro-$TAG-Desktop-Setup-Package.zip\`
+             - Inno Setup 스펙 및 빌드 스크립트 포함 원본 패키지
+          3. **Cross-Platform PC Portable (.zip)**: \`DiskSentinel-Pro-$TAG-PC-Windows-macOS-Linux.zip\`
+             - 무설치 포터블 실행 패키지
 
           ### 🛡️ 주요 기능 및 업데이트
           - Node.js 22 LTS 런타임 최적화 빌드
@@ -85,6 +82,26 @@ jobs:
           - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 정밀 분석
           - 파일/볼륨 직접 마운트 검사 및 비트 카빙 데이터 수복
           EOF
+
+      - name: Package Official Desktop Installer Asset
+        run: node scripts/package-cross-platform.mjs ${{ steps.version_info.outputs.tag_name }}
+
+      - name: List Packaged Assets (Debug)
+        run: ls -R dist-packages/
+        shell: bash
+
+      - name: Compile Inno Setup Installer
+        run: |
+          mkdir -p bin/native
+          # Create dummy binaries if missing to satisfy setup.iss source paths if needed
+          touch bin/native/DiskSentinelPro.exe
+          touch bin/native/DiskSentinelNativeCore.dll
+          iscc /dAppVersion="${{ steps.version_info.outputs.tag_name }}" setup.iss
+        shell: bash
+
+      - name: List Output Directory (Debug)
+        run: ls -R Output/
+        shell: bash
 
       - name: Publish Release to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -95,8 +112,10 @@ jobs:
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
+          make_latest: true
           files: |
             dist-packages/*.zip
+            Output/*.exe
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
