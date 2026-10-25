@@ -23,7 +23,7 @@ DisableDirPage=no
 DefaultGroupName=DiskSentinel Pro
 AllowNoIcons=yes
 ; Output Setup Executable with Version Suffix
-OutputBaseFilename=DiskSentinel_Setup_v{#AppVersion}
+OutputBaseFilename=DiskSentinel_Setup_{#AppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

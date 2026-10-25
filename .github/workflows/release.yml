@@ -92,16 +92,19 @@ jobs:
 
       - name: Compile Inno Setup Installer
         run: |
-          mkdir -p bin/native
+          if (!(Test-Path "bin/native")) { New-Item -Path "bin/native" -ItemType Directory -Force }
           # Create dummy binaries if missing to satisfy setup.iss source paths if needed
-          touch bin/native/DiskSentinelPro.exe
-          touch bin/native/DiskSentinelNativeCore.dll
-          iscc /dAppVersion="${{ steps.version_info.outputs.tag_name }}" setup.iss
-        shell: bash
+          if (!(Test-Path "bin/native/DiskSentinelPro.exe")) { New-Item -Path "bin/native/DiskSentinelPro.exe" -ItemType File -Force }
+          if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { New-Item -Path "bin/native/DiskSentinelNativeCore.dll" -ItemType File -Force }
+          
+          iscc.exe /DAppVersion="${{ steps.version_info.outputs.tag_name }}" setup.iss
+        shell: pwsh
 
-      - name: List Output Directory (Debug)
-        run: ls -R Output/
-        shell: bash
+      - name: Verify Output Files (Debug)
+        run: |
+          Get-ChildItem -Path "dist-packages" -Recurse
+          Get-ChildItem -Path "Output" -ErrorAction SilentlyContinue
+        shell: pwsh
 
       - name: Publish Release to GitHub Releases
         uses: softprops/action-gh-release@v2
