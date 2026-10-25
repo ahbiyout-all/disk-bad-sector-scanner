@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Release Tag (e.g. v4.4.1)'
+        description: 'Release Tag (e.g. v4.5.0)'
         required: true
-        default: 'v4.4.1'
+        default: 'v4.5.0'
 
 permissions:
   contents: write
@@ -26,14 +26,16 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js 22 (LTS)
-        # Note: Node.js 20 is officially deprecated/EOL. Using LTS 22.
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+          cache: 'npm'
 
       - name: Install Dependencies
         run: npm install
+
+      - name: Type Check & Lint
+        run: npm run lint
 
       - name: Build Web Application
         run: npm run build
@@ -41,13 +43,24 @@ jobs:
       - name: Package Official Desktop Installer Asset
         run: node scripts/package-cross-platform.mjs
 
-      - name: Generate Release Notes
-        id: release_notes
+      - name: Determine Version & Generate Release Notes
+        id: version_info
         run: |
-          VERSION="${{ github.ref_name || github.event.inputs.version_tag }}"
-          echo "tag_name=$VERSION" >> $GITHUB_OUTPUT
-          cat << 'EOF' > RELEASE_NOTES.md
-          ## 🚀 DiskSentinel Pro Release
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version_tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+
+          if [[ ! "$TAG" =~ ^v ]]; then
+            TAG="v$TAG"
+          fi
+
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+          CLEAN_VER="${TAG#v}"
+
+          cat << EOF > RELEASE_NOTES.md
+          ## 🚀 DiskSentinel Pro $TAG Release
 
           [제작자 및 공식 채널 안내]
           - 개발자: AhBiYout
@@ -56,28 +69,31 @@ jobs:
           - 소속: https://www.cisnet.co.kr
 
           ### 📦 배포 설치 파일 목록 (Release Assets)
-          1. **Desktop Setup Installer**: `DiskSentinel-Pro-v4.4.0-Desktop-Setup-Package.zip`
-             - Inno Setup 네이티브 인스톨러 컴파일 지원 (`setup.iss`, `build.bat`)
-             - Windows 조용한 방화벽 규칙 사전 등록 (기본 이름 및 버전 포함 이름)
-             - 무인 설치 지원 (`/SILENT`, `/VERYSILENT /NORESTART`)
-             - *(안내: 모바일 APK / iOS 환경은 로우 레벨 디스크 하드웨어 직접 접근이 불가하므로 제외되었습니다.)*
+          1. **Desktop Setup Installer**: \`DiskSentinel-Pro-$TAG-Desktop-Setup-Package.zip\`
+             - Inno Setup 네이티브 인스톨러 컴파일 스펙 (\`setup.iss\`, \`build.bat\`)
+             - Windows 조용한 방화벽 규칙 사전 등록
+             - 무인 설치 지원 (\`/SILENT\`, \`/VERYSILENT /NORESTART\`)
+          2. **Cross-Platform PC Portable**: \`DiskSentinel-Pro-$TAG-PC-Windows-macOS-Linux.zip\`
+             - Windows / macOS / Linux 오프라인 단독 실행 지원
 
-          ### 🛡️ 변경 사항 및 보안
-          - Node.js 22 LTS / 24 런타임 적용 완료
-          - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 분석 기능
-          - 오프라인 단독 실행 지원
+          ### 🛡️ 주요 기능 및 업데이트
+          - Node.js 22 LTS 런타임 최적화 빌드
+          - W3C StorageManager & OPFS Buffer Probe 실측 텔레메트리 연동
+          - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 정밀 분석
+          - 파일/볼륨 직접 마운트 검사 및 비트 카빙 데이터 수복
           EOF
 
       - name: Publish Release to GitHub Releases
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.version_tag }}
-          name: DiskSentinel Pro ${{ github.ref_name || github.event.inputs.version_tag }}
+          tag_name: ${{ steps.version_info.outputs.tag_name }}
+          name: DiskSentinel Pro ${{ steps.version_info.outputs.tag_name }}
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
           files: |
             dist-packages/*.zip
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
