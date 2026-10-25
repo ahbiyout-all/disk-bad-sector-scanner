@@ -109,6 +109,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Compile Native Components
         run: |
           if (!(Test-Path "bin/native")) { New-Item -Path "bin/native" -ItemType Directory -Force }
@@ -119,7 +124,8 @@ jobs:
           & $csc /target:winexe /out:bin\native\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs
           
           echo "--- Compiling C++ Core Engine (DLL) ---"
-          cmd.exe /c "call `"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat`" && cl.exe /LD /O2 /D DISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native"
+          # MSVC environment is already set up by the previous action
+          cl.exe /LD /O2 /D DISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native
           
           if (!(Test-Path "bin/native/DiskSentinelPro.exe")) { throw "Launcher build failed" }
           if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { throw "Core engine build failed" }

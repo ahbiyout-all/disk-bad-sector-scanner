@@ -223,7 +223,10 @@ zip2.addDirectory(distDir, 'DiskSentinelPro');
 if (fs.existsSync(nativeDir)) {
   const bins = fs.readdirSync(nativeDir);
   for (const bin of bins) {
-    zip2.addFile(`DiskSentinelPro/${bin}`, fs.readFileSync(path.join(nativeDir, bin)));
+    const ext = path.extname(bin).toLowerCase();
+    if (ext === '.exe' || ext === '.dll') {
+      zip2.addFile(`DiskSentinelPro/${bin}`, fs.readFileSync(path.join(nativeDir, bin)));
+    }
   }
 }
 
