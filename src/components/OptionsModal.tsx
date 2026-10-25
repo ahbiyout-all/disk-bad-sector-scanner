@@ -34,6 +34,8 @@ export interface OptionsModalProps {
   onToggleThermalStress: () => void;
   scanSpeedMultiplier: number;
   onChangeSpeedMultiplier: (speed: number) => void;
+  isAutoRepairMode?: boolean;
+  onToggleAutoRepairMode?: () => void;
 }
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
@@ -51,6 +53,8 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   onToggleThermalStress,
   scanSpeedMultiplier,
   onChangeSpeedMultiplier,
+  isAutoRepairMode = false,
+  onToggleAutoRepairMode,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'general' | 'audio' | 'notification' | 'diagnostic'>('general');
   const [volume, setVolume] = useState<number>(() => Math.round(soundManager.getVolume() * 100));
@@ -385,6 +389,39 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   {showDemoPresets 
                     ? '현재 데모 드라이브(WD Black, Crucial, Seagate 등)가 드라이브 선택기에 포함되어 있습니다.' 
                     : '현재 실제 로컬 OS 드라이브 및 직접 마운트한 실제 파일/볼륨만 표시됩니다.'}
+                </div>
+              </div>
+
+              {/* Auto-Repair Mode Toggle */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                      <span>자동 복구 모드 (Auto-Repair Zero-Fill)</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      검사 중 논리 배드섹터(UNC) 발견 시 사용자 확인 없이 즉시 S.M.A.R.T. Zero-Fill 05h 예비 트랙 재할당을 자동 실행합니다.
+                    </p>
+                  </div>
+
+                  {onToggleAutoRepairMode && (
+                    <button
+                      onClick={onToggleAutoRepairMode}
+                      className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer shadow-xs ${
+                        isAutoRepairMode
+                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      {isAutoRepairMode ? '자동 수복 켜짐 (ON)' : '자동 수복 꺼짐 (OFF)'}
+                    </button>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {isAutoRepairMode 
+                    ? '✨ 배드섹터 발견 시 알림 출력과 함께 즉시 S.M.A.R.T. Write DMA 제로필 및 05h 치환이 자동으로 진행됩니다.' 
+                    : 'ℹ️ 배드섹터 발견 시 화면 경고음과 배너를 표시하고 사용자의 수동 수복 조치 명령을 대기합니다.'}
                 </div>
               </div>
 

@@ -446,6 +446,22 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const [isThermalStress, setIsThermalStress] = useState<boolean>(false);
   const [isOverheatDismissed, setIsOverheatDismissed] = useState<boolean>(false);
 
+  // Auto-Repair Mode State (Persisted in safeStorage)
+  const [isAutoRepairMode, setIsAutoRepairMode] = useState<boolean>(() => {
+    const saved = safeStorage.getItem('disk_scanner_auto_repair_mode');
+    return saved === 'true';
+  });
+  const isAutoRepairModeRef = useRef<boolean>(isAutoRepairMode);
+
+  useEffect(() => {
+    isAutoRepairModeRef.current = isAutoRepairMode;
+    safeStorage.setItem('disk_scanner_auto_repair_mode', String(isAutoRepairMode));
+  }, [isAutoRepairMode]);
+
+  const handleToggleAutoRepairMode = useCallback(() => {
+    setIsAutoRepairMode(prev => !prev);
+  }, []);
+
   // Scan History & Report State (Stores only genuine user-performed scan records)
   const [scanRecords, setScanRecords] = useState<SavedScanRecord[]>(() => {
     const saved = safeStorage.getItem('disk_scan_records');
@@ -701,28 +717,37 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
       // Handle Event Log, Alerts & Audio
       const currentMethodMeta = SCAN_METHOD_DEFINITIONS[selectedMethodId];
       if (status === 'bad') {
-        soundManager.playBadSectorAlert();
-        setAlertBannerVisible(true);
-        setLatestBadLba(targetBlockLba);
+        if (isAutoRepairModeRef.current) {
+          // Auto-Repair Mode active: automatically reassign sector via S.M.A.R.T. Zero-Fill (05h)
+          handleRepairSectors(activeDrive.id, [idx]);
+          dispatchNotification(
+            '🔧 논리 배드섹터 자동 수복 완료',
+            `블록 #${idx} (LBA #${targetBlockLba.toLocaleString()})의 배드섹터가 자동 Zero-Fill 05h 예비 트랙으로 수복되었습니다.`
+          );
+        } else {
+          soundManager.playBadSectorAlert();
+          setAlertBannerVisible(true);
+          setLatestBadLba(targetBlockLba);
 
-        const newLog: ErrorLogItem = {
-          id: `log-${Date.now()}-${idx}`,
-          timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-          blockIndex: idx,
-          lba: targetBlockLba,
-          status: 'bad',
-          latencyMs: -1,
-          errorCode: errorCode || 'UNC',
-          description: `손상된 배드섹터 검출! 데이터 판독 불가 (LBA #${targetBlockLba.toLocaleString()})`,
-          methodContext: currentMethodMeta?.nameKo
-        };
-        setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
+          const newLog: ErrorLogItem = {
+            id: `log-${Date.now()}-${idx}`,
+            timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+            blockIndex: idx,
+            lba: targetBlockLba,
+            status: 'bad',
+            latencyMs: -1,
+            errorCode: errorCode || 'UNC',
+            description: `손상된 배드섹터 검출! 데이터 판독 불가 (LBA #${targetBlockLba.toLocaleString()})`,
+            methodContext: currentMethodMeta?.nameKo
+          };
+          setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
 
-        // Dispatch browser notification
-        dispatchNotification(
-          '🚨 배드섹터 검출 경고!',
-          `블록 #${idx} (LBA: #${targetBlockLba.toLocaleString()})에서 읽기 손상 섹터가 감지되었습니다!`
-        );
+          // Dispatch browser notification
+          dispatchNotification(
+            '🚨 배드섹터 검출 경고!',
+            `블록 #${idx} (LBA: #${targetBlockLba.toLocaleString()})에서 읽기 손상 섹터가 감지되었습니다!`
+          );
+        }
       } else if (status === 'critical' || status === 'slow') {
         soundManager.playWarningTone();
         const newLog: ErrorLogItem = {
@@ -813,6 +838,82 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     }
   };
 
+  // Native Desktop Keyboard Shortcuts Handler
+  useEffect(() => {
+    const handleDesktopKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is currently typing in an input or textarea
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      // F1: Help Guide
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setIsHelpGuideModalOpen(prev => !prev);
+        return;
+      }
+
+      // F5: Hardware Rescan
+      if (e.key === 'F5') {
+        e.preventDefault();
+        handleRescanDrives();
+        return;
+      }
+
+      // Ctrl + O: Mount Volume
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        handlePickDirectoryVolume();
+        return;
+      }
+
+      // Ctrl + F: Open File
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        fileInputRef.current?.click();
+        return;
+      }
+
+      // Ctrl + , : Options Modal
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        setIsOptionsModalOpen(prev => !prev);
+        return;
+      }
+
+      // Space: Start/Pause Scan
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (scanStatus === 'scanning') {
+          handlePauseScan();
+        } else if (scanStatus === 'paused') {
+          handleResumeScan();
+        } else {
+          handleStartScan();
+        }
+        return;
+      }
+
+      // R: Reset
+      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        handleResetScan();
+        return;
+      }
+
+      // 1 ~ 5: Tab Switching
+      if (e.key === '1') setActiveTab('scan');
+      if (e.key === '2') setActiveTab('logs');
+      if (e.key === '3') setActiveTab('health');
+      if (e.key === '4') setActiveTab('smart');
+      if (e.key === '5') setActiveTab('history');
+    };
+
+    window.addEventListener('keydown', handleDesktopKeyDown);
+    return () => window.removeEventListener('keydown', handleDesktopKeyDown);
+  }, [scanStatus, handleRescanDrives, handlePickDirectoryVolume]);
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-150">
       {/* Hidden Real File & Directory Inputs (Always available across all tabs & iframes) */}
@@ -875,6 +976,8 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         onExportResults={() => handleOpenExportModal()}
         onResetScan={handleResetScan}
         onOpenReport={handleOpenCurrentReport}
+        isAutoRepairMode={isAutoRepairMode}
+        onToggleAutoRepairMode={handleToggleAutoRepairMode}
       />
 
       {/* Main Container */}
@@ -1360,6 +1463,8 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
           scanSpeedMultiplier={scanSpeedMultiplier}
           onChangeSpeedMultiplier={setScanSpeedMultiplier}
+          isAutoRepairMode={isAutoRepairMode}
+          onToggleAutoRepairMode={handleToggleAutoRepairMode}
         />
       )}
 
@@ -1478,6 +1583,48 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
 
         </div>
       </footer>
+
+      {/* Native Desktop Status Bar (Classic Professional Utility Style) */}
+      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1 text-[11px] font-mono text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 overflow-x-auto select-none shadow-inner">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${
+              scanStatus === 'scanning' ? 'bg-indigo-500 animate-ping' :
+              scanStatus === 'paused' ? 'bg-amber-500' :
+              scanStatus === 'completed' ? 'bg-emerald-500' :
+              'bg-slate-400'
+            }`} />
+            <span className="font-semibold text-slate-700 dark:text-slate-200 font-sans">
+              {
+                scanStatus === 'scanning' ? `검사 진행 중 (${scannedPercentage.toFixed(1)}%)` :
+                scanStatus === 'paused' ? '일시 정지됨' :
+                scanStatus === 'completed' ? '검사 완료 (정상)' :
+                '대기 중 (Ready)'
+              }
+            </span>
+          </div>
+
+          <span className="text-slate-300 dark:text-slate-700">|</span>
+          <span className="truncate max-w-[220px]">
+            [{activeDrive.mountPoint || 'C:'}] {activeDrive.name} ({activeDrive.capacityGb} GB)
+          </span>
+
+          <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
+          <span className="hidden sm:inline">LBA: 0 ~ {(activeDrive.totalSectors || 1073741824).toLocaleString()}</span>
+        </div>
+
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="hidden md:inline">Direct I/O: <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">정상 (Direct Buffer)</strong></span>
+          <span className="text-slate-300 dark:text-slate-700 hidden md:inline">|</span>
+          <span>건강: <strong className={calculatedHealth >= 80 ? 'text-emerald-500' : 'text-red-500'}>{calculatedHealth}%</strong></span>
+          <span className="text-slate-300 dark:text-slate-700">|</span>
+          <span>온도: <strong>{currentTemp.toFixed(0)}°C</strong></span>
+          <span className="text-slate-300 dark:text-slate-700 hidden lg:inline">|</span>
+          <span className="hidden lg:inline text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 font-bold">
+            DESKTOP PC EDITION
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

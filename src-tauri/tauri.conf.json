@@ -12,16 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "DiskSentinel Pro v4.5.0 - Fixed 800x600 Bad Sector Scanner",
-        "width": 800,
-        "height": 600,
-        "minWidth": 800,
-        "minHeight": 600,
-        "maxWidth": 800,
-        "maxHeight": 600,
-        "resizable": false,
+        "title": "DiskSentinel Pro - 데스크톱 디스크 배드섹터 정밀 진단기",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "resizable": true,
         "fullscreen": false,
-        "decorations": true
+        "decorations": true,
+        "center": true
       }
     ],
     "security": {

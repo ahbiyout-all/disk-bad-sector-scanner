@@ -3,7 +3,6 @@ import { DiskDrive, MainAppTab } from '../types';
 import { PROJECT_INFO } from '../config/projectInfo';
 import { 
   Bell, 
-  BellOff, 
   Volume2, 
   VolumeX, 
   Moon, 
@@ -15,8 +14,6 @@ import {
   Info,
   Cpu,
   Usb,
-  Menu,
-  X,
   ChevronDown,
   HardDrive,
   Zap,
@@ -36,7 +33,10 @@ import {
   ArrowRight,
   Download,
   RotateCcw,
-  FileCheck
+  FileCheck,
+  Minus,
+  Square,
+  X
 } from 'lucide-react';
 
 export interface NavbarProps {
@@ -78,6 +78,8 @@ export interface NavbarProps {
   onExportResults?: () => void;
   onResetScan?: () => void;
   onOpenReport?: () => void;
+  isAutoRepairMode?: boolean;
+  onToggleAutoRepairMode?: () => void;
 }
 
 type ActivePulldown = 'file' | 'view' | 'tools' | 'options' | 'help' | null;
@@ -120,10 +122,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleThermalStress,
   onExportResults,
   onResetScan,
-  onOpenReport
+  onOpenReport,
+  isAutoRepairMode = false,
+  onToggleAutoRepairMode
 }) => {
   const [activeMenu, setActiveMenu] = useState<ActivePulldown>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
   // Close active pulldown on outside click or Escape key
@@ -137,7 +140,6 @@ export const Navbar: React.FC<NavbarProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActiveMenu(null);
-        setIsMobileMenuOpen(false);
       }
     };
 
@@ -179,41 +181,41 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors shadow-2xs font-sans">
+    <header className="sticky top-0 z-40 bg-white/98 dark:bg-slate-900/98 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors shadow-2xs font-sans select-none">
       
       {/* ============================================================== */}
-      {/* 1. DESKTOP TOP PULDOWN MENU BAR (파일, 보기, 도구, 옵션, 도움말) */}
+      {/* DESKTOP NATIVE APPLICATION TOP MENU BAR                        */}
       {/* ============================================================== */}
-      <div className="hidden md:block w-full px-4 sm:px-6">
+      <div className="w-full px-3 sm:px-5">
         <div className="flex items-center justify-between h-12 gap-3">
           
           {/* Left: Brand Identity + Standard Pull-down Menu Bar */}
-          <div className="flex items-center gap-4 min-w-0" ref={menuBarRef}>
+          <div className="flex items-center gap-3 min-w-0" ref={menuBarRef}>
             
-            {/* Logo */}
+            {/* Logo and Desktop PC Edition Badge */}
             <div className="flex items-center gap-2 shrink-0">
-              <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-xs shadow-xs ring-2 ring-indigo-500/20">
+              <div className="w-6.5 h-6.5 bg-indigo-600 rounded-md flex items-center justify-center text-white font-black text-xs shadow-xs ring-1 ring-indigo-500/30">
                 D
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="text-sm font-extrabold tracking-tight text-slate-900 dark:text-white">
+                <span className="text-xs sm:text-sm font-extrabold tracking-tight text-slate-900 dark:text-white">
                   {PROJECT_INFO.appName}
                 </span>
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-semibold">
-                  {PROJECT_INFO.version}
+                <span className="hidden sm:inline-flex text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-bold uppercase tracking-wider">
+                  DESKTOP PC
                 </span>
               </div>
             </div>
 
             {/* Classical Desktop Pull-down Menu Bar */}
-            <div className="flex items-center bg-slate-100/80 dark:bg-slate-800/60 p-0.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 text-xs font-semibold">
+            <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/80 p-0.5 rounded-lg border border-slate-200/90 dark:border-slate-700/80 text-xs font-semibold">
               
               {/* 1. 파일 (File) Pulldown */}
               <div className="relative">
                 <button
                   onClick={() => toggleMenu('file')}
                   onMouseEnter={() => handleMenuHover('file')}
-                  className={`px-3 py-1.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
                     activeMenu === 'file'
                       ? 'bg-indigo-600 text-white font-bold shadow-xs'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -241,7 +243,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <FolderOpen className="w-4 h-4 text-emerald-500" />
                           <span>실제 로컬 볼륨 마운트...</span>
                         </div>
-                        <span className="text-[10px] text-slate-400 font-mono">Direct I/O</span>
+                        <span className="text-[10px] text-slate-400 font-mono">Ctrl+O</span>
                       </button>
                     )}
 
@@ -257,7 +259,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <FileText className="w-4 h-4 text-blue-500" />
                           <span>실물 디스크 파일 열기...</span>
                         </div>
-                        <span className="text-[10px] text-slate-400 font-mono">.img/.iso</span>
+                        <span className="text-[10px] text-slate-400 font-mono">Ctrl+F</span>
                       </button>
                     )}
 
@@ -338,7 +340,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   onClick={() => toggleMenu('view')}
                   onMouseEnter={() => handleMenuHover('view')}
-                  className={`px-3 py-1.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
                     activeMenu === 'view'
                       ? 'bg-indigo-600 text-white font-bold shadow-xs'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -367,7 +369,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           1. 라이브 표면 검사
                         </span>
                       </div>
-                      {activeTab === 'scan' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                      <span className="text-[10px] text-slate-400 font-mono">1</span>
                     </button>
 
                     <button
@@ -389,7 +391,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                             {badCount}
                           </span>
                         )}
-                        {activeTab === 'logs' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                        <span className="text-[10px] text-slate-400 font-mono">2</span>
                       </div>
                     </button>
 
@@ -410,7 +412,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
                           {currentHealthScore}%
                         </span>
-                        {activeTab === 'health' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                        <span className="text-[10px] text-slate-400 font-mono">3</span>
                       </div>
                     </button>
 
@@ -427,7 +429,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           4. S.M.A.R.T. 정밀 속성
                         </span>
                       </div>
-                      {activeTab === 'smart' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                      <span className="text-[10px] text-slate-400 font-mono">4</span>
                     </button>
 
                     <button
@@ -443,7 +445,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           5. 검사 기록 & 대조
                         </span>
                       </div>
-                      {activeTab === 'history' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                      <span className="text-[10px] text-slate-400 font-mono">5</span>
                     </button>
                   </div>
                 )}
@@ -454,7 +456,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   onClick={() => toggleMenu('tools')}
                   onMouseEnter={() => handleMenuHover('tools')}
-                  className={`px-3 py-1.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
                     activeMenu === 'tools'
                       ? 'bg-indigo-600 text-white font-bold shadow-xs'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -578,7 +580,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   onClick={() => toggleMenu('options')}
                   onMouseEnter={() => handleMenuHover('options')}
-                  className={`px-3 py-1.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
                     activeMenu === 'options'
                       ? 'bg-indigo-600 text-white font-bold shadow-xs'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -663,6 +665,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </button>
                     )}
 
+                    {onToggleAutoRepairMode && (
+                      <button
+                        onClick={onToggleAutoRepairMode}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <RotateCcw className="w-4 h-4 text-emerald-500" />
+                          <span>논리 배드섹터 자동 수복</span>
+                        </div>
+                        <span className={`text-[11px] font-bold ${isAutoRepairMode ? 'text-emerald-500' : 'text-slate-400'}`}>
+                          {isAutoRepairMode ? 'ON (자동)' : 'OFF (수동)'}
+                        </span>
+                      </button>
+                    )}
+
                     {onOpenOptionsModal && (
                       <>
                         <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
@@ -677,7 +694,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                             <Settings className="w-4 h-4" />
                             <span>전체 환경설정 상세창...</span>
                           </div>
-                          <ArrowRight className="w-3.5 h-3.5" />
+                          <span className="text-[10px] text-slate-400 font-mono">Ctrl+,</span>
                         </button>
                       </>
                     )}
@@ -690,7 +707,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   onClick={() => toggleMenu('help')}
                   onMouseEnter={() => handleMenuHover('help')}
-                  className={`px-3 py-1.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors ${
                     activeMenu === 'help'
                       ? 'bg-indigo-600 text-white font-bold shadow-xs'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -795,19 +812,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </div>
 
-          {/* Right: Target Drive Selector Dropdown & Hardware Vitals */}
-          <div className="flex items-center gap-2.5 shrink-0">
+          {/* Right: Target Drive Selector Dropdown & Desktop Vitals */}
+          <div className="flex items-center gap-2 shrink-0">
             
             {/* Target Drive Selector Pulldown */}
-            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg px-2.5 py-1 shadow-2xs">
+            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg px-2 py-0.5 shadow-2xs">
               <div className="shrink-0 flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 {getDriveTypeIcon(currentDrive)}
-                <span>Drive:</span>
+                <span className="hidden sm:inline">Drive:</span>
               </div>
               <select
                 value={selectedDriveId}
                 onChange={(e) => onSelectDrive(e.target.value)}
-                className="bg-transparent text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer truncate max-w-[210px]"
+                className="bg-transparent text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer truncate max-w-[170px] sm:max-w-[220px]"
                 aria-label="대상 드라이브 선택"
               >
                 {realFileAndVolumeDrives.length > 0 && (
@@ -851,369 +868,47 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             {/* Quick Health & Temperature Badges */}
-            <div className="hidden lg:flex items-center gap-1.5 font-mono text-xs font-bold">
-              <span className={`px-2 py-0.5 rounded-md border ${
+            <div className="flex items-center gap-1 font-mono text-xs font-bold">
+              <span className={`px-2 py-0.5 rounded-md border text-[11px] ${
                 currentHealthScore >= 80 
                   ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                   : 'bg-red-50 dark:bg-red-950/60 border-red-500/30 text-red-600 dark:text-red-400'
               }`}>
-                건강도: {currentHealthScore}%
+                {currentHealthScore}%
               </span>
-              <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+              <span className="px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-[11px]">
                 {currentDrive?.temperatureC || 36}°C
               </span>
             </div>
 
-          </div>
-
-        </div>
-      </div>
-
-      {/* ============================================================== */}
-      {/* 2. MOBILE ADAPTIVE BAR (< md) */}
-      {/* ============================================================== */}
-      <div className="md:hidden">
-        {/* Mobile Row 1: Logo & Target Drive & Hamburger Toggle */}
-        <div className="flex items-center justify-between h-12 px-3 border-b border-slate-100 dark:border-slate-800/80">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 bg-indigo-600 rounded-md flex items-center justify-center text-white font-black text-xs shrink-0 shadow-xs">
-              D
-            </div>
-            <div className="flex items-baseline gap-1.5 min-w-0">
-              <span className="font-extrabold text-sm tracking-tight text-slate-900 dark:text-white truncate">
-                DiskSentinel
-              </span>
-              <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-semibold shrink-0">
-                {PROJECT_INFO.version}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            {onOpenOptionsModal && (
+            {/* Native Desktop Window Action Controls simulation */}
+            <div className="hidden lg:flex items-center gap-0.5 ml-1 border-l border-slate-200 dark:border-slate-800 pl-2">
               <button
-                onClick={onOpenOptionsModal}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                title="옵션 설정"
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                title="최소화 (Minimize)"
+                onClick={() => {}}
               >
-                <Settings className="w-4 h-4" />
+                <Minus className="w-3 h-3" />
               </button>
-            )}
-
-            {onOpenHelpGuideModal && (
               <button
-                onClick={onOpenHelpGuideModal}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                title="도움말 가이드"
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                title="최대화 / 이전 크기 (Maximize / Restore)"
+                onClick={() => {}}
               >
-                <HelpCircle className="w-4 h-4" />
+                <Square className="w-2.5 h-2.5" />
               </button>
-            )}
+              <button
+                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-red-600 transition-colors cursor-pointer"
+                title="프로그램 닫기 (Close)"
+                onClick={() => {}}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
 
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="relative w-8 h-8 rounded-lg flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ml-0.5"
-              aria-label="풀다운 메뉴 열기/닫기"
-            >
-              {isMobileMenuOpen ? (
-                <X className="w-4.5 h-4.5" />
-              ) : (
-                <>
-                  <Menu className="w-4.5 h-4.5" />
-                  {hasUpdate && (
-                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900 animate-pulse" />
-                  )}
-                </>
-              )}
-            </button>
           </div>
+
         </div>
-
-        {/* Mobile Row 2: Target Drive Selector & Volume Mount Button */}
-        <div className="px-3 py-1.5 bg-slate-50/70 dark:bg-slate-900/60 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2">
-          <div className="flex-1 min-w-0 flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1 shadow-2xs">
-            <div className="shrink-0">
-              {getDriveTypeIcon(currentDrive)}
-            </div>
-            <select
-              value={selectedDriveId}
-              onChange={(e) => onSelectDrive(e.target.value)}
-              className="w-full bg-transparent text-xs font-bold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer truncate"
-              aria-label="검사 대상 드라이브 선택"
-            >
-              {realFileAndVolumeDrives.length > 0 && (
-                <optgroup label="📂 실제 마운트 볼륨 & 파일" className="bg-white dark:bg-slate-900 text-emerald-600 font-bold">
-                  {realFileAndVolumeDrives.map((d) => (
-                    <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                      [📂] {d.name} ({d.capacityGb}GB)
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              <optgroup label="🖥️ 실제 로컬 저장장치" className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold">
-                {realHostDrives.map((d) => (
-                  <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                    [{d.type} {d.mountPoint || ''}] {d.name} ({d.capacityGb}GB)
-                  </option>
-                ))}
-              </optgroup>
-              {showDemoPresets && demoDrives.length > 0 && (
-                <optgroup label="🧪 가상 데모 프리셋 (시뮬레이션)" className="bg-white dark:bg-slate-900 text-amber-600 font-bold">
-                  {demoDrives.map((d) => (
-                    <option key={d.id} value={d.id} className="text-slate-600 dark:text-slate-400">
-                      [가상 데모] {d.name} ({d.capacityGb}GB)
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-          </div>
-
-          {onPickDirectoryVolume && (
-            <button
-              onClick={onPickDirectoryVolume}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs font-bold shrink-0"
-              title="실제 디렉토리 볼륨 마운트"
-            >
-              <FolderOpen className="w-3.5 h-3.5 text-emerald-600" />
-              <span>마운트</span>
-            </button>
-          )}
-        </div>
-
-        {/* Mobile Slide-Down Pulldown Menu Sheet */}
-        {isMobileMenuOpen && (
-          <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-3.5 space-y-4 animate-in fade-in slide-in-from-top-2 duration-150">
-            
-            {/* Group 1: 파일(F) */}
-            <div className="space-y-1.5">
-              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                <span>파일 메뉴 (File)</span>
-                <FolderOpen className="w-3.5 h-3.5 text-emerald-500" />
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {onPickDirectoryVolume && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onPickDirectoryVolume();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-left flex items-center gap-2"
-                  >
-                    <FolderOpen className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">볼륨 마운트</span>
-                  </button>
-                )}
-
-                {onOpenRealFile && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenRealFile();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-left flex items-center gap-2"
-                  >
-                    <FileText className="w-4 h-4 text-blue-500 shrink-0" />
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">파일 열기</span>
-                  </button>
-                )}
-
-                {onOpenReport && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenReport();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-left flex items-center gap-2"
-                  >
-                    <FileCheck className="w-4 h-4 text-purple-500 shrink-0" />
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">진단 리포트</span>
-                  </button>
-                )}
-
-                {onExportResults && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onExportResults();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-left flex items-center gap-2"
-                  >
-                    <Download className="w-4 h-4 text-indigo-500 shrink-0" />
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">내보내기</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Group 2: 도구(T) */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                <span>전문가 도구 (Tools)</span>
-                <Sliders className="w-3.5 h-3.5 text-indigo-500" />
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {onOpenParallelScanModal && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenParallelScanModal();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-start gap-2"
-                  >
-                    <Layers className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-slate-100">다중 병렬 스캔</div>
-                      <div className="text-[10px] text-slate-400">{drives.length}대 동시 검사</div>
-                    </div>
-                  </button>
-                )}
-
-                {onOpenTrayGuardianModal && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenTrayGuardianModal();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-start gap-2"
-                  >
-                    <Shield className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-slate-100">트레이 가디언</div>
-                      <div className="text-[10px] text-slate-400">상시 감시 데몬</div>
-                    </div>
-                  </button>
-                )}
-
-                {onOpenBitCarvingModal && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenBitCarvingModal();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-start gap-2"
-                  >
-                    <Binary className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-slate-100">비트 카빙 수복</div>
-                      <div className="text-[10px] text-slate-400">매직 바이트 복원</div>
-                    </div>
-                  </button>
-                )}
-
-                <button
-                  onClick={() => {
-                    setIsMobileMenuOpen(false);
-                    onOpenExternalDevicesModal();
-                  }}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-start gap-2"
-                >
-                  <Usb className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-slate-100">외장 저장장치</div>
-                    <div className="text-[10px] text-slate-400">USB/UASP/SD</div>
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            {/* Group 3: 옵션(O) */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                <span>프로그램 옵션 (Options)</span>
-                <Settings className="w-3.5 h-3.5 text-slate-500" />
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <button
-                  onClick={onToggleDarkMode}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-center justify-between"
-                >
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">테마</span>
-                  <span className="font-mono text-indigo-500 font-bold">{isDarkMode ? '🌙 Dark' : '☀️ Light'}</span>
-                </button>
-
-                <button
-                  onClick={onToggleMute}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-center justify-between"
-                >
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">경고음</span>
-                  <span className={`font-bold ${!isMuted ? 'text-emerald-500' : 'text-slate-400'}`}>
-                    {!isMuted ? '켬' : '음소거'}
-                  </span>
-                </button>
-
-                {onOpenOptionsModal && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenOptionsModal();
-                    }}
-                    className="col-span-2 py-2 px-3 rounded-lg bg-indigo-600 text-white font-bold text-center flex items-center justify-center gap-1.5"
-                  >
-                    <Settings className="w-3.5 h-3.5" />
-                    <span>환경설정 상세창 열기</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Group 4: 도움말(H) */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                <span>도움말 (Help)</span>
-                <HelpCircle className="w-3.5 h-3.5 text-blue-500" />
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {onOpenHelpGuideModal && (
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      onOpenHelpGuideModal();
-                    }}
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-center gap-1.5"
-                  >
-                    <BookOpen className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                    <span className="font-bold text-slate-800 dark:text-slate-200">진단 가이드</span>
-                  </button>
-                )}
-
-                <button
-                  onClick={() => {
-                    setIsMobileMenuOpen(false);
-                    onOpenUpdateModal();
-                  }}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-center gap-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                  <span className="font-bold text-slate-800 dark:text-slate-200">업데이트 확인</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setIsMobileMenuOpen(false);
-                    onOpenDllDocs();
-                  }}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-center gap-1.5"
-                >
-                  <Terminal className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                  <span className="font-bold text-slate-800 dark:text-slate-200">Rust DLL 명세</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setIsMobileMenuOpen(false);
-                    onOpenAboutModal();
-                  }}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-left flex items-center gap-1.5"
-                >
-                  <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span className="font-bold text-slate-800 dark:text-slate-200">제작자 & 채널</span>
-                </button>
-              </div>
-            </div>
-
-          </div>
-        )}
       </div>
     </header>
   );
