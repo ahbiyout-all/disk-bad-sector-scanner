@@ -75,7 +75,7 @@ export function detectVendor(drive: DiskDrive): StorageVendor {
   if (text.includes('toshiba') || text.includes('kioxia') || text.includes('canvio') || text.includes('exceria') || text.includes('mg08') || text.includes('dt01') || text.includes('hdtc') || text.includes('thnsn')) {
     return 'toshiba';
   }
-  if (text.includes('apple') || text.includes('iphone') || text.includes('apfs')) {
+  if (text.includes('apple') || text.includes('macbook') || text.includes('mac') || text.includes('apfs')) {
     return 'apple';
   }
   if (text.includes('kingston')) {
@@ -201,19 +201,19 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
     case 'apple':
       return {
         vendor: 'apple',
-        nameKo: '애플 (Apple Custom Mobile / Mac Storage)',
+        nameKo: '애플 (Apple Silicon Mac NVMe Storage)',
         nameEn: 'Apple Inc.',
         badgeColor: 'bg-slate-700 text-white',
         officialToolName: 'Apple macOS Disk Utility & Diagnostics',
-        officialToolDescription: 'APFS Container 퍼스트 에이드(First Aid), Apple Mobile NVMe/UFS 무결성 패킷 검증',
+        officialToolDescription: 'macOS 디스크 유틸리티 APFS Container 퍼스트 에이드(First Aid), Apple Silicon Mac 내부 SSD 무결성 진단',
         coreTechHighlights: [
           'APFS (Apple File System) 스냅샷 & 잇줄 암호화',
           'Apple Silicon 온칩 통합 NVMe 컨트롤러',
-          'Type-C USB 3.2 Gen2 MTP & WebUSB 스택'
+          'PCIe 4.0 / Thunderbolt 4 초고속 다이렉트 버스'
         ],
         controllerFamily: 'Apple Custom Storage Controller (SoC Integrated)',
-        knownHardwareTraits: 'APFS 파일시스템 구조상 읽기/쓰기가 샌드박스화되어 있으며, MTP 세션 전송 시 디바이스 전력 제어 모드에 영향을 받음.',
-        recommendedRemediation: '애플 디바이스 진단 모드(Apple Diagnostics) 실행 및 APFS 복구 컨테이너 스냅샷 정리.'
+        knownHardwareTraits: 'Apple Silicon Mac SSD는 컨트롤러가 SoC에 통합되어 있으며, macOS 자체 APFS 스냅샷 및 파일볼트(FileVault) 암호화 컨테이너로 보호됨.',
+        recommendedRemediation: '애플 하드웨어 진단(Apple Diagnostics) 실행 및 macOS 디스크 유틸리티 First Aid로 APFS 볼륨 컨테이너 복구.'
       };
 
     case 'toshiba':
@@ -240,17 +240,18 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
     default:
       return {
         vendor: 'generic',
-        nameKo: '범용 스토리지 제조사 (Generic / OEM)',
-        nameEn: 'Generic OEM Storage',
-        badgeColor: 'bg-slate-600 text-white',
-        officialToolName: '범용 S.M.A.R.T. 및 네이티브 진단 툴',
-        officialToolDescription: '표준 ATA/NVMe/USB 통신을 사용한 무결성 검사 및 표면 분석',
+        nameKo: '호스트 시스템 및 범용 스토리지 (Host / OEM)',
+        nameEn: 'Host System / Generic Storage',
+        badgeColor: 'bg-indigo-600 text-white',
+        officialToolName: 'OS 네이티브 스토리지 진단 및 DiskSentinel Pro',
+        officialToolDescription: 'OS 커널 Direct I/O 및 표준 NVMe 1.4 / ATA-8 명령 큐를 통한 무결성 검사 및 표면 분석',
         coreTechHighlights: [
+          'OS Direct Kernel Buffer & DMA I/O Stack',
           '표준 ATA-8 & NVMe 1.4 Command Set',
           'USB Mass Storage Class (BOT & UASP)'
         ],
-        controllerFamily: 'Phison / Silicon Motion / Realtek Universal Controller',
-        knownHardwareTraits: '제조사 전용 확장 명령어가 제한되어 있을 수 있으므로 표준 LBA Read/Write 수복 프로토콜을 사용해야 함.',
+        controllerFamily: 'Host Kernel Driver / Phison / SMI / Realtek Universal Controller',
+        knownHardwareTraits: 'OS 커널 버퍼 캐시 및 표준 LBA Read/Write 파이프라인을 통해 하드웨어 병목 없이 고속 스캔이 수행됨.',
         recommendedRemediation: '본 프로그램의 S.M.A.R.T. 수복 & Zero-Fill 재할당 엔진을 통해 직접 불량 섹터 치료 진행.'
       };
   }

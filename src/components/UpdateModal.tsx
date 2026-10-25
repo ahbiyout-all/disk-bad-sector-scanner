@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { PROJECT_INFO, ReleaseInfo, ReleaseAsset } from '../config/projectInfo';
+import { compareVersions } from '../utils/updater';
 import { 
   Sparkles, 
   Download, 
@@ -8,7 +9,7 @@ import {
   X, 
   ArrowUpRight, 
   Laptop, 
-  Smartphone, 
+  HardDrive, 
   Globe, 
   BookOpen, 
   Building2, 
@@ -59,16 +60,18 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   const getPlatformIcon = (platform: ReleaseAsset['platform']) => {
     switch (platform) {
+      case 'Windows Installer':
+        return <HardDrive className="w-4 h-4 text-emerald-400 shrink-0" />;
+      case 'Windows Standalone (.exe)':
+        return <Laptop className="w-4 h-4 text-blue-400 shrink-0" />;
       case 'PC (Windows/Mac/Linux)':
         return <Laptop className="w-4 h-4 text-indigo-400 shrink-0" />;
-      case 'Android (APK/PWA)':
-        return <Smartphone className="w-4 h-4 text-emerald-400 shrink-0" />;
-      case 'iOS (WebBundle)':
-        return <Globe className="w-4 h-4 text-cyan-400 shrink-0" />;
       default:
-        return <Download className="w-4 h-4 text-purple-400 shrink-0" />;
+        return <Globe className="w-4 h-4 text-purple-400 shrink-0" />;
     }
   };
+
+  const isNewer = compareVersions(release.version, currentVersion) > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
@@ -83,7 +86,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold tracking-tight text-slate-900 dark:text-white">
-                  새로운 버전 업데이트 알림
+                  {isNewer ? '새로운 버전 업데이트 알림' : '소프트웨어 최신 상태 확인'}
                 </h2>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
                   {release.version}
@@ -96,7 +99,9 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 )}
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                GitHub Releases 실시간 연동 시스템에서 최신 배포본을 감지했습니다.
+                {isNewer
+                  ? 'GitHub Releases 실시간 연동 시스템에서 최신 배포본을 감지했습니다.'
+                  : '현재 설치된 버전이 최신 배포본과 일치하며 정상 구동 중입니다.'}
               </p>
             </div>
           </div>
@@ -123,9 +128,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             <div className="flex flex-col gap-0.5 border-l border-slate-200 dark:border-slate-800 pl-3">
               <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">최신 릴리스 버전</span>
               <span className="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">{release.version}</span>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-medium">
-                <CheckCircle2 className="w-3 h-3" /> 업데이트 권장
-              </span>
+              {isNewer ? (
+                <span className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3 h-3" /> 업데이트 권장
+                </span>
+              ) : (
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3 h-3" /> 최신 버전 사용 중
+                </span>
+              )}
             </div>
           </div>
 

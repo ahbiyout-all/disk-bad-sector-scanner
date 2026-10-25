@@ -44,8 +44,14 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
   const [alertPending, setAlertPending] = useState<boolean>(true);
   const [isDaemonActive, setIsDaemonActive] = useState<boolean>(true);
   const [soundAlert, setSoundAlert] = useState<boolean>(true);
+  const highestDrive = drives.length > 0 
+    ? drives.reduce((prev, curr) => (curr.temperatureC > prev.temperatureC ? curr : prev), drives[0])
+    : undefined;
+  const effectiveHighestTemp = highestTemp || highestDrive?.temperatureC || 36;
+  const effectiveDriveName = highestDrive?.name || highestDrive?.model || '로컬 디스크';
+
   const [status, setStatus] = useState<DSTrayGuardianStatus>(() =>
-    DS_RunTrayGuardianCheck(highestTemp, hasBadSector)
+    DS_RunTrayGuardianCheck(effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName)
   );
   const [lastCheckTime, setLastCheckTime] = useState<string>(() =>
     new Date().toLocaleTimeString('ko-KR')
@@ -56,13 +62,13 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
 
     DS_ConfigureTrayGuardian(pollInterval, tempThreshold, alertPending);
     const intervalId = setInterval(() => {
-      const res = DS_RunTrayGuardianCheck(highestTemp, hasBadSector);
+      const res = DS_RunTrayGuardianCheck(effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName);
       setStatus(res);
       setLastCheckTime(new Date().toLocaleTimeString('ko-KR'));
     }, pollInterval * 1000);
 
     return () => clearInterval(intervalId);
-  }, [isOpen, isDaemonActive, pollInterval, tempThreshold, alertPending, highestTemp, hasBadSector]);
+  }, [isOpen, isDaemonActive, pollInterval, tempThreshold, alertPending, effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName]);
 
   if (!isOpen) return null;
 
@@ -72,11 +78,16 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
 
   const handleTestTrayAlert = () => {
     const title = '🛡️ DiskSentinel Pro 가디언 트레이 경보';
-    const body = `[정기 진단 완료] 전체 ${drives.length}대 드라이브 S.M.A.R.T. 정상 (최고 온도: ${highestTemp}°C, 백그라운드 상주 중)`;
+    const body = `[정기 진단 완료] 전체 ${drives.length}대 드라이브 S.M.A.R.T. 정상 (${effectiveDriveName}, 최고 온도: ${effectiveHighestTemp}°C, 백그라운드 상주 중)`;
     if (onTriggerNotification) {
       onTriggerNotification(title, body);
     }
   };
+
+  const realMemoryUsageMb = typeof window !== 'undefined' && (performance as any)?.memory?.usedJSHeapSize
+    ? ((performance as any).memory.usedJSHeapSize / (1024 * 1024)).toFixed(1)
+    : '4.8';
+  const realCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
@@ -102,7 +113,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                초경량 Rust 백그라운드 스레드로 시스템 자원 점유 없이 디스크 건전성 항시 감시
+                초경량 백그라운드 스레드로 시스템 자원 점유 없이 디스크 건전성 항시 감시
               </p>
             </div>
           </div>
@@ -130,7 +141,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 {isDaemonActive ? '정상 작동' : '일시 정지'}
               </div>
               <div className="text-[9px] text-slate-400 mt-1 font-mono">
-                CPU &lt;0.05% | RAM 4.2MB
+                {realCores} 스레드 | 힙 {realMemoryUsageMb}MB
               </div>
             </div>
 
@@ -277,10 +288,10 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                     <div>
                       <span className="font-semibold text-slate-900 dark:text-slate-100">
-                        PhysicalDrive{idx}: {d.model}
+                        PhysicalDrive{idx}: {d.name || d.model}
                       </span>
                       <span className="text-[10px] text-slate-400 ml-2">
-                        {d.size} | {d.interface}
+                        {d.capacityGb}GB | {d.interface}
                       </span>
                     </div>
                   </div>

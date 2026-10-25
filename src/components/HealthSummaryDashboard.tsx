@@ -14,6 +14,7 @@ interface HealthSummaryDashboardProps {
   onOpenRemapModal?: () => void;
   onOpenHardwareDetails?: () => void;
   isThermalStress?: boolean;
+  viewMode?: 'all' | 'health_only' | 'smart_only';
 }
 
 export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
@@ -24,7 +25,8 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   onOpenVendorModal,
   onOpenRemapModal,
   onOpenHardwareDetails,
-  isThermalStress = false
+  isThermalStress = false,
+  viewMode = 'all'
 }) => {
   const vendorKey = detectVendor(drive);
   const vendorProfile = getVendorProfile(vendorKey);
@@ -64,8 +66,10 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      {/* Top Health & Summary Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {viewMode !== 'smart_only' && (
+        <>
+          {/* Top Health & Summary Row */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* Overall Health Gauge Card */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs flex flex-col items-center justify-center text-center relative overflow-hidden">
           <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
@@ -379,10 +383,13 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
           </span>
         </div>
       )}
+        </>
+      )}
 
       {/* S.M.A.R.T. Attributes Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 mb-2.5 border-b border-slate-200 dark:border-slate-800">
+      {viewMode !== 'health_only' && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 mb-2.5 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
               <HardDrive className="w-3.5 h-3.5 text-indigo-500" />
@@ -470,6 +477,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
           </table>
         </div>
       </div>
+      )}
     </div>
   );
 };

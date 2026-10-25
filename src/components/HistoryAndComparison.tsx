@@ -79,12 +79,39 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
           )}
         </div>
 
-        {records.length < 2 ? (
+        {records.length === 0 ? (
           <div className="p-6 text-center bg-slate-50 dark:bg-slate-950 rounded border border-dashed border-slate-200 dark:border-slate-800 text-slate-500 text-xs">
             <GitCompare className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
-            <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">비교 분석을 위한 검사 기록이 부족합니다.</p>
+            <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">저장된 실제 검사 기록이 없습니다.</p>
             <p className="mt-0.5 text-[11px] text-slate-400">
-              최소 2회 이상의 검사를 수행하면 이전 검사와 현재 검사 간의 배드섹터 확산 추세를 자동 대조합니다.
+              상단 [라이브 표면 검사] 탭에서 검사를 시작하시면 완료 시 진단 결과와 S.M.A.R.T. 상태가 로컬에 자동 보관됩니다.
+            </p>
+          </div>
+        ) : records.length === 1 ? (
+          <div className="p-4 bg-slate-50 dark:bg-slate-950 rounded-lg border border-slate-200 dark:border-slate-800 text-xs space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">
+                  1
+                </div>
+                <div>
+                  <div className="font-bold text-slate-800 dark:text-slate-200">
+                    1차 실제 검사 기록 보관 중: {records[0].driveName}
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    검사 일시: {records[0].date} · 건강도: {records[0].healthScore}% · 배드섹터: {records[0].badCount}개
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => onViewRecordReport(records[0])}
+                className="px-2.5 py-1 text-[11px] font-semibold rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors cursor-pointer shadow-2xs"
+              >
+                1차 검사 상세 보고서 열기
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 p-2.5 rounded border border-slate-100 dark:border-slate-800">
+              💡 <strong>비교 분석 안내:</strong> 추가 검사를 1회 더 수행하시면 첫 번째 검사와 신규 검사 간의 배드섹터 확산 추세(Delta), 응답 지연 블록 변화 및 건강도 감점 추이가 실시간 차트와 지표로 자동 대조 분석됩니다.
             </p>
           </div>
         ) : scanA && scanB ? (

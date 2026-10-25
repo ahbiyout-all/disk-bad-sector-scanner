@@ -61,14 +61,14 @@ export async function checkForGithubReleaseUpdate(): Promise<UpdateCheckResult> 
 
       const rawAssets = Array.isArray(data.assets) ? data.assets : [];
       const parsedAssets: ReleaseAsset[] = rawAssets.map((asset: any) => {
-        let platform: ReleaseAsset['platform'] = 'Universal';
+        let platform: ReleaseAsset['platform'] = 'Universal Desktop';
         const lowerName = (asset.name || '').toLowerCase();
-        if (lowerName.includes('pc') || lowerName.includes('win') || lowerName.includes('mac') || lowerName.includes('linux')) {
+        if (lowerName.includes('setup') || lowerName.includes('installer')) {
+          platform = 'Windows Installer';
+        } else if (lowerName.endsWith('.exe')) {
+          platform = 'Windows Standalone (.exe)';
+        } else if (lowerName.includes('pc') || lowerName.includes('win') || lowerName.includes('mac') || lowerName.includes('linux')) {
           platform = 'PC (Windows/Mac/Linux)';
-        } else if (lowerName.includes('android') || lowerName.includes('apk')) {
-          platform = 'Android (APK/PWA)';
-        } else if (lowerName.includes('ios') || lowerName.includes('ipa')) {
-          platform = 'iOS (WebBundle)';
         }
 
         return {

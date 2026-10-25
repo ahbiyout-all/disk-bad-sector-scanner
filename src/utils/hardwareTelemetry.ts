@@ -143,11 +143,11 @@ export function calculateHardwareVitals(
     rpmDisplay = `0 RPM (솔리드 스테이트 / NAND Flash)`;
 
     if (drive.type === 'NVMe') {
-      rpmSubtext = `PCIe 4.0 x4 Direct (구동 부품 없음)`;
+      rpmSubtext = `${drive.interface || 'PCIe Direct Host Memory Controller'} (구동 부품 없음)`;
     } else if (drive.isExternal) {
       rpmSubtext = `${drive.usbProtocol || 'USB High-Speed Flash'}`;
     } else {
-      rpmSubtext = `SATA III NAND Flash (구동 부품 없음)`;
+      rpmSubtext = `${drive.interface || 'SATA NAND Flash'} (구동 부품 없음)`;
     }
 
     if (isScanning) {

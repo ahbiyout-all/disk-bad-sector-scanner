@@ -38,8 +38,10 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   const [clusterSpan, setClusterSpan] = useState<number>(8);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [result, setResult] = useState<DSCarvedSectorResult | null>(null);
+  const [customFile, setCustomFile] = useState<File | null>(drive?.attachedFile || null);
 
-  const effectiveDriveModel = drive?.model || drive?.name || driveModel || 'Local Storage Drive';
+  const activeTargetFile = customFile || drive?.attachedFile;
+  const effectiveDriveModel = activeTargetFile ? `[실제 파일] ${activeTargetFile.name} (${(activeTargetFile.size / (1024 * 1024)).toFixed(1)}MB)` : (drive?.model || drive?.name || driveModel || 'Local Storage Drive');
 
   if (!isOpen) return null;
 
@@ -48,9 +50,9 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     setResult(null);
 
     // Brief yield for smooth UI animation
-    await new Promise(r => setTimeout(r, 250));
+    await new Promise(r => setTimeout(r, 200));
 
-    const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, drive?.attachedFile);
+    const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, activeTargetFile, drive);
     setResult(carved);
     setIsProcessing(false);
   };
@@ -111,10 +113,43 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
           
           {/* Target LBA & Span Config */}
           <div className="p-3.5 rounded-lg border bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 space-y-3">
-            <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <Wrench className="w-3.5 h-3.5 text-indigo-500" />
-              수복 대상 물리 섹터 (Physical LBA) 및 탐색 클러스터 범위
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                <Wrench className="w-3.5 h-3.5 text-indigo-500" />
+                수복 대상 물리 섹터 (Physical LBA) 및 탐색 클러스터 범위
+              </div>
+              <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 text-[11px] font-bold cursor-pointer transition-colors shadow-2xs">
+                <FileText className="w-3.5 h-3.5" />
+                <span>{activeTargetFile ? '다른 로컬 파일 선택' : '실제 로컬 파일 열기'}</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setCustomFile(f);
+                      setTargetLba(0);
+                    }
+                  }}
+                />
+              </label>
             </div>
+
+            {activeTargetFile && (
+              <div className="flex items-center justify-between px-2.5 py-1.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-[11px] text-indigo-700 dark:text-indigo-300 font-mono">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="font-bold">📂 실제 로컬 파일 로드됨:</span>
+                  <span className="truncate">{activeTargetFile.name} ({(activeTargetFile.size / (1024 * 1024)).toFixed(2)} MB, {activeTargetFile.size.toLocaleString()} Bytes)</span>
+                </div>
+                <button
+                  onClick={() => setCustomFile(null)}
+                  className="text-slate-400 hover:text-red-500 shrink-0 ml-2"
+                  title="파일 연결 해제"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>

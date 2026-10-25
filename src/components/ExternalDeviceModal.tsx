@@ -19,6 +19,7 @@ import {
   FolderOpen, 
   ExternalLink, 
   AlertCircle,
+  Info,
   Cpu,
   Trash2,
   Lock,
@@ -152,7 +153,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
     }
   };
 
-  // Handle Real File Selection (Universal support across all desktop & mobile browsers!)
+  // Handle Real File Selection (Universal support across PC browsers & native host)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -316,15 +317,27 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
           {activeTab === 'connected' && (
             <div className="space-y-3">
               {externalDrives.length === 0 ? (
-                <div className="text-center py-8 text-slate-400 space-y-2">
-                  <Usb className="w-8 h-8 mx-auto text-slate-500" />
-                  <p>현재 연결된 외장 저장장치가 없습니다.</p>
-                  <button
-                    onClick={() => setActiveTab('presets')}
-                    className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
-                  >
-                    외장 장치 핫플러그 연결하기
-                  </button>
+                <div className="text-center py-8 text-slate-400 space-y-3">
+                  <Usb className="w-9 h-9 mx-auto text-slate-500" />
+                  <div>
+                    <p className="font-semibold text-slate-700 dark:text-slate-300">현재 연결된 외장 저장장치가 없습니다.</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">PC에 연결된 실제 USB 메모리, 외장 하드/SSD, 볼륨 또는 가상 디스크 이미지를 마운트하세요.</p>
+                  </div>
+                  <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                    <button
+                      onClick={() => setActiveTab('mount')}
+                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>실제 외장 볼륨 / USB 마운트</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('presets')}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium cursor-pointer"
+                    >
+                      🧪 시뮬레이션 데모 프리셋
+                    </button>
+                  </div>
                 </div>
               ) : (
                 externalDrives.map(drive => (
@@ -597,10 +610,10 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                   <div>
                     <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 text-xs">
                       <Usb className="w-4 h-4 text-cyan-500" />
-                      물리 USB 하드웨어 직접 페어링
+                      물리 USB 저장장치 직접 페어링
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                      WebUSB를 통해 컴퓨터에 연결된 USB 메모리, 외장 DAC, 스마트폰 등의 물리 하드웨어 디스크립터를 직접 조회합니다.
+                      WebUSB를 통해 컴퓨터에 연결된 USB 플래시 메모리, 외장 SSD, SD 카드 리더기의 물리 디스크립터를 직접 조회합니다.
                     </p>
                   </div>
                   <button
@@ -632,6 +645,19 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                     <Zap className="w-3.5 h-3.5" />
                     <span>시리얼 포트 검색 (Web Serial)</span>
                   </button>
+                </div>
+              </div>
+
+              {/* Mobile Devices Notice */}
+              <div className="p-3 rounded-lg bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 text-xs flex items-start gap-2.5">
+                <Info className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <div className="font-semibold text-slate-700 dark:text-slate-300">
+                    스마트폰 및 모바일 기기 내부 저장소 안내
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    스마트폰·태블릿(Android/iOS) 내부 저장소(UFS/eMMC)는 OS 보안 및 MTP(미디어 전송 프로토콜) 구조상 PC에서 물리 LBA 블록 및 S.M.A.R.T. 센서에 직접 접근할 수 없습니다. 본 소프트웨어는 순수 PC 전용 물리 저장장치(내장 NVMe, SATA SSD, HDD, 외장 USB 드라이브, SD 카드) 진단 전용입니다.
+                  </p>
                 </div>
               </div>
 

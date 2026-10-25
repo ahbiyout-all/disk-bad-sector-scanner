@@ -108,16 +108,15 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-select all bad or slow blocks when modal opens & reset safety lock to locked
+  // Auto-select genuine bad or slow blocks when modal opens & reset safety lock to locked
   useEffect(() => {
     if (isOpen) {
       if (badBlocks.length > 0) {
         setSelectedBlockIds(badBlocks.map(b => b.id));
       } else if (slowBlocks.length > 0) {
         setSelectedBlockIds(slowBlocks.map(b => b.id));
-      } else if (blocks.length > 0) {
-        // Fallback demo: select a couple sample blocks for zero-fill repair demonstration
-        setSelectedBlockIds([blocks[12]?.id || 12, blocks[45]?.id || 45]);
+      } else {
+        setSelectedBlockIds([]);
       }
       setIsRepairing(false);
       setProgress(0);
@@ -487,8 +486,14 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-2 max-h-36 overflow-y-auto space-y-1 font-mono text-xs">
               {targetableBlocks.length === 0 ? (
-                <div className="p-3 text-center text-slate-500 text-xs font-sans">
-                  현재 발견된 배드/지연 섹터가 없습니다. 정상 테스트용 LBA 섹터가 자동으로 할당됩니다.
+                <div className="p-4 text-center text-slate-400 text-xs font-sans space-y-1">
+                  <div className="text-emerald-400 font-semibold flex items-center justify-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    현재 감지된 배드섹터 및 지연 블록이 없습니다.
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    드라이브 표면 상태가 양호하여 별도의 제로필 수복이나 S.M.A.R.T. 재할당 작업이 필요하지 않습니다.
+                  </div>
                 </div>
               ) : (
                 targetableBlocks.map((block) => {

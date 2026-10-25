@@ -1,5 +1,7 @@
 export type SectorState = 'unscanned' | 'good' | 'normal' | 'slow' | 'critical' | 'bad';
 
+export type MainAppTab = 'scan' | 'logs' | 'health' | 'smart' | 'history';
+
 export type StorageCategory = 'HDD' | 'SATA_SSD' | 'NVME_SSD' | 'USB_STORAGE' | 'SD_CARD';
 
 export type SpecializedScanMethodId =

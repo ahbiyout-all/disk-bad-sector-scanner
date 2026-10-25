@@ -442,17 +442,65 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           </div>
         </div>
 
-        {/* NVMe Deep Telemetry (Log Page 02h) & AVX2 SIMD Acceleration Banner */}
+        {/* Drive Interface Deep Hardware Telemetry & AVX2 SIMD Acceleration Banner */}
         <div className="mt-2.5 p-2 sm:p-2.5 rounded-lg border bg-slate-50/90 dark:bg-slate-950/80 border-slate-200 dark:border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-100 dark:bg-cyan-950/80 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30">
-              NVMe Log 02h
-            </span>
-            <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
-              가용 예비영역: <b className="font-mono text-emerald-600 dark:text-emerald-400">{nvmeTelemetry.availableSpare}%</b> &nbsp;|&nbsp; 
-              수명 마모율: <b className="font-mono text-indigo-600 dark:text-indigo-400">{nvmeTelemetry.percentageUsed}%</b> &nbsp;|&nbsp; 
-              누적 쓰기(TBW): <b className="font-mono text-amber-600 dark:text-amber-400">{nvmeTelemetry.dataUnitsWrittenTb.toFixed(1)} TB</b>
-            </span>
+            {drive.attachedFile ? (
+              <>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                  Direct File I/O
+                </span>
+                <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+                  실제 파일: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.attachedFile.name}</b> &nbsp;|&nbsp; 
+                  전체 크기: <b className="font-mono text-indigo-600 dark:text-indigo-400">{(drive.attachedFile.size / (1024 * 1024)).toFixed(2)} MB</b> &nbsp;|&nbsp; 
+                  포맷: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.attachedFile.type || 'Raw Binary Stream'}</b>
+                </span>
+              </>
+            ) : drive.type === 'NVMe' ? (
+              <>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-100 dark:bg-cyan-950/80 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30">
+                  NVMe Log 02h
+                </span>
+                <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+                  가용 예비영역: <b className="font-mono text-emerald-600 dark:text-emerald-400">{nvmeTelemetry.availableSpare}%</b> &nbsp;|&nbsp; 
+                  수명 마모율: <b className="font-mono text-indigo-600 dark:text-indigo-400">{nvmeTelemetry.percentageUsed}%</b> &nbsp;|&nbsp; 
+                  누적 쓰기(TBW): <b className="font-mono text-amber-600 dark:text-amber-400">{nvmeTelemetry.dataUnitsWrittenTb.toFixed(1)} TB</b>
+                </span>
+              </>
+            ) : drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD' ? (
+              <>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-100 dark:bg-sky-950/80 text-sky-700 dark:text-sky-400 border border-sky-500/30">
+                  ATA S.M.A.R.T. Log
+                </span>
+                <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+                  스핀들 엔진: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.interface.includes('7200') ? '7,200 RPM' : '5,400 RPM'}</b> &nbsp;|&nbsp; 
+                  치환 섹터(05h): <b className="font-mono text-indigo-600 dark:text-indigo-400">{drive.smartAttributes.find(a => a.id === 5)?.raw || '0'}</b> &nbsp;|&nbsp; 
+                  총 사용시간: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.powerOnHours.toLocaleString()} 시간</b>
+                </span>
+              </>
+            ) : drive.type === 'SSD' || drive.type === 'EXTERNAL_SSD' ? (
+              <>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-teal-100 dark:bg-teal-950/80 text-teal-700 dark:text-teal-400 border border-teal-500/30">
+                  SATA AHCI / UASP
+                </span>
+                <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+                  플래시 마모율: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.smartAttributes.find(a => a.id === 5 || a.id === 1)?.raw || `${drive.hardwareSpecs?.percentageUsed ?? 1}%`}</b> &nbsp;|&nbsp; 
+                  예비 셀 잔여율: <b className="font-mono text-indigo-600 dark:text-indigo-400">{drive.smartAttributes.find(a => a.id === 3)?.raw || `${drive.hardwareSpecs?.availableSparePercent ?? 99}%`}</b> &nbsp;|&nbsp; 
+                  전원 인가 횟수: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.smartAttributes.find(a => a.id === 12)?.raw || `${drive.hardwareSpecs?.powerCycles ?? Math.max(1, Math.round(drive.powerOnHours / 12))}회`}</b>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30">
+                  USB Storage Bus
+                </span>
+                <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+                  프로토콜: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.usbProtocol || 'USB BOT'}</b> &nbsp;|&nbsp; 
+                  컨트롤러: <b className="font-mono text-indigo-600 dark:text-indigo-400">{drive.bridgeChipset || 'USB Controller'}</b> &nbsp;|&nbsp; 
+                  포맷: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.fileSystem || 'FAT32/exFAT'}</b>
+                </span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 dark:text-slate-400 shrink-0">

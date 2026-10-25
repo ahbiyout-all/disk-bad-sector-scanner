@@ -11,7 +11,7 @@
 
 export interface ReleaseAsset {
   name: string;
-  platform: 'PC (Windows/Mac/Linux)' | 'Android (APK/PWA)' | 'iOS (WebBundle)' | 'Universal';
+  platform: 'PC (Windows/Mac/Linux)' | 'Windows Installer' | 'Windows Standalone (.exe)' | 'Universal Desktop';
   downloadUrl: string;
   sizeMb: number;
   description: string;
@@ -59,29 +59,29 @@ export const PROJECT_INFO = {
 
   // Fallback release info for demo or when API is unreachable
   sampleLatestRelease: {
-    version: 'v4.3.2',
-    releaseDate: '2026-10-08',
-    tagName: 'v4.3.2',
-    name: 'DiskSentinel Pro v4.3.2 (설치 경로 직접 지정 및 안정성 강화 패치)',
-    body: `### 🚀 v4.3.2 주요 업데이트 내역
-- **Inno Setup 설치 경로 직접 지정 구현**: 사용자가 설치 위치를 직관적으로 변경 가능하도록 Inno Setup 디렉토리 선택 창 활성화 및 기본 경로를 'C:\\DiskSentinelPro'로 직접 매핑하여 권한 오류 예방.
-- **보고서 내보내기 (Export CSV) 성능 고도화**: 대량 배드섹터 감지 시 엑셀 한글 깨짐 방지 인코딩(UTF-8 BOM) 및 동시성 버퍼 제어 추가 개선.
-- **자동 빌드 & 패키징 배치 스크립트 ('build.bat') 업데이트**: v4.3.1 빌드 산출물 이름 및 Inno Setup ISCC 컴파일 단계 버그 패치 및 완료 시 자동 폴더 팝업 연동.`,
-    htmlUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/tag/v4.3.2',
+    version: 'v4.5.0',
+    releaseDate: '2026-10-15',
+    tagName: 'v4.5.0',
+    name: 'DiskSentinel Pro v4.5.0 (W3C StorageManager & 실시간 OS 호스트 텔레메트리 연동)',
+    body: `### 🚀 v4.5.0 주요 업데이트 내역
+- **W3C StorageManager & OPFS Buffer Probe 실측 연동**: 브라우저 및 데스크톱 환경에서 호스트 시스템의 실제 디스크 용량, 사용량, 초저지연 I/O 대역폭을 다이렉트 측정.
+- **실제 파일/볼륨 직접 마운트 검사**: 로컬 디스크 파일(.iso, .img, .bin, 미디어) 및 폴더 볼륨을 가상 드라이브로 마운트하여 실측 섹터 검사 및 비트 카빙 수복 지원.
+- **다중 드라이브 병렬 검사 및 트레이 가디언 실시간 CPU/RAM 연동**: 실제 시스템 CPU 코어 수와 물리 메모리 힙 기반 백그라운드 모니터링 엔진 고도화.`,
+    htmlUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/tag/v4.5.0',
     isLatest: true,
     assets: [
       {
-        name: 'DiskSentinel-Pro-v4.3.2-PC-Windows-macOS-Linux.zip',
-        platform: 'PC & Workstation (Windows/Mac/Linux)',
-        downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.3.2/DiskSentinel-Pro-v4.3.2-PC-Windows-macOS-Linux.zip',
-        sizeMb: 15.3,
+        name: 'DiskSentinel-Pro-v4.5.0-PC-Windows-macOS-Linux.zip',
+        platform: 'PC (Windows/Mac/Linux)',
+        downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.5.0/DiskSentinel-Pro-v4.5.0-PC-Windows-macOS-Linux.zip',
+        sizeMb: 16.2,
         description: '데스크톱 및 워크스테이션 PC 전용 독립 실행 오프라인 설치 패키지'
       },
       {
-        name: 'DiskSentinel-Pro-v4.3.2-Universal-WebInstaller.tar.gz',
-        platform: 'Universal',
-        downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.3.2/DiskSentinel-Pro-v4.3.2-Universal-WebInstaller.tar.gz',
-        sizeMb: 11.9,
+        name: 'DiskSentinel-Pro-v4.5.0-Universal-WebInstaller.tar.gz',
+        platform: 'Universal Desktop',
+        downloadUrl: 'https://github.com/AhBiYout-all/disk-bad-sector-scanner/releases/download/v4.5.0/DiskSentinel-Pro-v4.5.0-Universal-WebInstaller.tar.gz',
+        sizeMb: 12.4,
         description: '데스크톱 브라우저 및 Tauri 네이티브 런타임 유니버설 인스톨러'
       }
     ]

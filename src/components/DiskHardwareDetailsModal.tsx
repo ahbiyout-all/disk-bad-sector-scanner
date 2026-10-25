@@ -67,18 +67,17 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     queueDepth: drive.type === 'NVMe' ? 64 : 32,
     volatileWriteCache: true,
     writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
     apmAamSupported: drive.type === 'HDD',
-    hostReadsTb: 12.8,
-    hostWritesTb: 9.4,
-    percentageUsed: 2,
+    hostReadsTb: Number(((drive.powerOnHours * 0.0027) + (drive.capacityGb * 0.011)).toFixed(1)),
+    hostWritesTb: Number(((drive.powerOnHours * 0.002) + (drive.capacityGb * 0.008)).toFixed(1)),
+    percentageUsed: Math.max(1, Math.min(100, Math.round(drive.powerOnHours / 3500))),
     availableSparePercent: 100,
     powerOnHours: drive.powerOnHours,
-    powerCycles: 180,
-    unsafeShutdowns: 1,
-    mediaErrors: 0,
+    powerCycles: Math.max(10, Math.round(drive.powerOnHours / 16)),
+    unsafeShutdowns: Math.min(10, Math.round(drive.powerOnHours / 2000)),
+    mediaErrors: (drive.seededBadSectors && drive.seededBadSectors.length) || 0,
     currentTempC: drive.temperatureC,
-    maxTempRecordedC: 46,
+    maxTempRecordedC: Math.round(drive.temperatureC + 6),
     warningTempThresholdC: 70,
     measuredKernelLatencyUs: 18,
     measuredSequentialReadMbSec: 1850,
@@ -420,7 +419,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                 ) : (
                   <div className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-                    파티션 1: [C:] OS_PRIMARY (NTFS, {drive.capacityGb} GB)
+                    파티션 1: [{drive.mountPoint || 'C:'}] {drive.name.replace(/^[^\w가-힣]+/, '').trim() || 'PRIMARY_VOLUME'} ({drive.fileSystem || 'NTFS'}, {drive.capacityGb} GB)
                   </div>
                 )}
               </div>
@@ -442,7 +441,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-3.5 border border-slate-200 dark:border-slate-800 text-xs">
                   <div className="text-[10px] uppercase font-bold text-slate-400">NAND 수명 소모율</div>
                   <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                    {specs.percentageUsed}% 소모 (잔여 97%)
+                    {specs.percentageUsed}% 소모 (잔여 {Math.max(0, 100 - specs.percentageUsed)}%)
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">가용 예비 블록: {specs.availableSparePercent}%</div>
                 </div>
@@ -488,10 +487,22 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           {activeTab === 'benchmark' && (
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5">
-                  <Activity className="w-4 h-4 text-indigo-500" />
-                  <span>실시간 직접 버퍼 / 커널 I/O 실측 대역폭</span>
-                </h3>
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                    <Activity className="w-4 h-4 text-indigo-500" />
+                    <span>실시간 직접 버퍼 / 커널 I/O 실측 대역폭</span>
+                  </h3>
+                  {onRescanHardware && (
+                    <button
+                      onClick={handleRescanClick}
+                      disabled={isRescanning}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isRescanning ? 'animate-spin' : ''}`} />
+                      <span>{isRescanning ? '실측 벤치마크 실행 중...' : '실시간 I/O 재측정'}</span>
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
                     <div className="text-[10px] text-slate-400 uppercase font-semibold">실측 순차 판독 전송률</div>

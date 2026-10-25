@@ -35,7 +35,12 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>(() => 
     drives.map(d => d.id)
   );
-  const [concurrencyThreads, setConcurrencyThreads] = useState<number>(4);
+  const [concurrencyThreads, setConcurrencyThreads] = useState<number>(() => {
+    if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) {
+      return Math.min(16, Math.max(2, navigator.hardwareConcurrency));
+    }
+    return 4;
+  });
   const [burstStep, setBurstStep] = useState<number>(256);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [driveProgress, setDriveProgress] = useState<Record<string, number>>({});
@@ -95,10 +100,14 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
     });
 
     try {
-      const results = await DS_ScanMultipleDrivesParallel(targets, (driveId, progress, badFound) => {
-        setDriveProgress(prev => ({ ...prev, [driveId]: progress }));
-        setDriveBadCount(prev => ({ ...prev, [driveId]: badFound }));
-      });
+      const results = await DS_ScanMultipleDrivesParallel(
+        targets, 
+        (driveId, progress, badFound) => {
+          setDriveProgress(prev => ({ ...prev, [driveId]: progress }));
+          setDriveBadCount(prev => ({ ...prev, [driveId]: badFound }));
+        },
+        drives
+      );
       setSummaries(results);
     } catch (e) {
       console.error('Parallel scan error:', e);
@@ -237,7 +246,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                         <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>{drive.model}</span>
                           <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                            {drive.size}
+                            {drive.capacityGb} GB
                           </span>
                           <span className="text-[10px] uppercase font-bold text-indigo-500">
                             {drive.interface}
@@ -316,6 +325,52 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                     {summaries.reduce((acc, s) => acc + s.badSectorsFound, 0)}개
                   </span>
                 </div>
+              </div>
+
+              {/* Individual Drive Scan Results Table */}
+              <div className="mt-3 pt-3 border-t border-emerald-500/20 overflow-x-auto">
+                <table className="w-full text-left text-[11px] font-mono">
+                  <thead>
+                    <tr className="text-slate-500 dark:text-slate-400 border-b border-emerald-500/20">
+                      <th className="py-1 px-2 font-semibold">드라이브</th>
+                      <th className="py-1 px-2 font-semibold text-center">전송 대역폭</th>
+                      <th className="py-1 px-2 font-semibold text-center">평균 지연율</th>
+                      <th className="py-1 px-2 font-semibold text-center">지연 섹터</th>
+                      <th className="py-1 px-2 font-semibold text-center">배드섹터</th>
+                      <th className="py-1 px-2 font-semibold text-right">상태</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-emerald-500/10">
+                    {summaries.map(s => (
+                      <tr key={s.driveId} className="hover:bg-emerald-500/5">
+                        <td className="py-1.5 px-2 font-bold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">
+                          {s.driveName}
+                        </td>
+                        <td className="py-1.5 px-2 text-center text-indigo-600 dark:text-indigo-400 font-semibold">
+                          {s.throughputMbSec || 120} MB/s
+                        </td>
+                        <td className="py-1.5 px-2 text-center text-slate-700 dark:text-slate-300">
+                          {s.avgLatencyMs} ms
+                        </td>
+                        <td className="py-1.5 px-2 text-center text-amber-600 dark:text-amber-400">
+                          {s.slowSectorsFound}개
+                        </td>
+                        <td className={`py-1.5 px-2 text-center font-bold ${s.badSectorsFound > 0 ? 'text-red-500 animate-pulse' : 'text-emerald-500'}`}>
+                          {s.badSectorsFound}개
+                        </td>
+                        <td className="py-1.5 px-2 text-right">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            s.badSectorsFound > 0 
+                              ? 'bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400' 
+                              : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                          }`}>
+                            {s.badSectorsFound > 0 ? '손상 발견' : '정상 (OK)'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

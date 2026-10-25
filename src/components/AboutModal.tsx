@@ -230,7 +230,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({
               </li>
               <li className="flex items-start gap-1.5">
                 <span className="text-emerald-500 font-bold">✓</span>
-                <span><strong>자동 인스톨러 패키징</strong>: GitHub Releases에 PC, Android APK, iOS 전용 설치 자산 자동 첨부.</span>
+                <span><strong>자동 인스톨러 패키징</strong>: GitHub Releases에 Windows 전용 독립 실행 파일(DiskSentinelPro.exe) 및 인스톨러 패키지 자동 첨부.</span>
               </li>
               <li className="flex items-start gap-1.5">
                 <span className="text-emerald-500 font-bold">✓</span>

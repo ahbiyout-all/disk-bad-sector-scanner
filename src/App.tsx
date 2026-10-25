@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { DiskDrive, SectorBlock, ScanTelemetry, ErrorLogItem, SavedScanRecord, SpecializedScanMethodId } from './types';
+import { DiskDrive, SectorBlock, ScanTelemetry, ErrorLogItem, SavedScanRecord, SpecializedScanMethodId, MainAppTab } from './types';
 import { INITIAL_DRIVES, generateBlocksForDrive, TOTAL_SCAN_BLOCKS } from './utils/drivePresets';
 import { soundManager } from './utils/audio';
 import { createScanRecordFromSession } from './utils/reportGenerator';
@@ -22,6 +22,9 @@ import { ParallelDriveScanModal } from './components/ParallelDriveScanModal';
 import { TrayGuardianModal } from './components/TrayGuardianModal';
 import { BitCarvingRecoveryModal } from './components/BitCarvingRecoveryModal';
 import { DiskHardwareDetailsModal } from './components/DiskHardwareDetailsModal';
+import { ScanCompletionSummaryModal } from './components/ScanCompletionSummaryModal';
+import { OptionsModal } from './components/OptionsModal';
+import { HelpGuideModal } from './components/HelpGuideModal';
 import { ScanMethodSelector } from './components/ScanMethodSelector';
 import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
@@ -36,7 +39,25 @@ import {
 } from './utils/nativeDriveEngine';
 import { calculateHardwareVitals } from './utils/hardwareTelemetry';
 import { safeStorage } from './utils/safeStorage';
-import { Github, BookOpen, Building2, Sparkles, ExternalLink, ShieldCheck, Cpu, Usb, Thermometer, X, FolderOpen, HardDrive } from 'lucide-react';
+import { 
+  Github, 
+  BookOpen, 
+  Building2, 
+  Sparkles, 
+  ExternalLink, 
+  ShieldCheck, 
+  Cpu, 
+  Usb, 
+  Thermometer, 
+  X, 
+  FolderOpen, 
+  HardDrive,
+  Activity,
+  Terminal,
+  GitCompare,
+  ArrowRight,
+  ShieldAlert
+} from 'lucide-react';
 
 export default function App() {
   // Theme state
@@ -103,8 +124,8 @@ export default function App() {
 
 const INITIAL_HOST_DRIVE: DiskDrive = {
   id: 'drive-native-host-real',
-  name: '🖥️ 로컬 시스템 저장장치 (OS Storage)',
-  model: 'Native Host System Storage',
+  name: '🖥️ [C:] 로컬 OS 메인 드라이브 (512GB)',
+  model: 'Host Primary Storage Device',
   serialNumber: 'HOST-SYS-PROBING',
   firmware: 'NATIVE-1.0.0',
   type: 'NVMe',
@@ -296,8 +317,8 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     }
   }, [drives, selectedDriveId, dispatchNotification]);
 
-  // Active Tab: 'scan' | 'health' | 'history'
-  const [activeTab, setActiveTab] = useState<'scan' | 'health' | 'history'>('scan');
+  // Active Tab: 'scan' | 'logs' | 'health' | 'smart' | 'history'
+  const [activeTab, setActiveTab] = useState<MainAppTab>('scan');
 
   // Storage Media Tailored Inspection Method State
   const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_HOST_DRIVE));
@@ -448,6 +469,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   // Active Report Modal
   const [activeReportRecord, setActiveReportRecord] = useState<SavedScanRecord | null>(null);
   const [exportTargetRecord, setExportTargetRecord] = useState<SavedScanRecord | null>(null);
+  const [completedSummaryRecord, setCompletedSummaryRecord] = useState<SavedScanRecord | null>(null);
 
   // GitHub Real-time Update System State
   const [updateRelease, setUpdateRelease] = useState<ReleaseInfo>(PROJECT_INFO.sampleLatestRelease);
@@ -462,6 +484,8 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const [isTrayGuardianOpen, setIsTrayGuardianOpen] = useState<boolean>(false);
   const [isBitCarvingOpen, setIsBitCarvingOpen] = useState<boolean>(false);
   const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(1048576);
+  const [isOptionsModalOpen, setIsOptionsModalOpen] = useState<boolean>(false);
+  const [isHelpGuideModalOpen, setIsHelpGuideModalOpen] = useState<boolean>(false);
 
   // Real-time Update Checker
   const checkUpdates = useCallback(async (manual = false) => {
@@ -635,6 +659,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           // Auto-save scan report with tailored method
           const newRecord = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
           setScanRecords(prev => [newRecord, ...prev]);
+          setCompletedSummaryRecord(newRecord);
           return;
         }
 
@@ -843,6 +868,13 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
         onRescanDrives={handleRescanDrives}
         isRescanning={isRescanningDrives}
+        onOpenOptionsModal={() => setIsOptionsModalOpen(true)}
+        onOpenHelpGuideModal={() => setIsHelpGuideModalOpen(true)}
+        isThermalStress={isThermalStress}
+        onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
+        onExportResults={() => handleOpenExportModal()}
+        onResetScan={handleResetScan}
+        onOpenReport={handleOpenCurrentReport}
       />
 
       {/* Main Container */}
@@ -903,6 +935,96 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           onRequestNotification={handleRequestNotification}
         />
 
+        {/* Sleek In-Page Segmented Tab Navigation Bar (5 Focused Modular Views) */}
+        <div className="flex items-center gap-1.5 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl mb-3 overflow-x-auto shadow-2xs">
+          <button
+            onClick={() => setActiveTab('scan')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              activeTab === 'scan'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+            title="실시간 표면 검사 및 블록 그리드 뷰어"
+          >
+            <Activity className="w-4 h-4" />
+            <span>라이브 표면 검사</span>
+            {telemetry.status === 'scanning' && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('logs')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              activeTab === 'logs'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+            title="실시간 결함 감지 및 I/O 이벤트 로그 스트림"
+          >
+            <Terminal className="w-4 h-4" />
+            <span>오류 & 이벤트 로그</span>
+            {badCount > 0 ? (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-red-600 text-white animate-pulse">
+                {badCount} BAD
+              </span>
+            ) : errorLogs.length > 0 ? (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                {errorLogs.length}
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('health')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              activeTab === 'health'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+            title="종합 건강 점수, 응답 속도 분포 및 10분 온도 추이 차트"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>건강 & 발열 추이</span>
+            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
+              calculatedHealth >= 80 ? 'bg-emerald-500/20 text-emerald-500' : 'bg-red-500/20 text-red-500'
+            }`}>
+              {calculatedHealth}%
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('smart')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              activeTab === 'smart'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+            title="S.M.A.R.T. 하드웨어 속성 원시 데이터 및 임계치 검증"
+          >
+            <HardDrive className="w-4 h-4" />
+            <span>S.M.A.R.T. 정밀 속성</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              activeTab === 'history'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+            title="이전 검사와 최신 검사 간 대조 및 저장된 진단 이력"
+          >
+            <GitCompare className="w-4 h-4" />
+            <span>검사 기록 & 대조</span>
+            {scanRecords.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                {scanRecords.length}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* Tab 1: Live Surface Scan View */}
         {activeTab === 'scan' && (
           <div className="space-y-2.5">
@@ -948,35 +1070,112 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
               }}
             />
 
-            {/* Live Error Log Stream & Telemetry Events */}
+            {/* Quick Summary Strip & Link to Error Logs */}
+            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">실시간 검출 요약:</span>
+                <span className={`font-mono font-bold ${badCount > 0 ? 'text-red-500 animate-pulse' : 'text-emerald-500'}`}>
+                  {badCount}개 배드섹터
+                </span>
+                <span className="text-slate-300 dark:text-slate-700">|</span>
+                <span className="font-mono text-amber-500 font-bold">{slowCount + criticalCount}개 응답 지연</span>
+                <span className="text-slate-300 dark:text-slate-700">|</span>
+                <span className="font-mono text-emerald-500 font-bold">{goodCount + normalCount}개 정상</span>
+              </div>
+              <button
+                onClick={() => setActiveTab('logs')}
+                className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 cursor-pointer transition-colors"
+              >
+                <span>상세 오류 및 시스템 로그 확인하기</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 2: Error Logs & Activity Stream View */}
+        {activeTab === 'logs' && (
+          <div className="space-y-3">
             <ErrorLogStream
               logs={errorLogs}
               onClearLogs={() => setErrorLogs([])}
               onSelectLogLba={(lba) => {
                 const found = blocks.find(b => b.lba === lba);
                 if (found) setSelectedBlock(found);
+                setActiveTab('scan');
               }}
             />
+
+            {/* Action Card when errors exist */}
+            {badCount > 0 && (
+              <div className="p-4 rounded-xl bg-gradient-to-r from-red-950/40 via-slate-900 to-slate-900 border border-red-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="space-y-1">
+                  <div className="font-bold text-red-400 flex items-center gap-1.5">
+                    <ShieldAlert className="w-4 h-4 text-red-500 animate-pulse" />
+                    <span>배드섹터 {badCount}개에 대한 즉각 조치가 준비되어 있습니다</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    S.M.A.R.T. 제로필(Zero-Fill)로 논리 배드를 수복하거나, 휴리스틱 비트 카빙으로 손상된 섹터의 파일 헤더를 복구할 수 있습니다.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      const badLba = latestBadLba || (blocks.find(b => b.status === 'bad')?.lba) || 1048576;
+                      setBitCarvingTargetLba(badLba);
+                      setIsBitCarvingOpen(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-colors cursor-pointer"
+                  >
+                    비트 카빙 수복
+                  </button>
+                  <button
+                    onClick={() => setIsVendorModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold transition-colors cursor-pointer"
+                  >
+                    S.M.A.R.T. 제로필 재할당
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Tab 2: Health Summary & S.M.A.R.T. Dashboard */}
+        {/* Tab 3: Health Summary & Temperature Trend Dashboard */}
         {activeTab === 'health' && (
           <HealthSummaryDashboard
             drive={activeDrive}
             telemetry={telemetry}
             calculatedHealth={calculatedHealth}
             onRefreshSmart={() => {
-              // Trigger slight simulated sensor fluctuation without alert()
               soundManager.playClick();
             }}
             onOpenVendorModal={() => setIsVendorModalOpen(true)}
             onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
             isThermalStress={isThermalStress}
+            viewMode="health_only"
           />
         )}
 
-        {/* Tab 3: History & Comparison Dashboard */}
+        {/* Tab 4: S.M.A.R.T. Attributes Table View */}
+        {activeTab === 'smart' && (
+          <div className="space-y-3">
+            <HealthSummaryDashboard
+              drive={activeDrive}
+              telemetry={telemetry}
+              calculatedHealth={calculatedHealth}
+              onRefreshSmart={() => {
+                soundManager.playClick();
+              }}
+              onOpenVendorModal={() => setIsVendorModalOpen(true)}
+              onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
+              isThermalStress={isThermalStress}
+              viewMode="smart_only"
+            />
+          </div>
+        )}
+
+        {/* Tab 5: History & Comparison Dashboard */}
         {activeTab === 'history' && (
           <HistoryAndComparison
             records={scanRecords}
@@ -1002,6 +1201,21 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           record={activeReportRecord}
           badBlocks={blocks.filter(b => b.status === 'bad')}
           onClose={() => setActiveReportRecord(null)}
+        />
+      )}
+
+      {/* Scan Completion Summary Card Popup Modal */}
+      {completedSummaryRecord && (
+        <ScanCompletionSummaryModal
+          isOpen={!!completedSummaryRecord}
+          record={completedSummaryRecord}
+          onClose={() => setCompletedSummaryRecord(null)}
+          onOpenFullReport={(rec) => {
+            setActiveReportRecord(rec);
+          }}
+          onOpenRepair={() => {
+            setIsVendorModalOpen(true);
+          }}
         />
       )}
 
@@ -1114,6 +1328,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           isOpen={isBitCarvingOpen}
           onClose={() => setIsBitCarvingOpen(false)}
           initialLba={bitCarvingTargetLba}
+          drive={activeDrive}
           driveModel={activeDrive.model}
         />
       )}
@@ -1125,6 +1340,39 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           onClose={() => setIsHardwareDetailsOpen(false)}
           drive={activeDrive}
           onRescanHardware={handleRescanDrives}
+        />
+      )}
+
+      {/* Program Options & Preferences Modal */}
+      {isOptionsModalOpen && (
+        <OptionsModal
+          isOpen={isOptionsModalOpen}
+          onClose={() => setIsOptionsModalOpen(false)}
+          isDarkMode={isDarkMode}
+          onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+          isMuted={isMuted}
+          onToggleMute={handleToggleMute}
+          notificationPermission={notificationPermission}
+          onRequestNotification={handleRequestNotification}
+          showDemoPresets={showDemoPresets}
+          onToggleDemoPresets={handleToggleDemoPresets}
+          isThermalStress={isThermalStress}
+          onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
+          scanSpeedMultiplier={scanSpeedMultiplier}
+          onChangeSpeedMultiplier={setScanSpeedMultiplier}
+        />
+      )}
+
+      {/* Comprehensive Diagnostic & User Guide Modal */}
+      {isHelpGuideModalOpen && (
+        <HelpGuideModal
+          isOpen={isHelpGuideModalOpen}
+          onClose={() => setIsHelpGuideModalOpen(false)}
+          onOpenVendorDiagnostics={() => setIsVendorModalOpen(true)}
+          onOpenSupportedCatalog={() => setIsCatalogModalOpen(true)}
+          onOpenDllDocs={() => setIsDllDocsOpen(true)}
+          onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
+          onOpenAboutModal={() => setIsAboutModalOpen(true)}
         />
       )}
 
