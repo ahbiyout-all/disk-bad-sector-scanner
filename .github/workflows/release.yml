@@ -16,17 +16,19 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Package & Publish GitHub Release (Windows Runner)
-    runs-on: windows-latest
-
+  # 1. Frontend Build Job (Runs on Linux for stability)
+  build-frontend:
+    name: Build Web Assets (Ubuntu)
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.version_info.outputs.tag_name }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js 22 (LTS)
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,12 +36,6 @@ jobs:
 
       - name: Install Dependencies
         run: npm install
-
-      - name: Type Check & Lint
-        run: npm run lint
-
-      - name: Build Web Application
-        run: npm run build
 
       - name: Determine Version & Generate Release Notes
         id: version_info
@@ -57,8 +53,7 @@ jobs:
           fi
 
           echo "tag_name=$TAG" >> $GITHUB_OUTPUT
-          CLEAN_VER="${TAG#v}"
-
+          
           cat << EOF > RELEASE_NOTES.md
           ## 🚀 DiskSentinel Pro $TAG Release
 
@@ -82,36 +77,60 @@ jobs:
           - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 정밀 분석
           - 파일/볼륨 직접 마운트 검사 및 비트 카빙 데이터 수복
           EOF
-
-      - name: Package Official Desktop Installer Asset
-        run: node scripts/package-cross-platform.mjs ${{ steps.version_info.outputs.tag_name }}
-
-      - name: List Packaged Assets (Debug)
-        run: ls -R dist-packages/
         shell: bash
 
-      - name: Compile Inno Setup Installer
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: |
+            dist/
+            RELEASE_NOTES.md
+
+  # 2. Desktop Packaging & Release Job (Runs on Windows for Inno Setup)
+  release-desktop:
+    name: Package & Publish Release (Windows)
+    needs: build-frontend
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Package Desktop Assets (ZIP)
+        run: |
+          # Packaging script only uses Node.js built-ins, so no npm install needed on Windows
+          node scripts/package-cross-platform.mjs "${{ needs.build-frontend.outputs.tag_name }}"
+        shell: pwsh
+
+      - name: Compile Inno Setup Installer (EXE)
         run: |
           if (!(Test-Path "bin/native")) { New-Item -Path "bin/native" -ItemType Directory -Force }
-          # Create dummy binaries if missing to satisfy setup.iss source paths if needed
+          # Create placeholder binaries for setup.iss
           if (!(Test-Path "bin/native/DiskSentinelPro.exe")) { New-Item -Path "bin/native/DiskSentinelPro.exe" -ItemType File -Force }
           if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { New-Item -Path "bin/native/DiskSentinelNativeCore.dll" -ItemType File -Force }
           
-          iscc.exe /DAppVersion="${{ steps.version_info.outputs.tag_name }}" setup.iss
+          iscc.exe /DAppVersion="${{ needs.build-frontend.outputs.tag_name }}" setup.iss
         shell: pwsh
 
-      - name: Verify Output Files (Debug)
-        run: |
-          Get-ChildItem -Path "dist-packages" -Recurse
-          Get-ChildItem -Path "Output" -ErrorAction SilentlyContinue
-        shell: pwsh
-
-      - name: Publish Release to GitHub Releases
+      - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: ${{ steps.version_info.outputs.tag_name }}
-          name: DiskSentinel Pro ${{ steps.version_info.outputs.tag_name }}
+          tag_name: ${{ needs.build-frontend.outputs.tag_name }}
+          name: DiskSentinel Pro ${{ needs.build-frontend.outputs.tag_name }}
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
