@@ -109,19 +109,29 @@ jobs:
         with:
           node-version: 22
 
+      - name: Compile Native Components
+        run: |
+          if (!(Test-Path "bin/native")) { New-Item -Path "bin/native" -ItemType Directory -Force }
+          
+          echo "--- Compiling C# Launcher ---"
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (!(Test-Path $csc)) { throw "csc.exe not found at $csc" }
+          & $csc /target:winexe /out:bin\native\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs
+          
+          echo "--- Compiling C++ Core Engine (DLL) ---"
+          cmd.exe /c "call `"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat`" && cl.exe /LD /O2 /D DISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native"
+          
+          if (!(Test-Path "bin/native/DiskSentinelPro.exe")) { throw "Launcher build failed" }
+          if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { throw "Core engine build failed" }
+        shell: pwsh
+
       - name: Package Desktop Assets (ZIP)
         run: |
-          # Packaging script only uses Node.js built-ins, so no npm install needed on Windows
           node scripts/package-cross-platform.mjs "${{ needs.build-frontend.outputs.tag_name }}"
         shell: pwsh
 
       - name: Compile Inno Setup Installer (EXE)
         run: |
-          if (!(Test-Path "bin/native")) { New-Item -Path "bin/native" -ItemType Directory -Force }
-          # Create placeholder binaries for setup.iss
-          if (!(Test-Path "bin/native/DiskSentinelPro.exe")) { New-Item -Path "bin/native/DiskSentinelPro.exe" -ItemType File -Force }
-          if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { New-Item -Path "bin/native/DiskSentinelNativeCore.dll" -ItemType File -Force }
-          
           iscc.exe /DAppVersion="${{ needs.build-frontend.outputs.tag_name }}" setup.iss
         shell: pwsh
 

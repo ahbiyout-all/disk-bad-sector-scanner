@@ -192,6 +192,12 @@ const zip1 = new SimpleZip();
 // Add dist files
 zip1.addDirectory(distDir, 'app');
 
+// Add native binaries if exist
+const nativeDir = path.join(rootDir, 'bin', 'native');
+if (fs.existsSync(nativeDir)) {
+  zip1.addDirectory(nativeDir, 'bin/native');
+}
+
 // Add README & guides if available
 const docsToAdd = ['README.md', 'setup.iss', 'build.bat'];
 for (const doc of docsToAdd) {
@@ -212,6 +218,14 @@ const pcZipPath = path.join(distPackagesDir, pcZipName);
 console.log(`📦 Creating: ${pcZipName}...`);
 const zip2 = new SimpleZip();
 zip2.addDirectory(distDir, 'DiskSentinelPro');
+
+// Add native binaries to portable zip root
+if (fs.existsSync(nativeDir)) {
+  const bins = fs.readdirSync(nativeDir);
+  for (const bin of bins) {
+    zip2.addFile(`DiskSentinelPro/${bin}`, fs.readFileSync(path.join(nativeDir, bin)));
+  }
+}
 
 // Add quick start launcher scripts
 zip2.addFile('DiskSentinelPro/README.txt', `DiskSentinel Pro ${versionTag} Standalone Application
