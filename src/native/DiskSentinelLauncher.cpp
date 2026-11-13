@@ -1,8 +1,8 @@
 /**
  * @file DiskSentinelLauncher.cpp
- * @brief Native Win32 Desktop Host & Launcher for DiskSentinel Pro
+ * @brief Native Win32 Desktop Host & Launcher for Disk Bad Sector Scanner
  * @author AhBiYout (CISNet)
- * @details Compiles via MSVC (cl.exe) or MinGW (g++.exe) into DiskSentinelPro.exe
+ * @details Compiles via MSVC (cl.exe) or MinGW (g++.exe) into DiskBadSectorScanner.exe
  *          Provides seamless desktop app window (Edge App Mode), UAC elevation checks,
  *          and direct execution options.
  * @license Apache-2.0
@@ -75,8 +75,8 @@ void LaunchDesktopWindow() {
     std::wstring htmlPath = FindHtmlEntry();
     if (htmlPath.empty()) {
         MessageBoxW(NULL,
-            L"Could not locate 'index.html'.\nPlease make sure DiskSentinelPro.exe is placed alongside the dist files.",
-            L"DiskSentinel Pro - File Not Found", MB_ICONERROR | MB_OK);
+            L"Could not locate 'index.html'.\nPlease make sure DiskBadSectorScanner.exe is placed alongside the application files.",
+            L"Disk Bad Sector Scanner - File Not Found", MB_ICONERROR | MB_OK);
         return;
     }
 
@@ -121,8 +121,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     if (argc > 1) {
         std::wstring firstArg = argv[1];
         if (firstArg == L"-v" || firstArg == L"--version") {
-            MessageBoxW(NULL, L"DiskSentinel Pro v" APP_VERSION L"\nNative Core Engine v" NATIVE_CORE_VERSION,
-                        L"DiskSentinel Pro Version", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(NULL, L"Disk Bad Sector Scanner v" APP_VERSION L"\nNative Core Engine v" NATIVE_CORE_VERSION,
+                        L"Disk Bad Sector Scanner Version", MB_OK | MB_ICONINFORMATION);
             LocalFree(argv);
             return 0;
         }
@@ -138,12 +138,12 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         std::string arg = argv[1];
         if (arg == "-v" || arg == "--version") {
-            std::cout << "DiskSentinel Pro v" APP_VERSION " (Native Core Engine v" NATIVE_CORE_VERSION ")\n";
+            std::cout << "Disk Bad Sector Scanner v" APP_VERSION " (Native Core Engine v" NATIVE_CORE_VERSION ")\n";
             return 0;
         }
         if (arg == "-h" || arg == "--help") {
-            std::cout << "DiskSentinel Pro Native Host Runner\n"
-                      << "Usage: DiskSentinelPro.exe [OPTIONS]\n"
+            std::cout << "Disk Bad Sector Scanner Native Host Runner\n"
+                      << "Usage: DiskBadSectorScanner.exe [OPTIONS]\n"
                       << "  --gui       Launch desktop application frame (Default)\n"
                       << "  --version   Show version info\n";
             return 0;

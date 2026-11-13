@@ -1,5 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { DiskDrive, SectorBlock, ScanTelemetry, ErrorLogItem, SavedScanRecord, SpecializedScanMethodId, MainAppTab } from './types';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  DiskDrive,
+  SectorBlock,
+  ScanTelemetry,
+  ErrorLogItem,
+  SavedScanRecord,
+  SpecializedScanMethodId,
+  MainAppTab,
+  SurfaceTestType,
+  DiagnosticTask,
+  SmartSelfTestState,
+  SmartSelfTestType,
+  ThermalHistoryPoint
+} from './types';
 import { generateBlocksForDrive, TOTAL_SCAN_BLOCKS } from './utils/drivePresets';
 import { soundManager } from './utils/audio';
 import { createScanRecordFromSession } from './utils/reportGenerator';
@@ -28,40 +41,53 @@ import { HelpGuideModal } from './components/HelpGuideModal';
 import { ScanMethodSelector } from './components/ScanMethodSelector';
 import { SmartRemapModal } from './components/SmartRemapModal';
 import { LatencyHistogramDashboard } from './components/LatencyHistogramDashboard';
+import { ResponseBucketsBar, BucketKey } from './components/ResponseBucketsBar';
+import { LbaGraphView } from './components/LbaGraphView';
+import { TaskManagerPanel } from './components/TaskManagerPanel';
+import { ThermalMonitorWidget } from './components/ThermalMonitorWidget';
 import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
 import { SCAN_METHOD_DEFINITIONS, getDefaultMethodForDrive } from './utils/scanProfiles';
-import { 
-  createNativeHostDrive, 
-  createNativeDriveFromFile, 
+import {
+  createNativeHostDrive,
+  createNativeDriveFromFile,
   createNativeDriveFromDirectoryHandle,
   createNativeDriveFromFolderFiles,
-  executeRealPhysicalSectorProbe,
   executeRealZeroFillRepairBlock,
-  rescanAllDrives
+  rescanAllDrives,
+  isTauriDesktopRuntime,
+  createEmptyResponseBuckets,
+  classifyResponseBucket,
+  buildScanBlockSequence,
+  isSafeEraseTarget,
+  provisionSafeEraseTargetFile,
+  executeHddScanBlockProbe,
+  queryTauriRunSmartSelfTest,
+  queryTauriSmartSelfTestStatus,
+  queryTauriPollTemperatures
 } from './utils/nativeDriveEngine';
 import { calculateHardwareVitals } from './utils/hardwareTelemetry';
 import { safeStorage } from './utils/safeStorage';
 import { DiskSentinelMigrationBundle, mergeScanRecords } from './utils/dataMigration';
 import { ContiguousDegradationZone, PredictiveFailureReport, analyzePredictiveFailure } from './utils/predictiveFailureAnalysis';
-import { 
-  Github, 
-  BookOpen, 
-  Building2, 
-  Sparkles, 
-  ExternalLink, 
-  ShieldCheck, 
-  Cpu, 
-  Usb, 
-  Thermometer, 
-  X, 
-  FolderOpen, 
+import {
+  Github,
+  BookOpen,
+  Building2,
+  Sparkles,
+  ShieldCheck,
+  Cpu,
+  Usb,
   HardDrive,
   Activity,
   Terminal,
   GitCompare,
   ArrowRight,
-  ShieldAlert
+  ShieldAlert,
+  Play,
+  Layers,
+  FilePlus2,
+  SlidersHorizontal
 } from 'lucide-react';
 
 export default function App() {
@@ -337,38 +363,92 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   // Storage Media Tailored Inspection Method State
   const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_PROBING_DRIVE));
 
-  // Blocks State
-  const [blocks, setBlocks] = useState<SectorBlock[]>([]);
-  const blocksRef = useRef<SectorBlock[]>(blocks);
-  blocksRef.current = blocks;
-  const [activeBlockIndex, setActiveBlockIndex] = useState<number>(-1);
+  // HDDScan Diagnostic Configuration State
+  const [selectedTestType, setSelectedTestType] = useState<SurfaceTestType>('verify');
+  const [rangeStartPct, setRangeStartPct] = useState<number>(0);
+  const [rangeEndPct, setRangeEndPct] = useState<number>(100);
+  const [scanViewMode, setScanViewMode] = useState<'split' | 'graph' | 'map'>('split');
+  const [activeBucketFilter, setActiveBucketFilter] = useState<BucketKey | null>(null);
+  const [isProvisioningErase, setIsProvisioningErase] = useState<boolean>(false);
+
+  // Blank preview blocks for idle selected drive (before a task is started)
+  const [idleBlocks, setIdleBlocks] = useState<SectorBlock[]>([]);
   const [selectedBlock, setSelectedBlock] = useState<SectorBlock | null>(null);
-  const lastMeasuredSpeedRef = useRef<number>(0);
   const lastInitializedDriveRef = useRef<{ id: string; totalSectors: number } | null>(null);
 
-  // Initialize blocks when drive changes
+  // Multi-Task Queue Manager State
+  const [tasks, setTasks] = useState<DiagnosticTask[]>([]);
+  const tasksRef = useRef<DiagnosticTask[]>(tasks);
+  tasksRef.current = tasks;
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const activeTaskIdRef = useRef<string | null>(activeTaskId);
+  activeTaskIdRef.current = activeTaskId;
+
+  // Live Thermal Monitor & SMART Self-Test State
+  const isTauriRuntime = isTauriDesktopRuntime();
+  const [isThermalPolling, setIsThermalPolling] = useState<boolean>(() => isTauriDesktopRuntime());
+  const [thermalHistoryByDrive, setThermalHistoryByDrive] = useState<Record<string, ThermalHistoryPoint[]>>({});
+  const [smartSelfTestByDrive, setSmartSelfTestByDrive] = useState<Record<string, SmartSelfTestState>>({});
+
+  // Initialize blank blocks preview when drive changes
   const initDriveBlocks = useCallback((drive: DiskDrive) => {
     const { blocks: initialBlocks } = generateBlocksForDrive(drive, TOTAL_SCAN_BLOCKS);
     lastInitializedDriveRef.current = { id: drive.id, totalSectors: drive.totalSectors };
-    setBlocks(initialBlocks);
-    setActiveBlockIndex(-1);
+    setIdleBlocks(initialBlocks);
     setSelectedBlock(null);
-    lastMeasuredSpeedRef.current = 0;
   }, []);
+
+  // Focused task for active drive & inspector stage
+  const activeTask = useMemo(() => {
+    const exact = tasks.find(t => t.id === activeTaskId);
+    if (exact && exact.driveId === activeDrive.id) return exact;
+    const runningForDrive = tasks.find(t => t.driveId === activeDrive.id && t.status === 'running');
+    if (runningForDrive) return runningForDrive;
+    return tasks.find(t => t.driveId === activeDrive.id) || null;
+  }, [tasks, activeTaskId, activeDrive.id]);
+
+  const blocks = useMemo(
+    () => (activeTask ? activeTask.blocks : idleBlocks),
+    [activeTask, idleBlocks]
+  );
+  const blocksRef = useRef<SectorBlock[]>(blocks);
+  blocksRef.current = blocks;
+
+  const activeBlockIndex = activeTask ? activeTask.currentBlockIndex : -1;
+  const scanStatus: ScanTelemetry['status'] = activeTask
+    ? activeTask.status === 'running'
+      ? 'scanning'
+      : activeTask.status === 'queued'
+      ? 'paused'
+      : activeTask.status
+    : 'idle';
+  const elapsedSeconds = activeTask ? activeTask.elapsedSeconds : 0;
 
   // S.M.A.R.T Sector Remapping & Zero-Fill Repair Handler
   const handleRepairSectors = useCallback((driveId: string, repairedBlockIds: number[]) => {
-    setBlocks(prev => prev.map(b => {
-      if (repairedBlockIds.includes(b.id)) {
-        return {
-          ...b,
-          status: 'good',
-          responseTimeMs: 0.8,
-          errorCode: undefined
-        };
-      }
-      return b;
-    }));
+    const patchBlocks = (list: SectorBlock[]) =>
+      list.map(b =>
+        repairedBlockIds.includes(b.id)
+          ? {
+              ...b,
+              status: 'good' as const,
+              responseTimeMs: 0.8,
+              errorCode: undefined
+            }
+          : b
+      );
+
+    setIdleBlocks(prev => patchBlocks(prev));
+    setTasks(prev =>
+      prev.map(t =>
+        t.driveId === driveId
+          ? {
+              ...t,
+              blocks: patchBlocks(t.blocks)
+            }
+          : t
+      )
+    );
 
     setDrives(prev => prev.map(d => {
       if (d.id === driveId) {
@@ -432,8 +512,6 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   useEffect(() => {
     safeStorage.setItem('disk_scanner_speed_multiplier', String(scanSpeedMultiplier));
   }, [scanSpeedMultiplier]);
-  const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'paused' | 'completed' | 'aborted'>('idle');
-  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
   // Live Error Log Stream & Preemptive Degradation Warning Deduplication
   const [errorLogs, setErrorLogs] = useState<ErrorLogItem[]>([]);
@@ -607,11 +685,10 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
     return () => clearTimeout(timer);
   }, [checkUpdates]);
 
-  // Refs for scanning loop (kept synchronized so the scan interval never tears down on tick updates)
+  // Refs for multi-task execution loop
   const scanLoopRef = useRef<NodeJS.Timeout | null>(null);
   const timerLoopRef = useRef<NodeJS.Timeout | null>(null);
-  const currentIndexRef = useRef<number>(0);
-  const startTimeRef = useRef<number>(0);
+  const inFlightDrivesRef = useRef<Set<string>>(new Set());
   const activeDriveRef = useRef<DiskDrive>(activeDrive);
   activeDriveRef.current = activeDrive;
   const drivesRef = useRef<DiskDrive[]>(drives);
@@ -620,10 +697,6 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   selectedMethodIdRef.current = selectedMethodId;
   const scanModeRef = useRef<'quick' | 'full'>(scanMode);
   scanModeRef.current = scanMode;
-  const elapsedSecondsRef = useRef<number>(elapsedSeconds);
-  elapsedSecondsRef.current = elapsedSeconds;
-  const scanStatusRef = useRef(scanStatus);
-  scanStatusRef.current = scanStatus;
 
   // Derived counts
   const goodCount = blocks.filter(b => b.status === 'good').length;
@@ -631,32 +704,37 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const slowCount = blocks.filter(b => b.status === 'slow').length;
   const criticalCount = blocks.filter(b => b.status === 'critical').length;
   const badCount = blocks.filter(b => b.status === 'bad').length;
-  const badCountRef = useRef<number>(badCount);
-  badCountRef.current = badCount;
 
-  // Initialize or re-sync grid blocks ONLY on drive change or initial hardware probe (never wipe on telemetry/rescan updates)
+  // Initialize blank blocks on drive change or capacity update
   useEffect(() => {
     const last = lastInitializedDriveRef.current;
     const driveChanged = !last || last.id !== activeDrive.id;
     const capacityUpdatedWhileIdle =
-      scanStatus === 'idle' &&
-      activeBlockIndex === -1 &&
+      !activeTask &&
       last?.totalSectors !== activeDrive.totalSectors;
 
     if (driveChanged || capacityUpdatedWhileIdle) {
       initDriveBlocks(activeDrive);
     }
-  }, [activeDrive, scanStatus, activeBlockIndex, initDriveBlocks]);
+  }, [activeDrive, activeTask, initDriveBlocks]);
 
-  // Real-time speed calculation from actual sector probe measurements
+  // Real-time speed calculation
   const totalScanned = goodCount + normalCount + slowCount + criticalCount + badCount;
-  const scannedPercentage = blocks.length > 0 ? (totalScanned / blocks.length) * 100 : 0;
-  const currentLba = blocks[activeBlockIndex]?.lba || (activeBlockIndex >= 0 ? activeBlockIndex * Math.floor((activeDrive.totalSectors || 0) / TOTAL_SCAN_BLOCKS) : 0);
+  const scannedPercentage = activeTask && activeTask.stepSequence.length > 0
+    ? (activeTask.completedSteps / activeTask.stepSequence.length) * 100
+    : blocks.length > 0
+    ? (totalScanned / blocks.length) * 100
+    : 0;
+  const currentLba = activeTask
+    ? activeTask.currentLba
+    : blocks[0]?.lba || 0;
 
   const blocksPerSecond = elapsedSeconds > 0 ? totalScanned / elapsedSeconds : 0;
-  const remainingBlocks = Math.max(0, blocks.length - totalScanned);
-  const remainingSeconds = blocksPerSecond > 0 ? Math.ceil(remainingBlocks / blocksPerSecond) : 0;
-  const scanSpeedMbPerSec = scanStatus === 'scanning' ? lastMeasuredSpeedRef.current : 0;
+  const remainingSteps = activeTask
+    ? Math.max(0, activeTask.stepSequence.length - activeTask.completedSteps)
+    : Math.max(0, blocks.length - totalScanned);
+  const remainingSeconds = blocksPerSecond > 0 ? Math.ceil(remainingSteps / blocksPerSecond) : 0;
+  const scanSpeedMbPerSec = scanStatus === 'scanning' && activeTask ? activeTask.speedMbPerSec : 0;
 
   const telemetry: ScanTelemetry = {
     currentBlockIndex: activeBlockIndex >= 0 ? activeBlockIndex : 0,
@@ -673,8 +751,8 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
     criticalCount,
     badCount,
     status: scanStatus,
-    activeMethodId: selectedMethodId,
-    activeMethodName: SCAN_METHOD_DEFINITIONS[selectedMethodId]?.nameKo || SCAN_METHOD_DEFINITIONS[selectedMethodId]?.name
+    activeMethodId: activeTask?.methodId || selectedMethodId,
+    activeMethodName: SCAN_METHOD_DEFINITIONS[activeTask?.methodId || selectedMethodId]?.nameKo
   };
 
   // Real-time Hardware Vitals (strictly nullable when sensors unavailable)
@@ -727,23 +805,159 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       ? Math.max(10, Math.round(100 - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
       : null;
 
-  // Elapsed timer loop
-  useEffect(() => {
-    if (scanStatus === 'scanning') {
-      timerLoopRef.current = setInterval(() => {
-        setElapsedSeconds(prev => prev + 1);
-      }, 1000);
-    } else {
-      if (timerLoopRef.current) clearInterval(timerLoopRef.current);
-    }
-    return () => {
-      if (timerLoopRef.current) clearInterval(timerLoopRef.current);
-    };
-  }, [scanStatus]);
+  // Poll OS Physical Drive Temperatures every 4s in Tauri Desktop runtime
+  const handlePollTemperatures = useCallback(async () => {
+    if (!isTauriRuntime) return;
+    const readings = await queryTauriPollTemperatures();
+    if (readings.length === 0) return;
 
-  // Main Scanning Loop Execution with Storage Tailored Inspection Profiles
+    const now = Date.now();
+    const label = new Date(now).toLocaleTimeString('ko-KR', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+
+    setDrives(prev =>
+      prev.map(d => {
+        if (!d.id.startsWith('drive-tauri-physical-')) return d;
+        const idx = parseInt(d.id.replace('drive-tauri-physical-', ''), 10);
+        const hit = readings.find(r => r.driveIndex === idx);
+        if (!hit || hit.temperatureC === null) return d;
+        return {
+          ...d,
+          temperatureC: hit.temperatureC,
+          hardwareSpecs: d.hardwareSpecs
+            ? { ...d.hardwareSpecs, currentTempC: hit.temperatureC }
+            : d.hardwareSpecs
+        };
+      })
+    );
+
+    setThermalHistoryByDrive(prev => {
+      const next = { ...prev };
+      for (const r of readings) {
+        if (r.temperatureC === null) continue;
+        const dId = `drive-tauri-physical-${r.driveIndex}`;
+        const existing = next[dId] || [];
+        next[dId] = [...existing.slice(-59), { timestamp: now, label, temperatureC: r.temperatureC }];
+      }
+      return next;
+    });
+  }, [isTauriRuntime]);
+
   useEffect(() => {
-    if (scanStatus !== 'scanning') {
+    if (!isTauriRuntime || !isThermalPolling) return;
+    void handlePollTemperatures();
+    const timer = setInterval(() => {
+      void handlePollTemperatures();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [isTauriRuntime, isThermalPolling, handlePollTemperatures]);
+
+  // S.M.A.R.T. Self-Test Runner & Polling
+  const handlePollSmartSelfTest = useCallback(async (targetDriveId?: string) => {
+    const driveIdToPoll = targetDriveId || activeDriveRef.current.id;
+    if (!driveIdToPoll.startsWith('drive-tauri-physical-')) return;
+    const driveIndex = parseInt(driveIdToPoll.replace('drive-tauri-physical-', ''), 10);
+    const existingType = smartSelfTestByDrive[driveIdToPoll]?.testType || null;
+    const status = await queryTauriSmartSelfTestStatus(driveIndex, driveIdToPoll, existingType);
+    setSmartSelfTestByDrive(prev => ({
+      ...prev,
+      [driveIdToPoll]: status
+    }));
+  }, [smartSelfTestByDrive]);
+
+  const handleRunSmartSelfTest = useCallback(async (testType: SmartSelfTestType | 'abort') => {
+    const target = activeDriveRef.current;
+    if (!target.id.startsWith('drive-tauri-physical-')) return;
+    const driveIndex = parseInt(target.id.replace('drive-tauri-physical-', ''), 10);
+    const res = await queryTauriRunSmartSelfTest(driveIndex, testType);
+
+    setSmartSelfTestByDrive(prev => ({
+      ...prev,
+      [target.id]: {
+        driveId: target.id,
+        supported: res.supported,
+        status: !res.supported ? 'unsupported' : testType === 'abort' ? 'aborted' : res.accepted ? 'running' : 'idle',
+        testType: testType === 'abort' ? null : testType,
+        progressPct: testType === 'abort' ? 0 : 5,
+        executionCode: res.executionCode ?? null,
+        statusText: res.statusText,
+        startedAt: Date.now(),
+        lastUpdatedAt: Date.now()
+      }
+    }));
+
+    if (res.accepted && testType !== 'abort') {
+      void handlePollSmartSelfTest(target.id);
+    }
+  }, [handlePollSmartSelfTest]);
+
+  useEffect(() => {
+    const runningEntries = (Object.values(smartSelfTestByDrive) as SmartSelfTestState[]).filter(
+      s => s.status === 'running'
+    );
+    if (runningEntries.length === 0) return;
+
+    const timer = setInterval(() => {
+      for (const entry of runningEntries) {
+        void handlePollSmartSelfTest(entry.driveId);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [smartSelfTestByDrive, handlePollSmartSelfTest]);
+
+  // Elapsed timer loop for all running tasks
+  const hasRunningTask = tasks.some(t => t.status === 'running');
+  useEffect(() => {
+    if (!hasRunningTask) {
+      if (timerLoopRef.current) {
+        clearInterval(timerLoopRef.current);
+        timerLoopRef.current = null;
+      }
+      return;
+    }
+
+    timerLoopRef.current = setInterval(() => {
+      setTasks(prev =>
+        prev.map(t => (t.status === 'running' ? { ...t, elapsedSeconds: t.elapsedSeconds + 1 } : t))
+      );
+    }, 1000);
+
+    return () => {
+      if (timerLoopRef.current) {
+        clearInterval(timerLoopRef.current);
+        timerLoopRef.current = null;
+      }
+    };
+  }, [hasRunningTask]);
+
+  // Promote queued tasks whenever no task is currently running for their driveId
+  useEffect(() => {
+    const hasPromotable = tasks.some(t => {
+      if (t.status !== 'queued') return false;
+      const busyDrive = tasks.some(other => other.driveId === t.driveId && other.status === 'running');
+      return !busyDrive;
+    });
+    if (!hasPromotable) return;
+
+    setTasks(prev => {
+      const busyDrives = new Set(prev.filter(t => t.status === 'running').map(t => t.driveId));
+      return prev.map(t => {
+        if (t.status === 'queued' && !busyDrives.has(t.driveId)) {
+          busyDrives.add(t.driveId);
+          return { ...t, status: 'running' };
+        }
+        return t;
+      });
+    });
+  }, [tasks]);
+
+  // Multi-Task Concurrent Execution Loop (parallel across drives, strictly serialized per drive)
+  useEffect(() => {
+    if (!hasRunningTask) {
       if (scanLoopRef.current) {
         clearInterval(scanLoopRef.current);
         scanLoopRef.current = null;
@@ -751,149 +965,202 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       return;
     }
 
-    // Step rate based on speed multiplier & mode
-    // 1x = 30ms interval, 2x = 15ms, 5x = 6ms, 10x = 2ms
-    const stepInterval = Math.max(2, Math.floor(30 / scanSpeedMultiplier));
-    const stepIncrement = scanMode === 'quick' ? 4 : 1; // Quick scan samples every 4th block
-
-    let isProcessingTick = false;
+    const stepInterval = Math.max(4, Math.floor(30 / scanSpeedMultiplier));
     let isCancelled = false;
 
-    scanLoopRef.current = setInterval(async () => {
-      if (isProcessingTick || isCancelled || scanStatusRef.current !== 'scanning') return;
-      isProcessingTick = true;
+    const finalizeTask = async (finishedTask: DiagnosticTask) => {
+      soundManager.playCompletionChime();
+      const badTotal = finishedTask.buckets.bad;
+      dispatchNotification(
+        `디스크 [${finishedTask.testType.toUpperCase()}] 검사 완료`,
+        `${finishedTask.driveModel}: ${badTotal > 0 ? `⚠️ 배드섹터 ${badTotal}개 발견!` : '배드섹터 없음 (정상)'}`
+      );
 
-      try {
-        const latestBlocks = blocksRef.current;
-        const currentDrive = activeDriveRef.current;
-        const methodId = selectedMethodIdRef.current;
-        const idx = currentIndexRef.current;
+      const finalDrives = await rescanAllDrives(drivesRef.current);
+      if (isCancelled) return;
+      setDrives(finalDrives);
+      const finalDrive = finalDrives.find(d => d.id === finishedTask.driveId) || drivesRef.current.find(d => d.id === finishedTask.driveId);
+      if (!finalDrive) return;
 
-        if (idx >= latestBlocks.length) {
-          // Stop interval immediately before awaiting post-scan rescan
-          if (scanLoopRef.current) {
-            clearInterval(scanLoopRef.current);
-            scanLoopRef.current = null;
-          }
-          scanStatusRef.current = 'completed';
-          setScanStatus('completed');
-          soundManager.playCompletionChime();
-          const finalBadCount = badCountRef.current;
-          dispatchNotification(
-            '디스크 맞춤 표면 검사 완료',
-            `검사가 완료되었습니다. ${finalBadCount > 0 ? `⚠️ 배드섹터 ${finalBadCount}개 발견!` : '배드섹터 없음 (정상)'}`
+      const newRecord = createScanRecordFromSession(
+        finalDrive,
+        finishedTask.scanMode,
+        finishedTask.blocks,
+        finishedTask.elapsedSeconds,
+        finishedTask.methodId
+      );
+      setScanRecords(prev => [newRecord, ...prev]);
+      setCompletedSummaryRecord(newRecord);
+    };
+
+    scanLoopRef.current = setInterval(() => {
+      if (isCancelled) return;
+      const runningTasks = tasksRef.current.filter(t => t.status === 'running');
+
+      for (const task of runningTasks) {
+        if (inFlightDrivesRef.current.has(task.driveId)) continue;
+
+        if (task.completedSteps >= task.stepSequence.length) {
+          inFlightDrivesRef.current.add(task.driveId);
+          setTasks(prev =>
+            prev.map(t =>
+              t.id === task.id && t.status === 'running'
+                ? { ...t, status: 'completed', finishedAt: Date.now() }
+                : t
+            )
           );
-
-          // Force-refresh hardware telemetry one last time to capture the final post-scan S.M.A.R.T. state
-          const finalDrives = await rescanAllDrives(drivesRef.current);
-          if (isCancelled) return;
-          setDrives(finalDrives);
-          const finalActiveDrive = finalDrives.find(d => d.id === currentDrive.id) || currentDrive;
-
-          // Auto-save scan report with tailored method and latest real hardware snapshot
-          const newRecord = createScanRecordFromSession(
-            finalActiveDrive,
-            scanModeRef.current,
-            blocksRef.current,
-            elapsedSecondsRef.current,
-            methodId
-          );
-          setScanRecords(prev => [newRecord, ...prev]);
-          setCompletedSummaryRecord(newRecord);
-          return;
+          void finalizeTask(task).finally(() => {
+            inFlightDrivesRef.current.delete(task.driveId);
+          });
+          continue;
         }
 
-        const inspectionResult = await executeRealPhysicalSectorProbe(
-          currentDrive,
-          methodId,
-          idx,
-          latestBlocks.length
-        );
-
-        if (isCancelled || scanStatusRef.current !== 'scanning') return;
-
-        const { status, latencyMs, throughputMbSec, checksum, errorCode, zoneTag } = inspectionResult;
-        if (throughputMbSec > 0) {
-          lastMeasuredSpeedRef.current = throughputMbSec;
+        const targetDrive = drivesRef.current.find(d => d.id === task.driveId);
+        if (!targetDrive) {
+          setTasks(prev =>
+            prev.map(t => (t.id === task.id ? { ...t, status: 'aborted', finishedAt: Date.now() } : t))
+          );
+          continue;
         }
 
-        const targetBlockLba = latestBlocks[idx].lba;
+        const step = task.stepSequence[task.completedSteps];
+        const idx = step.blockIndex;
+        inFlightDrivesRef.current.add(task.driveId);
 
-        setBlocks(prev => {
-          if (idx >= prev.length) return prev;
-          const next = [...prev];
-          next[idx] = {
-            ...next[idx],
-            status,
-            responseTimeMs: latencyMs,
-            throughputMbSec,
-            checksum,
-            errorCode,
-            zoneTag,
-            timestamp: Date.now()
-          };
-          return next;
-        });
-
-        setActiveBlockIndex(idx);
-
-        const currentMethodMeta = SCAN_METHOD_DEFINITIONS[methodId];
-        if (status === 'bad') {
-          let repairedAuto = false;
-          if (isAutoRepairModeRef.current) {
-            const repairRes = await executeRealZeroFillRepairBlock(idx, targetBlockLba, currentDrive);
-            if (isCancelled || scanStatusRef.current !== 'scanning') return;
-            if (repairRes.success) {
-              repairedAuto = true;
-              handleRepairSectors(currentDrive.id, [idx]);
-              dispatchNotification(
-                '🔧 논리 배드섹터 자동 수복 완료',
-                `블록 #${idx} (LBA #${targetBlockLba.toLocaleString()})의 섹터가 Zero-Fill로 수복되었습니다.`
-              );
-            }
-          }
-          if (!repairedAuto) {
-            soundManager.playBadSectorAlert();
-            setAlertBannerVisible(true);
-            setLatestBadLba(targetBlockLba);
-
-            const newLog: ErrorLogItem = {
-              id: `log-${Date.now()}-${idx}`,
-              timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-              blockIndex: idx,
-              lba: targetBlockLba,
-              status: 'bad',
-              latencyMs: -1,
-              errorCode: errorCode || 'UNC',
-              description: `섹터 판독 오류: ${errorCode || '데이터 판독 불가'} (LBA #${targetBlockLba.toLocaleString()})`,
-              methodContext: currentMethodMeta?.nameKo
-            };
-            setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
-
-            dispatchNotification(
-              '🚨 디스크 I/O 오류 검출!',
-              `블록 #${idx} (LBA: #${targetBlockLba.toLocaleString()})에서 읽기 오류가 감지되었습니다.`
+        void (async () => {
+          try {
+            const probeResult = await executeHddScanBlockProbe(
+              targetDrive,
+              task.methodId,
+              idx,
+              task.blocks.length,
+              task.testType
             );
-          }
-        } else if (status === 'critical' || status === 'slow') {
-          soundManager.playWarningTone();
-          const newLog: ErrorLogItem = {
-            id: `log-${Date.now()}-${idx}`,
-            timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-            blockIndex: idx,
-            lba: targetBlockLba,
-            status,
-            latencyMs: latencyMs,
-            errorCode: errorCode || 'LATENCY',
-            description: `응답 지연 감지 (${latencyMs}ms) - [${currentMethodMeta?.nameKo || '맞춤 검사'}]`,
-            methodContext: currentMethodMeta?.nameKo
-          };
-          setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
-        }
 
-        currentIndexRef.current = idx + stepIncrement;
-      } finally {
-        isProcessingTick = false;
+            if (isCancelled) return;
+            const latestTask = tasksRef.current.find(t => t.id === task.id);
+            if (!latestTask || latestTask.status !== 'running') return;
+
+            const { status, latencyMs, throughputMbSec, checksum, errorCode, zoneTag } = probeResult;
+            const targetBlock = latestTask.blocks[idx];
+            if (!targetBlock) return;
+            const targetBlockLba = targetBlock.lba;
+            const bucketKey = classifyResponseBucket(status, latencyMs);
+
+            if (errorCode === 'ERASE_BLOCKED_UNSAFE_TARGET') {
+              soundManager.playBadSectorAlert();
+              const guardLog: ErrorLogItem = {
+                id: `erase-guard-${Date.now()}-${idx}`,
+                timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+                blockIndex: idx,
+                lba: targetBlockLba,
+                status: 'bad',
+                latencyMs: -1,
+                errorCode,
+                description: `안전 가드 차단: [${targetDrive.model}]은 물리 디스크 또는 읽기 전용 대상이므로 Erase 쓰기가 중단되었습니다.`,
+                methodContext: 'Safe Erase Guard'
+              };
+              setErrorLogs(prev => [guardLog, ...prev.slice(0, 199)]);
+              setTasks(prev =>
+                prev.map(t => (t.id === task.id ? { ...t, status: 'aborted', finishedAt: Date.now() } : t))
+              );
+              return;
+            }
+
+            let resolvedStatus = status;
+            let resolvedLatency = latencyMs;
+            let resolvedErrorCode = errorCode;
+
+            if (status === 'bad' && isAutoRepairModeRef.current && task.testType !== 'erase') {
+              const repairRes = await executeRealZeroFillRepairBlock(idx, targetBlockLba, targetDrive);
+              if (!isCancelled && repairRes.success) {
+                resolvedStatus = 'good';
+                resolvedLatency = 0.8;
+                resolvedErrorCode = undefined;
+                handleRepairSectors(targetDrive.id, [idx]);
+              }
+            }
+
+            if (resolvedStatus === 'bad') {
+              soundManager.playBadSectorAlert();
+              setAlertBannerVisible(true);
+              setLatestBadLba(targetBlockLba);
+              const newLog: ErrorLogItem = {
+                id: `log-${Date.now()}-${idx}`,
+                timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+                blockIndex: idx,
+                lba: targetBlockLba,
+                status: 'bad',
+                latencyMs: -1,
+                errorCode: resolvedErrorCode || 'UNC',
+                description: `섹터 I/O 오류 [${task.testType.toUpperCase()}]: ${resolvedErrorCode || '판독/검증 실패'} (LBA #${targetBlockLba.toLocaleString()})`,
+                methodContext: `${task.testType.toUpperCase()} Engine`
+              };
+              setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
+            } else if (resolvedStatus === 'critical' || resolvedStatus === 'slow') {
+              soundManager.playWarningTone();
+              const newLog: ErrorLogItem = {
+                id: `log-${Date.now()}-${idx}`,
+                timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+                blockIndex: idx,
+                lba: targetBlockLba,
+                status: resolvedStatus,
+                latencyMs: resolvedLatency,
+                errorCode: resolvedErrorCode || 'LATENCY',
+                description: `응답 지연 감지 (${resolvedLatency}ms) - [${task.testType.toUpperCase()}]`,
+                methodContext: `${task.testType.toUpperCase()} Engine`
+              };
+              setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
+            }
+
+            setTasks(prev =>
+              prev.map(t => {
+                if (t.id !== task.id || t.status !== 'running') return t;
+                const nextBlocks = [...t.blocks];
+                nextBlocks[idx] = {
+                  ...nextBlocks[idx],
+                  status: resolvedStatus,
+                  responseTimeMs: resolvedLatency,
+                  throughputMbSec,
+                  checksum,
+                  errorCode: resolvedErrorCode,
+                  zoneTag,
+                  timestamp: Date.now()
+                };
+                const finalBucket = classifyResponseBucket(resolvedStatus, resolvedLatency);
+                const nextBuckets = {
+                  ...t.buckets,
+                  [finalBucket]: t.buckets[finalBucket] + 1
+                };
+                const nextTrace = [
+                  ...t.lbaTrace,
+                  {
+                    seqIndex: t.completedSteps,
+                    blockId: idx,
+                    lba: targetBlockLba,
+                    latencyMs: resolvedLatency,
+                    throughputMbSec,
+                    status: resolvedStatus,
+                    passSide: step.passSide
+                  }
+                ];
+
+                return {
+                  ...t,
+                  blocks: nextBlocks,
+                  buckets: nextBuckets,
+                  lbaTrace: nextTrace,
+                  completedSteps: t.completedSteps + 1,
+                  currentBlockIndex: idx,
+                  currentLba: targetBlockLba,
+                  speedMbPerSec: throughputMbSec > 0 ? throughputMbSec : t.speedMbPerSec
+                };
+              })
+            );
+          } finally {
+            inFlightDrivesRef.current.delete(task.driveId);
+          }
+        })();
       }
     }, stepInterval);
 
@@ -904,33 +1171,178 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         scanLoopRef.current = null;
       }
     };
-  }, [scanStatus, scanSpeedMultiplier, scanMode, dispatchNotification, handleRepairSectors]);
+  }, [hasRunningTask, scanSpeedMultiplier, dispatchNotification, handleRepairSectors]);
 
-  // Scan Controls
-  const handleStartScan = () => {
-    if (scanStatus === 'completed' || scanStatus === 'aborted') {
-      handleResetScan();
+  // Task & Scan Controls
+  const createAndEnqueueTask = useCallback(
+    (startImmediately = true, forcedTestType?: SurfaceTestType) => {
+      const targetDrive = activeDriveRef.current;
+      const testTypeToRun = forcedTestType || selectedTestType;
+
+      if (testTypeToRun === 'erase') {
+        const guard = isSafeEraseTarget(targetDrive);
+        if (!guard.allowed) {
+          const warnLog: ErrorLogItem = {
+            id: `erase-blocked-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+            blockIndex: 0,
+            lba: 0,
+            status: 'bad',
+            latencyMs: -1,
+            errorCode: 'ERASE_SAFETY_GUARD',
+            description: guard.reason || '안전 가드: 물리 드라이브에는 Erase 작업을 시작할 수 없습니다.',
+            methodContext: 'Safe Erase Guard'
+          };
+          setErrorLogs(prev => [warnLog, ...prev]);
+          return;
+        }
+      }
+
+      const { blocks: initialBlocks } = generateBlocksForDrive(targetDrive, TOTAL_SCAN_BLOCKS);
+      const totalB = initialBlocks.length;
+      const clampedStartPct = Math.max(0, Math.min(95, rangeStartPct));
+      const clampedEndPct = Math.max(clampedStartPct + 1, Math.min(100, rangeEndPct));
+      const startBlock = Math.floor((clampedStartPct / 100) * (totalB - 1));
+      const endBlock = Math.max(startBlock, Math.floor((clampedEndPct / 100) * (totalB - 1)));
+
+      const stepSequence = buildScanBlockSequence(totalB, startBlock, endBlock, scanMode, testTypeToRun);
+      const safeGuard = testTypeToRun === 'erase' ? isSafeEraseTarget(targetDrive) : undefined;
+
+      const driveBusy = tasksRef.current.some(t => t.driveId === targetDrive.id && t.status === 'running');
+      const initialStatus: DiagnosticTask['status'] =
+        startImmediately && !driveBusy ? 'running' : 'queued';
+
+      const newTask: DiagnosticTask = {
+        id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        driveId: targetDrive.id,
+        driveModel: targetDrive.model,
+        driveType: targetDrive.type,
+        testType: testTypeToRun,
+        scanMode,
+        methodId: selectedMethodId,
+        status: initialStatus,
+        startBlock,
+        endBlock,
+        stepSequence,
+        completedSteps: 0,
+        currentBlockIndex: stepSequence[0]?.blockIndex ?? 0,
+        currentLba: initialBlocks[stepSequence[0]?.blockIndex ?? 0]?.lba ?? 0,
+        speedMultiplier: scanSpeedMultiplier,
+        speedMbPerSec: 0,
+        elapsedSeconds: 0,
+        buckets: createEmptyResponseBuckets(),
+        blocks: initialBlocks,
+        lbaTrace: [],
+        eraseTargetLabel: safeGuard?.targetLabel,
+        createdAt: Date.now()
+      };
+
+      emittedDegradationKeysRef.current.clear();
+      setActiveBucketFilter(null);
+      setTasks(prev => [newTask, ...prev]);
+      setActiveTaskId(newTask.id);
+    },
+    [selectedTestType, rangeStartPct, rangeEndPct, scanMode, selectedMethodId, scanSpeedMultiplier]
+  );
+
+  const handleProvisionSafeEraseTarget = useCallback(async () => {
+    setIsProvisioningErase(true);
+    try {
+      const { drive: safeDrive, createdType } = await provisionSafeEraseTargetFile();
+      setDrives(prev => {
+        const filtered = prev.filter(d => d.id !== safeDrive.id);
+        return [safeDrive, ...filtered];
+      });
+      setSelectedDriveId(safeDrive.id);
+      setSelectedMethodId(getDefaultMethodForDrive(safeDrive));
+      dispatchNotification(
+        '안전한 Erase 테스트 영역 준비 완료',
+        createdType === 'file_handle'
+          ? `쓰기 가능한 로컬 테스트 파일(${safeDrive.model})이 준비되었습니다.`
+          : '격리된 브라우저 OPFS 샌드박스 4MB 테스트 파일이 준비되었습니다.'
+      );
+    } catch (err: any) {
+      const warnLog: ErrorLogItem = {
+        id: `erase-provision-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+        blockIndex: 0,
+        lba: 0,
+        status: 'slow',
+        latencyMs: 0,
+        errorCode: 'ERASE_PROVISION_CANCELLED',
+        description: err?.message || '테스트 파일 준비가 취소되었거나 지원되지 않습니다.',
+        methodContext: 'Safe Erase Guard'
+      };
+      setErrorLogs(prev => [warnLog, ...prev]);
+    } finally {
+      setIsProvisioningErase(false);
     }
-    setScanStatus('scanning');
+  }, [dispatchNotification]);
+
+  const handlePauseTask = useCallback((taskId: string) => {
+    setTasks(prev =>
+      prev.map(t => (t.id === taskId && t.status === 'running' ? { ...t, status: 'paused' } : t))
+    );
+  }, []);
+
+  const handleResumeTask = useCallback((taskId: string) => {
+    setTasks(prev => {
+      const target = prev.find(t => t.id === taskId);
+      if (!target) return prev;
+      const driveBusy = prev.some(t => t.id !== taskId && t.driveId === target.driveId && t.status === 'running');
+      return prev.map(t =>
+        t.id === taskId ? { ...t, status: driveBusy ? 'queued' : 'running' } : t
+      );
+    });
+  }, []);
+
+  const handleStopTask = useCallback((taskId: string) => {
+    setTasks(prev =>
+      prev.map(t =>
+        t.id === taskId && (t.status === 'running' || t.status === 'paused' || t.status === 'queued')
+          ? { ...t, status: 'aborted', finishedAt: Date.now() }
+          : t
+      )
+    );
+  }, []);
+
+  const handleRemoveTask = useCallback((taskId: string) => {
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+    if (activeTaskIdRef.current === taskId) {
+      setActiveTaskId(null);
+    }
+  }, []);
+
+  const handleClearFinishedTasks = useCallback(() => {
+    setTasks(prev => prev.filter(t => t.status !== 'completed' && t.status !== 'aborted'));
+  }, []);
+
+  const handleStartScan = () => {
+    if (activeTask && activeTask.status === 'paused') {
+      handleResumeTask(activeTask.id);
+      return;
+    }
+    createAndEnqueueTask(true);
   };
 
   const handlePauseScan = () => {
-    setScanStatus('paused');
+    if (activeTask) handlePauseTask(activeTask.id);
   };
 
   const handleResumeScan = () => {
-    setScanStatus('scanning');
+    if (activeTask) handleResumeTask(activeTask.id);
   };
 
   const handleStopScan = () => {
-    setScanStatus('aborted');
+    if (activeTask) handleStopTask(activeTask.id);
   };
 
   const handleResetScan = () => {
-    setScanStatus('idle');
-    setElapsedSeconds(0);
-    currentIndexRef.current = 0;
-    lastMeasuredSpeedRef.current = 0;
+    if (activeTask && (activeTask.status === 'running' || activeTask.status === 'paused')) {
+      handleStopTask(activeTask.id);
+    }
+    setActiveTaskId(null);
+    setActiveBucketFilter(null);
     setLatestBadLba(undefined);
     emittedDegradationKeysRef.current.clear();
     initDriveBlocks(activeDrive);
@@ -939,24 +1351,30 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   };
 
   const handleDriveChange = (driveId: string) => {
-    if (scanStatus === 'scanning') {
-      const confirmChange = window.confirm('현재 진행 중인 검사가 취소됩니다. 대상 드라이브를 변경하시겠습니까?');
-      if (!confirmChange) return;
-    }
-    setScanStatus('idle');
-    setElapsedSeconds(0);
-    currentIndexRef.current = 0;
-    lastMeasuredSpeedRef.current = 0;
-    setLatestBadLba(undefined);
-    emittedDegradationKeysRef.current.clear();
     setSelectedDriveId(driveId);
-
     const nextDrive = drives.find(d => d.id === driveId) || drives[0];
     setSelectedMethodId(getDefaultMethodForDrive(nextDrive));
-
-    setErrorLogs([]);
-    setAlertBannerVisible(false);
+    const existingTaskForDrive =
+      tasks.find(t => t.driveId === driveId && t.status === 'running') ||
+      tasks.find(t => t.driveId === driveId);
+    setActiveTaskId(existingTaskForDrive ? existingTaskForDrive.id : null);
+    setActiveBucketFilter(null);
   };
+
+  const handleSelectBucket = useCallback(
+    (bucket: BucketKey | null) => {
+      setActiveBucketFilter(bucket);
+      if (!bucket) return;
+      const match = blocksRef.current.find(b => {
+        if (b.status === 'unscanned') return false;
+        return classifyResponseBucket(b.status, b.responseTimeMs) === bucket;
+      });
+      if (match) {
+        setSelectedBlock(match);
+      }
+    },
+    []
+  );
 
   // Open Current Live Diagnostic Report
   const handleOpenCurrentReport = () => {
@@ -1221,82 +1639,341 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
           </button>
         </div>
 
-        {/* Tab 1: Live Surface Scan View */}
+        {/* Tab 1: Live Surface Scan View — Compact Instrument Console */}
         {activeTab === 'scan' && (
-          <div className="space-y-2.5">
-            {/* Storage Media Tailored Inspection Method Selector */}
-            <ScanMethodSelector
-              activeDrive={activeDrive}
-              activeMethodId={selectedMethodId}
-              onSelectMethod={setSelectedMethodId}
-              isScanning={scanStatus === 'scanning'}
-              blocks={blocks}
-              onRepairSectors={handleRepairSectors}
-              onOpenFilePicker={() => fileInputRef.current?.click()}
-              onOpenRemapModal={() => setIsSmartRemapOpen(true)}
-            />
+          <div className="flex flex-col lg:flex-row gap-3 items-start">
+            {/* Left Instrument Config & Queue Rail (~330px on lg+) */}
+            <aside className="w-full lg:w-[330px] shrink-0 space-y-2.5">
+              {/* Surface Test Configurator */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md p-2.5 space-y-2.5">
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" />
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
+                      표면 검사 구성 (Surface Test)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                    {activeDrive.type}
+                  </span>
+                </div>
 
-            {/* Top Telemetry & Control Center */}
-            <TelemetryPanel
-              drive={activeDrive}
-              telemetry={telemetry}
-              scanMode={scanMode}
-              onChangeScanMode={setScanMode}
-              scanSpeedMultiplier={scanSpeedMultiplier}
-              onChangeSpeedMultiplier={setScanSpeedMultiplier}
-              onStart={handleStartScan}
-              onPause={handlePauseScan}
-              onResume={handleResumeScan}
-              onStop={handleStopScan}
-              onReset={handleResetScan}
-              onOpenReport={handleOpenCurrentReport}
-              onExportResults={() => handleOpenExportModal()}
-            />
+                {/* 4-Mode HDDScan Surface Test Selector */}
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(
+                    [
+                      { id: 'verify', label: 'Verify', sub: 'IOCTL 검증' },
+                      { id: 'read', label: 'Read', sub: '순차 읽기' },
+                      { id: 'butterfly', label: 'Butterfly', sub: '외곽↔내곽 탐색' },
+                      { id: 'erase', label: 'Erase', sub: '안전 쓰기 검증' }
+                    ] as { id: SurfaceTestType; label: string; sub: string }[]
+                  ).map(mode => {
+                    const selected = selectedTestType === mode.id;
+                    return (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() => setSelectedTestType(mode.id)}
+                        className={`text-left px-2 py-1.5 rounded border transition-colors cursor-pointer ${
+                          selected
+                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/45 text-indigo-700 dark:text-indigo-300'
+                            : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <div className="text-[11px] font-mono font-bold leading-tight">{mode.label}</div>
+                        <div className="text-[9px] text-slate-500 dark:text-slate-400">{mode.sub}</div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-            {/* Interactive Sector Grid Visualizer */}
-            <SectorGrid
-              blocks={blocks}
-              activeBlockIndex={activeBlockIndex}
-              selectedBlock={selectedBlock}
-              onSelectBlock={(b) => setSelectedBlock(b)}
-              onTriggerBitCarving={(lba) => {
-                setBitCarvingTargetLba(lba);
-                setIsBitCarvingOpen(true);
-              }}
-            />
+                {/* LBA Start / End Range (%) */}
+                <div className="pt-1 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                    <span>검사 LBA 구간 (%)</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRangeStartPct(0);
+                          setRangeEndPct(100);
+                        }}
+                        className="px-1 py-0.2 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        전체
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRangeStartPct(0);
+                          setRangeEndPct(25);
+                        }}
+                        className="px-1 py-0.2 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        초반 25%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRangeStartPct(75);
+                          setRangeEndPct(100);
+                        }}
+                        className="px-1 py-0.2 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        후반 25%
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono tabular-nums">
+                    <label className="flex items-center justify-between px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                      <span className="text-slate-500 text-[10px]">Start</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={95}
+                        value={rangeStartPct}
+                        onChange={e => setRangeStartPct(Math.max(0, Math.min(95, Number(e.target.value) || 0)))}
+                        className="w-12 bg-transparent text-right font-bold text-slate-900 dark:text-slate-100 focus:outline-none"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                      <span className="text-slate-500 text-[10px]">End</span>
+                      <input
+                        type="number"
+                        min={5}
+                        max={100}
+                        value={rangeEndPct}
+                        onChange={e => setRangeEndPct(Math.max(5, Math.min(100, Number(e.target.value) || 100)))}
+                        className="w-12 bg-transparent text-right font-bold text-slate-900 dark:text-slate-100 focus:outline-none"
+                      />
+                    </label>
+                  </div>
+                </div>
 
-            {/* D3 Real-Time Read Speed & I/O Latency Histogram Dashboard */}
-            <LatencyHistogramDashboard
-              blocks={blocks}
-              drive={activeDrive}
-              activeMethodId={selectedMethodId}
-              scanMode={scanMode}
-              isScanning={scanStatus === 'scanning'}
-              onSelectBlock={(b) => setSelectedBlock(b)}
-              onStartScan={handleStartScan}
-              onOpenRemapModal={() => setIsSmartRemapOpen(true)}
-              onDegradationWarning={handleDegradationWarning}
-            />
+                {/* Safe Erase Guard Callout */}
+                {selectedTestType === 'erase' && (() => {
+                  const guard = isSafeEraseTarget(activeDrive);
+                  return (
+                    <div
+                      className={`p-2 rounded border text-[10px] space-y-1.5 ${
+                        guard.allowed
+                          ? 'border-emerald-500/40 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300'
+                          : 'border-amber-500/50 bg-amber-50/80 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200'
+                      }`}
+                    >
+                      <div className="font-bold flex items-center justify-between gap-1">
+                        <span>{guard.allowed ? '안전 쓰기 대상 확인됨' : 'Erase 안전 가드 활성'}</span>
+                        <span className="font-mono text-[9px] truncate max-w-[130px]">{guard.targetLabel}</span>
+                      </div>
+                      {!guard.allowed && (
+                        <>
+                          <p className="leading-snug">{guard.reason}</p>
+                          <button
+                            type="button"
+                            disabled={isProvisioningErase}
+                            onClick={() => void handleProvisionSafeEraseTarget()}
+                            className="w-full py-1 px-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                          >
+                            <FilePlus2 className="w-3 h-3" />
+                            <span>{isProvisioningErase ? '테스트 영역 준비 중...' : '안전한 OPFS / 쓰기 테스트 파일 준비'}</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
-            {/* Quick Summary Strip & Link to Error Logs */}
-            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-semibold text-slate-700 dark:text-slate-300">실시간 검출 요약:</span>
-                <span className={`font-mono font-bold ${badCount > 0 ? 'text-red-500 animate-pulse' : 'text-emerald-500'}`}>
-                  {badCount}개 배드섹터
-                </span>
-                <span className="text-slate-300 dark:text-slate-700">|</span>
-                <span className="font-mono text-amber-500 font-bold">{slowCount + criticalCount}개 응답 지연</span>
-                <span className="text-slate-300 dark:text-slate-700">|</span>
-                <span className="font-mono text-emerald-500 font-bold">{goodCount + normalCount}개 정상</span>
+                {/* Enqueue / Start Action Buttons */}
+                <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    disabled={selectedTestType === 'erase' && !isSafeEraseTarget(activeDrive).allowed}
+                    onClick={() => createAndEnqueueTask(true)}
+                    className="py-1.5 px-2.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    <span>즉시 실행</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedTestType === 'erase' && !isSafeEraseTarget(activeDrive).allowed}
+                    onClick={() => createAndEnqueueTask(false)}
+                    className="py-1.5 px-2.5 rounded border border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Layers className="w-3 h-3" />
+                    <span>큐에 추가</span>
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => setActiveTab('logs')}
-                className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 cursor-pointer transition-colors"
-              >
-                <span>상세 오류 및 시스템 로그 확인하기</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+
+              {/* Multi-Task Queue Manager */}
+              <TaskManagerPanel
+                tasks={tasks}
+                activeTaskId={activeTask?.id || null}
+                onSelectTask={taskId => {
+                  const found = tasks.find(t => t.id === taskId);
+                  setActiveTaskId(taskId);
+                  if (found && found.driveId !== selectedDriveId) {
+                    setSelectedDriveId(found.driveId);
+                  }
+                }}
+                onPauseTask={handlePauseTask}
+                onResumeTask={handleResumeTask}
+                onStopTask={handleStopTask}
+                onRemoveTask={handleRemoveTask}
+                onClearFinished={handleClearFinishedTasks}
+              />
+
+              {/* Live Hardware Thermal Monitor */}
+              <ThermalMonitorWidget
+                drives={drives}
+                activeDriveId={activeDrive.id}
+                historyByDrive={thermalHistoryByDrive}
+                isTauriRuntime={isTauriRuntime}
+                isPollingEnabled={isThermalPolling}
+                onTogglePolling={() => setIsThermalPolling(prev => !prev)}
+                onPollNow={() => void handlePollTemperatures()}
+              />
+            </aside>
+
+            {/* Right Main Telemetry & Map Stage */}
+            <div className="flex-1 min-w-0 w-full space-y-2.5">
+              {/* Storage Media Tailored Inspection Method Selector */}
+              <ScanMethodSelector
+                activeDrive={activeDrive}
+                activeMethodId={selectedMethodId}
+                onSelectMethod={setSelectedMethodId}
+                isScanning={scanStatus === 'scanning'}
+                blocks={blocks}
+                onRepairSectors={handleRepairSectors}
+                onOpenFilePicker={() => fileInputRef.current?.click()}
+                onOpenRemapModal={() => setIsSmartRemapOpen(true)}
+              />
+
+              {/* Top Telemetry & Control Center */}
+              <TelemetryPanel
+                drive={activeDrive}
+                telemetry={telemetry}
+                scanMode={scanMode}
+                onChangeScanMode={setScanMode}
+                scanSpeedMultiplier={scanSpeedMultiplier}
+                onChangeSpeedMultiplier={setScanSpeedMultiplier}
+                onStart={handleStartScan}
+                onPause={handlePauseScan}
+                onResume={handleResumeScan}
+                onStop={handleStopScan}
+                onReset={handleResetScan}
+                onOpenReport={handleOpenCurrentReport}
+                onExportResults={() => handleOpenExportModal()}
+              />
+
+              {/* Classic HDDScan 7-Bucket Latency Counter Bar */}
+              <ResponseBucketsBar
+                buckets={activeTask ? activeTask.buckets : createEmptyResponseBuckets()}
+                activeBucket={activeBucketFilter}
+                onSelectBucket={handleSelectBucket}
+              />
+
+              {/* Viewport Mode Bar */}
+              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md text-[11px]">
+                <div className="flex items-center gap-2 font-mono text-slate-600 dark:text-slate-300">
+                  <span className="font-bold text-slate-800 dark:text-slate-100">
+                    TEST: {activeTask ? activeTask.testType.toUpperCase() : selectedTestType.toUpperCase()}
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-700">|</span>
+                  <span>범위: {rangeStartPct}% ~ {rangeEndPct}%</span>
+                  {activeBucketFilter && (
+                    <>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                        포커스 버킷: {activeBucketFilter}
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                <div className="inline-flex border border-slate-200 dark:border-slate-700 rounded overflow-hidden">
+                  {(
+                    [
+                      { id: 'split', label: 'Graph + Map' },
+                      { id: 'graph', label: 'LBA Graph' },
+                      { id: 'map', label: 'Sector Map' }
+                    ] as const
+                  ).map(v => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setScanViewMode(v.id)}
+                      className={`px-2 py-0.5 text-[10px] font-semibold cursor-pointer ${
+                        scanViewMode === v.id
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Real-time LBA Latency / Throughput Oscilloscope */}
+              {(scanViewMode === 'split' || scanViewMode === 'graph') && (
+                <LbaGraphView
+                  trace={activeTask ? activeTask.lbaTrace : []}
+                  blocks={blocks}
+                  testType={activeTask ? activeTask.testType : selectedTestType}
+                  totalSectors={activeDrive.totalSectors || 0}
+                  onSelectBlock={b => setSelectedBlock(b)}
+                />
+              )}
+
+              {/* Interactive Sector Grid Visualizer */}
+              {(scanViewMode === 'split' || scanViewMode === 'map') && (
+                <SectorGrid
+                  blocks={blocks}
+                  activeBlockIndex={activeBlockIndex}
+                  selectedBlock={selectedBlock}
+                  onSelectBlock={b => setSelectedBlock(b)}
+                  onTriggerBitCarving={lba => {
+                    setBitCarvingTargetLba(lba);
+                    setIsBitCarvingOpen(true);
+                  }}
+                />
+              )}
+
+              {/* D3 Real-Time Read Speed & I/O Latency Histogram + Z-Score Predictive Analysis */}
+              <LatencyHistogramDashboard
+                blocks={blocks}
+                drive={activeDrive}
+                activeMethodId={selectedMethodId}
+                scanMode={scanMode}
+                isScanning={scanStatus === 'scanning'}
+                onSelectBlock={b => setSelectedBlock(b)}
+                onStartScan={handleStartScan}
+                onOpenRemapModal={() => setIsSmartRemapOpen(true)}
+                onDegradationWarning={handleDegradationWarning}
+              />
+
+              {/* Quick Summary Strip & Link to Error Logs */}
+              <div className="p-2.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+                <div className="flex items-center gap-2 flex-wrap font-mono tabular-nums">
+                  <span className="font-sans font-semibold text-slate-700 dark:text-slate-300">실시간 검출 요약:</span>
+                  <span className={`font-bold ${badCount > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    {badCount} BAD
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-700">|</span>
+                  <span className="text-amber-500 font-bold">{slowCount + criticalCount} 지연</span>
+                  <span className="text-slate-300 dark:text-slate-700">|</span>
+                  <span className="text-emerald-500 font-bold">{goodCount + normalCount} 정상</span>
+                </div>
+                <button
+                  onClick={() => setActiveTab('logs')}
+                  className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 cursor-pointer transition-colors"
+                >
+                  <span>상세 오류 및 시스템 로그 확인하기</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1376,7 +2053,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
           />
         )}
 
-        {/* Tab 4: S.M.A.R.T. Attributes Table View */}
+        {/* Tab 4: S.M.A.R.T. Attributes & Hardware Self-Test View */}
         {activeTab === 'smart' && (
           <div className="space-y-3">
             <HealthSummaryDashboard
@@ -1390,6 +2067,10 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
               onOpenRemapModal={() => setIsSmartRemapOpen(true)}
               onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
               viewMode="smart_only"
+              isTauriRuntime={isTauriRuntime}
+              smartSelfTestState={smartSelfTestByDrive[activeDrive.id] || null}
+              onRunSmartSelfTest={type => void handleRunSmartSelfTest(type)}
+              onPollSmartSelfTest={() => void handlePollSmartSelfTest(activeDrive.id)}
             />
           </div>
         )}

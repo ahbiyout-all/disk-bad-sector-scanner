@@ -107,7 +107,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
       Notification.permission === 'granted' &&
       notificationsEnabled
     ) {
-      new Notification('DiskSentinel 검사 테스트 알림', {
+      new Notification('Disk Bad Sector Scanner 검사 테스트 알림', {
         body: '정상적으로 데스크톱 푸시 알림이 작동하고 있습니다.',
         icon: '/favicon.ico'
       });

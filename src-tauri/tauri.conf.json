@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DiskSentinelPro",
+  "productName": "DiskBadSectorScanner",
   "version": "4.6.0",
   "identifier": "com.disksentinel.pro",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "DiskSentinel Pro - 데스크톱 디스크 배드섹터 정밀 진단기",
+        "title": "Disk Bad Sector Scanner - 데스크톱 디스크 배드섹터 정밀 진단기",
         "width": 1280,
         "height": 860,
         "minWidth": 1024,

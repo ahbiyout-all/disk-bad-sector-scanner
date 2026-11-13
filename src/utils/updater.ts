@@ -93,7 +93,7 @@ export async function checkForGithubReleaseUpdate(): Promise<UpdateCheckResult> 
       version: releaseVersion,
       releaseDate: data.published_at ? data.published_at.split('T')[0] : '',
       tagName: data.tag_name || releaseVersion,
-      name: data.name || `DiskSentinel Pro ${releaseVersion}`,
+      name: data.name || `Disk Bad Sector Scanner ${releaseVersion}`,
       body: data.body || '릴리스 노트가 제공되지 않았습니다.',
       htmlUrl: data.html_url || PROJECT_INFO.repository.releasesUrl,
       isLatest: true,

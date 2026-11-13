@@ -1,17 +1,17 @@
-# [작성 모드 (서식 있는 텍스트) 붙여넣기용] DiskSentinel Pro v4.6.0 업데이트 안내
+# [작성 모드 (서식 있는 텍스트) 붙여넣기용] Disk Bad Sector Scanner v4.6.0 업데이트 안내
 
 > **사용 방법**: Google Blogger 글쓰기 화면 상단 좌측의 **✏️ 작성 모드(서식 있는 텍스트)** 상태에서 아래 구분선(`---`) 아래의 제목과 본문을 복사하여 붙여넣으시면 제목, 소제목, 목록, 표, 링크 서식이 그대로 유지됩니다.
 
-- **권장 블로그 제목**: `[릴리스 노트] DiskSentinel Pro v4.6.0 — D3 레이턴시 히스토그램, 100ms+ Slow/Critical 하이라이트 및 제로 더미 실측 엔진 업데이트`
-- **권장 라벨(태그)**: `DiskSentinel Pro`, `배드섹터 검사기`, `SSD 진단`, `SMART 모니터링`, `D3.js`, `개발일지`, `CISNet`
+- **권장 블로그 제목**: `[릴리스 노트] Disk Bad Sector Scanner v4.6.0 — D3 레이턴시 히스토그램, 100ms+ Slow/Critical 하이라이트 및 제로 더미 실측 엔진 업데이트`
+- **권장 라벨(태그)**: `Disk Bad Sector Scanner`, `배드섹터 검사기`, `SSD 진단`, `SMART 모니터링`, `D3.js`, `개발일지`, `CISNet`
 
 ---
 
-## 📌 DiskSentinel Pro v4.6.0 주요 업데이트 소개
+## 📌 Disk Bad Sector Scanner v4.6.0 주요 업데이트 소개
 
 안녕하세요, **AhBiYout (CISNet)** 입니다.
 
-물리 저장장치(SSD, NVMe, HDD, 외장 USB)의 표면 결함과 배드섹터(Bad Sector)를 정밀 진단하는 **DiskSentinel Pro**가 **v4.6.0**으로 업데이트되었습니다. 이번 버전에서는 **실시간 D3 I/O 레이턴시 히스토그램 시각화**, **32-드라이브 Windows 네이티브 탐색 강화**, **전 계층 더미 코드 제거(Zero-Dummy 실측화)**, 그리고 **S.M.A.R.T. 임계치 초과 시각 경고**가 집중적으로 고도화되었습니다.
+물리 저장장치(SSD, NVMe, HDD, 외장 USB)의 표면 결함과 배드섹터(Bad Sector)를 정밀 진단하는 **Disk Bad Sector Scanner (디스크 배드섹터 검사기)**가 **v4.6.0**으로 업데이트되었습니다. 이번 버전에서는 **실시간 D3 I/O 레이턴시 히스토그램 시각화**, **32-드라이브 Windows 네이티브 탐색 강화**, **전 계층 더미 코드 제거(Zero-Dummy 실측화)**, **S.M.A.R.T. 임계치 초과 시각 경고**, 그리고 **폴더 풀림(Unpacked) 공식 Windows 인스톨러**가 고도화되었습니다.
 
 ---
 

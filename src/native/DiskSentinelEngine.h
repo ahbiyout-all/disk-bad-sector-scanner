@@ -277,6 +277,21 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
     uint32_t maxDrives
 );
 
+/**
+ * 16. Hardware Surface Verification (IOCTL_DISK_VERIFY) with read-fallback check
+ */
+DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult);
+
+/**
+ * 17. Launch ATA S.M.A.R.T. Self-Test (1=Short, 2=Extended, 3=Conveyance, 127=Abort)
+ */
+DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode);
+
+/**
+ * 18. Poll ATA S.M.A.R.T. Self-Test Execution Status & Percentage Remaining
+ */
+DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct);
+
 #ifdef __cplusplus
 }
 #endif

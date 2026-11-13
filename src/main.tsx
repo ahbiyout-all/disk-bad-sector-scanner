@@ -63,7 +63,7 @@ class RootErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundar
             boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
           }}>
             <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#ef4444', marginBottom: '12px' }}>
-              DiskSentinel Pro 복구 모드
+              Disk Bad Sector Scanner 복구 모드
             </h2>
             <p style={{ fontSize: '14px', color: '#9ca3af', marginBottom: '16px', lineHeight: '1.5' }}>
               애플리케이션 렌더링 중 오류가 감지되었습니다. 아래 버튼을 눌러 상태를 재설정하고 다시 로드할 수 있습니다.

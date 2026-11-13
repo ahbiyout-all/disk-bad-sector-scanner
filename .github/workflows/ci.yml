@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-and-test:
-    name: Build & Lint Check (Node.js LTS)
+    name: Build & Lint Check (Node.js 22 LTS / 24)
     runs-on: ubuntu-latest
 
     strategy:
@@ -38,5 +41,13 @@ jobs:
       - name: Build Application
         run: npm run build
 
-      - name: Test Release Packaging
+      - name: Verify Unpacked Staging Hygiene
         run: npm run package
+
+      - name: Audit No Personal Emails or Secrets Committed
+        run: |
+          if grep -rnE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' src docs scripts setup.iss README.md package.json .github; then
+            echo "ERROR: Personal email or private address found in tracked source!"
+            exit 1
+          fi
+          echo "Security & hygiene audit passed cleanly."

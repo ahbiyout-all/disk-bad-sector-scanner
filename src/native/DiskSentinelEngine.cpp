@@ -1231,6 +1231,127 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
     return foundCount;
 }
 
+DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult) {
+    if (!hDrive || !outResult || count == 0) return false;
+    DSDriveContext* ctx = (DSDriveContext*)hDrive;
+
+    VERIFY_INFORMATION verifyInfo;
+    verifyInfo.StartingOffset.QuadPart = ((LONGLONG)lba) * ((LONGLONG)ctx->sectorSize);
+    verifyInfo.Length = count * ctx->sectorSize;
+
+    LARGE_INTEGER startTick, endTick;
+    QueryPerformanceCounter(&startTick);
+    DWORD bytesReturned = 0;
+    BOOL ok = DeviceIoControl(
+        ctx->hDevice,
+        IOCTL_DISK_VERIFY,
+        &verifyInfo,
+        sizeof(verifyInfo),
+        NULL,
+        0,
+        &bytesReturned,
+        NULL
+    );
+    QueryPerformanceCounter(&endTick);
+
+    if (ok) {
+        double elapsedMs = (double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart;
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = elapsedMs;
+        outResult->win32ErrorCode = 0;
+        safe_strncpy(outResult->errorMnemonic, "VERIFY_OK", sizeof(outResult->errorMnemonic));
+        outResult->statusCode = (elapsedMs < 10.0) ? DS_STATUS_GOOD
+            : (elapsedMs < 50.0) ? DS_STATUS_NORMAL
+            : (elapsedMs < 150.0) ? DS_STATUS_SLOW
+            : DS_STATUS_CRITICAL;
+        return true;
+    }
+
+    DWORD lastErr = GetLastError();
+    if (lastErr == ERROR_INVALID_FUNCTION || lastErr == ERROR_NOT_SUPPORTED || lastErr == ERROR_ACCESS_DENIED) {
+        return DS_ScanLbaBlock(hDrive, lba, count, outResult);
+    }
+
+    double elapsedMs = (double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart;
+    outResult->startLba = lba;
+    outResult->sectorCount = count;
+    outResult->latencyMs = elapsedMs;
+    outResult->win32ErrorCode = lastErr;
+    outResult->statusCode = DS_STATUS_BAD;
+    safe_strncpy(outResult->errorMnemonic, "VERIFY_FAIL", sizeof(outResult->errorMnemonic));
+    return false;
+}
+
+DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode) {
+    if (!hDrive) return false;
+    DSDriveContext* ctx = (DSDriveContext*)hDrive;
+
+    SENDCMDINPARAMS scip;
+    memset(&scip, 0, sizeof(scip));
+    scip.cBufferSize = 0;
+    scip.irDriveRegs.bFeaturesReg = 0xD4; // EXECUTE_OFFLINE_DIAGS
+    scip.irDriveRegs.bSectorCountReg = 1;
+    scip.irDriveRegs.bSectorNumberReg = (BYTE)(testTypeCode & 0xFF); // 1=Short, 2=Extended, 3=Conveyance, 127=Abort
+    scip.irDriveRegs.bCylLowReg = SMART_CYL_LOW;
+    scip.irDriveRegs.bCylHighReg = SMART_CYL_HI;
+    scip.irDriveRegs.bDriveHeadReg = (BYTE)(0xA0 | ((ctx->driveIndex & 1) << 4));
+    scip.irDriveRegs.bCommandReg = SMART_CMD;
+
+    SENDCMDOUTPARAMS outParams;
+    memset(&outParams, 0, sizeof(outParams));
+    DWORD bytesReturned = 0;
+    return DeviceIoControl(
+        ctx->hDevice,
+        SMART_SEND_DRIVE_COMMAND,
+        &scip,
+        sizeof(scip),
+        &outParams,
+        sizeof(outParams),
+        &bytesReturned,
+        NULL
+    ) != 0;
+}
+
+DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct) {
+    if (!hDrive || !outExecCode || !outProgressPct) return false;
+    DSDriveContext* ctx = (DSDriveContext*)hDrive;
+
+    SENDCMDINPARAMS scip;
+    memset(&scip, 0, sizeof(scip));
+    scip.cBufferSize = READ_ATTRIBUTE_BUFFER_SIZE;
+    scip.irDriveRegs.bFeaturesReg = READ_ATTRIBUTES;
+    scip.irDriveRegs.bSectorCountReg = 1;
+    scip.irDriveRegs.bSectorNumberReg = 1;
+    scip.irDriveRegs.bCylLowReg = SMART_CYL_LOW;
+    scip.irDriveRegs.bCylHighReg = SMART_CYL_HI;
+    scip.irDriveRegs.bDriveHeadReg = (BYTE)(0xA0 | ((ctx->driveIndex & 1) << 4));
+    scip.irDriveRegs.bCommandReg = SMART_CMD;
+
+    uint8_t outBuf[sizeof(SENDCMDOUTPARAMS) + READ_ATTRIBUTE_BUFFER_SIZE];
+    memset(outBuf, 0, sizeof(outBuf));
+    DWORD bytesReturned = 0;
+    if (!DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &scip, sizeof(scip),
+                         outBuf, sizeof(outBuf), &bytesReturned, NULL) || bytesReturned < 528) {
+        return false;
+    }
+
+    SENDCMDOUTPARAMS* pOut = (SENDCMDOUTPARAMS*)outBuf;
+    const uint8_t execByte = pOut->bBuffer[363];
+    *outExecCode = execByte;
+
+    const uint8_t statusNibble = (execByte >> 4) & 0x0F;
+    if (statusNibble == 0x0F) {
+        uint32_t remPct = (uint32_t)(execByte & 0x0F) * 10;
+        *outProgressPct = (remPct <= 100) ? (100 - remPct) : 0;
+    } else if (statusNibble == 0x00) {
+        *outProgressPct = 100;
+    } else {
+        *outProgressPct = 0;
+    }
+    return true;
+}
+
 #else
 // Cross-Platform POSIX / Linux / WASM stubs
 DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* outSectorSize) { return NULL; }
@@ -1248,5 +1369,8 @@ DS_API bool DS_CALL DS_ConfigureTrayGuardian(uint32_t pollIntervalSec, uint32_t 
 DS_API bool DS_CALL DS_RunTrayGuardianCheck(DSTrayGuardianStatus* outStatus) { return false; }
 DS_API bool DS_CALL DS_ExecuteBitCarvingRecovery(void* hDrive, uint64_t targetLba, uint32_t clusterSpan, DSCarvedSectorResult* outResult) { return false; }
 DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDrives, uint32_t maxDrives) { return 0; }
+DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult) { return false; }
+DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode) { return false; }
+DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct) { return false; }
 #endif
 

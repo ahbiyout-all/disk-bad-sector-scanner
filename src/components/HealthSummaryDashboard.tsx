@@ -1,10 +1,38 @@
 import React from 'react';
-import { DiskDrive, ScanTelemetry, DriveSmartAttribute, SectorBlock, SpecializedScanMethodId } from '../types';
+import {
+  DiskDrive,
+  ScanTelemetry,
+  DriveSmartAttribute,
+  SectorBlock,
+  SpecializedScanMethodId,
+  SmartSelfTestState,
+  SmartSelfTestType
+} from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
 import { detectVendor, getVendorProfile, getDriveMediaAnalysis, getTailoredActionMethods } from '../utils/vendorDiagnostics';
 import { TemperatureLineChart } from './TemperatureLineChart';
 import { LatencyHistogramDashboard } from './LatencyHistogramDashboard';
-import { ShieldCheck, ShieldAlert, AlertTriangle, Thermometer, Clock, HardDrive, Cpu, CheckCircle2, AlertOctagon, RefreshCw, Usb, Zap, Disc, Wrench, Sparkles, ArrowRight, Info } from 'lucide-react';
+import {
+  ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
+  Thermometer,
+  Clock,
+  HardDrive,
+  Cpu,
+  CheckCircle2,
+  AlertOctagon,
+  RefreshCw,
+  Usb,
+  Zap,
+  Disc,
+  Wrench,
+  Sparkles,
+  ArrowRight,
+  Info,
+  Play,
+  Square
+} from 'lucide-react';
 
 interface HealthSummaryDashboardProps {
   drive: DiskDrive;
@@ -20,6 +48,10 @@ interface HealthSummaryDashboardProps {
   onOpenRemapModal?: () => void;
   onOpenHardwareDetails?: () => void;
   viewMode?: 'all' | 'health_only' | 'smart_only';
+  smartSelfTestState?: SmartSelfTestState | null;
+  onRunSmartSelfTest?: (testType: SmartSelfTestType | 'abort') => void;
+  onPollSmartSelfTest?: () => void;
+  isTauriRuntime?: boolean;
 }
 
 export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
@@ -35,7 +67,11 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   onOpenVendorModal,
   onOpenRemapModal,
   onOpenHardwareDetails,
-  viewMode = 'all'
+  viewMode = 'all',
+  smartSelfTestState,
+  onRunSmartSelfTest,
+  onPollSmartSelfTest,
+  isTauriRuntime = false
 }) => {
   const vendorKey = detectVendor(drive);
   const vendorProfile = getVendorProfile(vendorKey);
@@ -566,6 +602,103 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
             )}
           </div>
 
+          {/* S.M.A.R.T. Hardware Self-Test Runner */}
+          {onRunSmartSelfTest && (
+            <div className="mb-3.5 p-3 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/60">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
+                <div>
+                  <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>S.M.A.R.T. 하드웨어 자체 진단 (Hardware Self-Test)</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    ATA SMART Execute Off-line Immediate (0xD4) 커널 패스스루 명령 전송
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') || smartSelfTestState?.status === 'running'}
+                    onClick={() => onRunSmartSelfTest('short')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <Play className="w-3 h-3" />
+                    Short Test (~2분)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') || smartSelfTestState?.status === 'running'}
+                    onClick={() => onRunSmartSelfTest('extended')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <Play className="w-3 h-3" />
+                    Extended Test
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') || smartSelfTestState?.status === 'running'}
+                    onClick={() => onRunSmartSelfTest('conveyance')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    Conveyance
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-')}
+                    onClick={() => onRunSmartSelfTest('abort')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <Square className="w-3 h-3" />
+                    Abort
+                  </button>
+                  {onPollSmartSelfTest && (
+                    <button
+                      type="button"
+                      disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-')}
+                      onClick={onPollSmartSelfTest}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title="진행 상태 폴링"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') ? (
+                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  Kernel IOCTL Required — 브라우저 샌드박스 또는 비물리 파일 타겟에서는 ATA SMART Self-Test 실행이 차단됩니다 (Windows 관리자 권한 Tauri 데스크톱 전용).
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono tabular-nums">
+                    <span className="text-slate-700 dark:text-slate-300">
+                      상태: <strong>{smartSelfTestState?.statusText || 'Idle (실행 대기)'}</strong>
+                    </span>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                      {smartSelfTestState ? `${smartSelfTestState.progressPct}%` : '0%'}
+                      {smartSelfTestState?.executionCode !== null && smartSelfTestState?.executionCode !== undefined
+                        ? ` (0x${smartSelfTestState.executionCode.toString(16).padStart(2, '0').toUpperCase()})`
+                        : ''}
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${
+                        smartSelfTestState?.status === 'aborted'
+                          ? 'bg-red-500'
+                          : smartSelfTestState?.status === 'completed'
+                          ? 'bg-emerald-500'
+                          : 'bg-indigo-500'
+                      }`}
+                      style={{ width: `${smartSelfTestState?.progressPct || 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {!hasSmartData ? (
             <div className="p-5 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/50 text-center space-y-1.5">
               <div className="flex items-center justify-center gap-1.5 text-slate-700 dark:text-slate-300 font-bold text-xs">
@@ -588,16 +721,21 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                     <th className="px-2.5 py-2 text-center">최악값</th>
                     <th className="px-2.5 py-2 text-center">임계치</th>
                     <th className="px-2.5 py-2 font-mono">원시 데이터 (Raw)</th>
+                    <th className="px-2.5 py-2 font-mono">Raw Hex (48-bit)</th>
                     <th className="px-2.5 py-2 text-center">상태</th>
                     <th className="px-2.5 py-2 rounded-r">설명 및 임계치 진단</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-[11px]">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-[11px] tabular-nums">
                   {drive.smartAttributes.map((attr) => {
                     const breachInfo = checkThresholdBreach(attr);
                     const isBreached = breachInfo.isBreached;
                     const isCrit = attr.status === 'critical' || isBreached;
                     const isWarn = attr.status === 'warning' && !isBreached;
+                    const rawNumeric = Number(String(attr.raw).replace(/[^0-9]/g, ''));
+                    const computedRawHex = attr.rawHex || (!Number.isNaN(rawNumeric)
+                      ? `0x${rawNumeric.toString(16).padStart(12, '0').toUpperCase()}`
+                      : '0x000000000000');
 
                     return (
                       <tr
@@ -653,6 +791,9 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                         </td>
                         <td className="px-2.5 py-2 font-semibold text-slate-800 dark:text-slate-200">
                           {attr.raw}
+                        </td>
+                        <td className="px-2.5 py-2 font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                          {computedRawHex}
                         </td>
                         <td className="px-2.5 py-2 text-center font-sans">
                           {isBreached ? (

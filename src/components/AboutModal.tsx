@@ -207,7 +207,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({
               </li>
               <li className="flex items-start gap-1.5">
                 <span className="text-emerald-500 font-bold">3.</span>
-                <span><strong>상표권 중립성(Trademark Neutrality)</strong>: 타사 상용 소프트웨어의 고유 등록상표를 침해하지 않는 독자적인 브랜드명(DiskSentinel Pro)을 사용합니다.</span>
+                <span><strong>상표권 중립성(Trademark Neutrality)</strong>: 타사 상용 소프트웨어의 고유 등록상표를 침해하지 않는 독자적인 브랜드명(Disk Bad Sector Scanner)을 사용합니다.</span>
               </li>
               <li className="flex items-start gap-1.5">
                 <span className="text-emerald-500 font-bold">4.</span>

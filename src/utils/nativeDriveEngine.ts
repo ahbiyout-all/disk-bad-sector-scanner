@@ -12,7 +12,12 @@ import {
   DriveSmartAttribute,
   SpecializedScanMethodId,
   DiskHardwareSpecs,
-  DiskVolumePartition
+  DiskVolumePartition,
+  SurfaceTestType,
+  ResponseBucketCounts,
+  SectorState,
+  SmartSelfTestType,
+  SmartSelfTestState
 } from '../types';
 
 export interface NativeSystemStorageInfo {
@@ -53,6 +58,8 @@ export const KNOWN_USB_STORAGE_VENDORS: Record<number, { name: string; controlle
 };
 
 const OPFS_PROBE_FILENAME = '__disksentinel_io_probe__.bin';
+const OPFS_ERASE_TEST_FILENAME = '__disksentinel_erase_test__.bin';
+const SAFE_ERASE_FILE_BYTES = 4 * 1024 * 1024; // 4 MB safe writable test surface
 
 export function isTauriDesktopRuntime(): boolean {
   return typeof window !== 'undefined' && typeof (window as any).__TAURI__?.core?.invoke === 'function';
@@ -334,6 +341,7 @@ export async function queryTauriPhysicalDrives(): Promise<DiskDrive[]> {
               worst: Number(sa.worst),
               threshold: Number(sa.threshold),
               raw: String(sa.raw ?? '0'),
+              rawHex: typeof sa.rawHex === 'string' ? sa.rawHex : undefined,
               status: sa.status === 'critical' || sa.status === 'warning' ? sa.status : 'good',
               description: sa.description || 'Win32 커널 SMART IOCTL 직접 판독 속성'
             }))
@@ -1821,4 +1829,466 @@ export async function getStorageDeviceRecognitionSummary(): Promise<StorageRecog
     busTypesDetected: busTypes,
     driveList
   };
+}
+
+/**
+ * Creates a clean 7-bucket HDDScan latency histogram map
+ */
+export function createEmptyResponseBuckets(): ResponseBucketCounts {
+  return {
+    lt5ms: 0,
+    lt20ms: 0,
+    lt50ms: 0,
+    lt150ms: 0,
+    lt500ms: 0,
+    gt500ms: 0,
+    bad: 0
+  };
+}
+
+/**
+ * Classifies a probed sector block into the classic 7-tier HDDScan response bucket
+ */
+export function classifyResponseBucket(status: SectorState, latencyMs: number): keyof ResponseBucketCounts {
+  if (status === 'bad' || latencyMs < 0) return 'bad';
+  if (latencyMs < 5) return 'lt5ms';
+  if (latencyMs < 20) return 'lt20ms';
+  if (latencyMs < 50) return 'lt50ms';
+  if (latencyMs < 150) return 'lt150ms';
+  if (latencyMs < 500) return 'lt500ms';
+  return 'gt500ms';
+}
+
+/**
+ * Generates ordered LBA block indices for Sequential (Verify/Read/Erase) or Butterfly Read
+ */
+export function buildScanBlockSequence(
+  totalBlocks: number,
+  startBlock: number,
+  endBlock: number,
+  scanMode: 'quick' | 'full',
+  testType: SurfaceTestType
+): { blockIndex: number; passSide: 'outer' | 'inner' | 'sequential' }[] {
+  if (totalBlocks <= 0) return [];
+  const loBound = Math.max(0, Math.min(totalBlocks - 1, Math.floor(startBlock)));
+  const hiBound = Math.max(loBound, Math.min(totalBlocks - 1, Math.floor(endBlock)));
+  const stride = scanMode === 'quick' ? 4 : 1;
+
+  const indices: number[] = [];
+  for (let i = loBound; i <= hiBound; i += stride) {
+    indices.push(i);
+  }
+  if (indices.length === 0) {
+    indices.push(loBound);
+  }
+
+  if (testType !== 'butterfly') {
+    return indices.map(blockIndex => ({ blockIndex, passSide: 'sequential' as const }));
+  }
+
+  // Butterfly Read alternates strictly between outer edge and inner edge
+  const sequence: { blockIndex: number; passSide: 'outer' | 'inner' | 'sequential' }[] = [];
+  let left = 0;
+  let right = indices.length - 1;
+  while (left <= right) {
+    sequence.push({ blockIndex: indices[left], passSide: 'outer' });
+    if (left !== right) {
+      sequence.push({ blockIndex: indices[right], passSide: 'inner' });
+    }
+    left++;
+    right--;
+  }
+  return sequence;
+}
+
+/**
+ * Safety guard enforcing that destructive Erase probes ONLY execute on isolated OPFS sandbox
+ * or explicitly user-authorized writable test files — NEVER raw OS PhysicalDriveN hardware.
+ */
+export function isSafeEraseTarget(drive: DiskDrive): {
+  allowed: boolean;
+  targetLabel: string;
+  reason?: string;
+} {
+  if (drive.id.startsWith('drive-tauri-physical-')) {
+    return {
+      allowed: false,
+      targetLabel: drive.hardwareSpecs?.devicePhysicalPath || drive.model,
+      reason: '시스템/물리 디스크 보호: 데이터 손실 방지를 위해 Raw PhysicalDrive에는 Erase 쓰기가 차단됩니다. OPFS 샌드박스 또는 전용 테스트 파일을 선택하세요.'
+    };
+  }
+
+  if (
+    drive.attachedFileHandle &&
+    drive.attachedFileHandle.kind === 'file' &&
+    typeof drive.attachedFileHandle.createWritable === 'function'
+  ) {
+    return {
+      allowed: true,
+      targetLabel: `FileHandle://${drive.model}`
+    };
+  }
+
+  if (drive.id === 'drive-native-host-real' && typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+    return {
+      allowed: true,
+      targetLabel: `OPFS://${OPFS_ERASE_TEST_FILENAME}`
+    };
+  }
+
+  return {
+    allowed: false,
+    targetLabel: drive.model,
+    reason: '선택된 대상은 읽기 전용 핸들(HTML5 File / WebUSB)입니다. OPFS 샌드박스 또는 쓰기 가능한 테스트 파일을 준비해 주세요.'
+  };
+}
+
+/**
+ * Provisions a dedicated 4MB writable test file (File System Access writable handle when permitted,
+ * otherwise isolated OPFS test file) for real measured Erase tests.
+ */
+export async function provisionSafeEraseTargetFile(): Promise<{
+  drive: DiskDrive;
+  createdType: 'file_handle' | 'opfs';
+}> {
+  const isCrossOriginIframe = (() => {
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true;
+    }
+  })();
+
+  const payload = new Uint8Array(SAFE_ERASE_FILE_BYTES);
+  for (let i = 0; i < payload.length; i += 4096) {
+    payload[i] = (i >> 12) & 0xff;
+  }
+
+  if (!isCrossOriginIframe && typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+    try {
+      // @ts-expect-error - File System Access API
+      const fileHandle = await window.showSaveFilePicker({
+        suggestedName: 'DiskSentinel_EraseTest_4MB.bin',
+        types: [
+          {
+            description: 'DiskSentinel Erase Test Image (.bin)',
+            accept: { 'application/octet-stream': ['.bin'] }
+          }
+        ]
+      });
+      const writable = await fileHandle.createWritable();
+      await writable.write(payload);
+      await writable.close();
+      const file = await fileHandle.getFile();
+      const baseDrive = await createNativeDriveFromFile(file);
+      return {
+        createdType: 'file_handle',
+        drive: {
+          ...baseDrive,
+          id: `drive-erase-writable-${Date.now()}`,
+          name: `🧪 [쓰기 테스트 파일] ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`,
+          attachedFileHandle: fileHandle,
+          fileSystem: 'Browser File API'
+        }
+      };
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        throw new Error('테스트 파일 생성이 취소되었습니다.');
+      }
+      // Fall through to OPFS sandbox test file creation
+    }
+  }
+
+  if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) {
+    throw new Error('이 브라우저는 쓰기 가능한 OPFS/파일 핸들을 지원하지 않습니다.');
+  }
+
+  const root = await navigator.storage.getDirectory();
+  const fh = await root.getFileHandle(OPFS_ERASE_TEST_FILENAME, { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(payload);
+  await writable.close();
+  const opfsFile = await fh.getFile();
+
+  const opfsDrive = await createNativeHostDrive();
+  return {
+    createdType: 'opfs',
+    drive: {
+      ...opfsDrive,
+      id: 'drive-native-host-real',
+      attachedFile: opfsFile,
+      attachedFileHandle: fh
+    }
+  };
+}
+
+/**
+ * Executes a single HDDScan Surface Test probe (Verify / Read / Butterfly / Safe Erase)
+ */
+export async function executeHddScanBlockProbe(
+  drive: DiskDrive,
+  methodId: SpecializedScanMethodId,
+  blockIndex: number,
+  totalBlocks: number,
+  testType: SurfaceTestType
+): Promise<{
+  status: 'good' | 'normal' | 'slow' | 'critical' | 'bad';
+  latencyMs: number;
+  throughputMbSec: number;
+  errorCode?: string;
+  checksum?: string;
+  zoneTag?: 'Outer Track' | 'Middle Zone' | 'Inner Track' | 'MBR/FAT Area' | 'NAND Die Ch1' | 'NAND Die Ch2' | 'UASP Stream';
+}> {
+  if (testType === 'erase') {
+    const guard = isSafeEraseTarget(drive);
+    if (!guard.allowed) {
+      return {
+        status: 'bad',
+        latencyMs: -1,
+        throughputMbSec: 0,
+        errorCode: 'ERASE_BLOCKED_UNSAFE_TARGET'
+      };
+    }
+
+    const writeChunkBytes = 64 * 1024;
+    const fillByte = blockIndex % 2 === 0 ? 0x00 : 0x55;
+    const writeBuf = new Uint8Array(writeChunkBytes);
+    writeBuf.fill(fillByte);
+
+    try {
+      let fh: any = null;
+      if (
+        drive.attachedFileHandle &&
+        drive.attachedFileHandle.kind === 'file' &&
+        typeof drive.attachedFileHandle.createWritable === 'function'
+      ) {
+        fh = drive.attachedFileHandle;
+      } else if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+        const root = await navigator.storage.getDirectory();
+        fh = await root.getFileHandle(OPFS_ERASE_TEST_FILENAME, { create: true });
+      }
+
+      if (!fh) {
+        return {
+          status: 'bad',
+          latencyMs: -1,
+          throughputMbSec: 0,
+          errorCode: 'ERASE_HANDLE_UNAVAILABLE'
+        };
+      }
+
+      let currentFile = await fh.getFile();
+      if (currentFile.size < writeChunkBytes) {
+        const seed = new Uint8Array(SAFE_ERASE_FILE_BYTES);
+        const wInit = await fh.createWritable();
+        await wInit.write(seed);
+        await wInit.close();
+        currentFile = await fh.getFile();
+      }
+
+      const maxSlots = Math.max(1, Math.floor(currentFile.size / writeChunkBytes));
+      const writeOffset = (blockIndex % maxSlots) * writeChunkBytes;
+
+      const t0 = performance.now();
+      const writable = await fh.createWritable({ keepExistingData: true });
+      await writable.write({ type: 'write', position: writeOffset, data: writeBuf });
+      await writable.close();
+
+      // Read-back byte pattern verification
+      const updatedFile = await fh.getFile();
+      const verifyBuf = new Uint8Array(
+        await updatedFile.slice(writeOffset, writeOffset + writeChunkBytes).arrayBuffer()
+      );
+      let verified = verifyBuf.byteLength === writeChunkBytes;
+      if (verified) {
+        for (let i = 0; i < verifyBuf.length; i += 256) {
+          if (verifyBuf[i] !== fillByte) {
+            verified = false;
+            break;
+          }
+        }
+      }
+      const t1 = performance.now();
+
+      const latencyMs = Math.max(0.05, Number((t1 - t0).toFixed(3)));
+      const throughputMbSec = Number(((writeChunkBytes / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1));
+
+      if (!verified) {
+        return {
+          status: 'bad',
+          latencyMs,
+          throughputMbSec: 0,
+          errorCode: 'ERASE_VERIFY_MISMATCH'
+        };
+      }
+
+      return {
+        status: latencyMs >= 150 ? 'critical' : latencyMs >= 50 ? 'slow' : latencyMs >= 20 ? 'normal' : 'good',
+        latencyMs,
+        throughputMbSec,
+        checksum: `ERASE_0x${fillByte.toString(16).padStart(2, '0').toUpperCase()}_OK`
+      };
+    } catch (err: any) {
+      return {
+        status: 'bad',
+        latencyMs: -1,
+        throughputMbSec: 0,
+        errorCode: `ERASE_IO_ERROR: ${err?.message || 'Write failed'}`
+      };
+    }
+  }
+
+  if (testType === 'verify' && drive.id.startsWith('drive-tauri-physical-')) {
+    const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+    const startLba = (BigInt(blockIndex) * BigInt(Math.max(1, drive.totalSectors))) / BigInt(Math.max(1, totalBlocks));
+    const secBytes = drive.hardwareSpecs?.logicalSectorSize || 512;
+
+    const verifyRes = await queryTauriVerifyBlock(driveIndex, Number(startLba), 128);
+    if (verifyRes) {
+      const latencyMs = Number(verifyRes.latencyMs ?? 0);
+      const status: 'good' | 'normal' | 'slow' | 'critical' | 'bad' =
+        verifyRes.statusCode === 0 ? (latencyMs < 10 ? 'good' : 'normal') :
+        verifyRes.statusCode === 1 ? 'normal' :
+        verifyRes.statusCode === 2 ? 'slow' :
+        verifyRes.statusCode === 3 ? 'critical' : 'bad';
+      const throughputMbSec = latencyMs > 0
+        ? Number((((128 * secBytes) / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1))
+        : 0;
+
+      return {
+        status,
+        latencyMs,
+        throughputMbSec,
+        errorCode: verifyRes.statusCode >= 4 ? `VERIFY_WIN32_${verifyRes.win32ErrorCode}` : undefined,
+        checksum: status !== 'bad' ? 'IOCTL_DISK_VERIFY_OK' : undefined
+      };
+    }
+  }
+
+  // Read / Butterfly / Fallback Verify via real physical or file slice engine
+  return executeRealPhysicalSectorProbe(drive, methodId, blockIndex, totalBlocks);
+}
+
+/**
+ * Hardware Surface Verify via Tauri Core IPC (`IOCTL_DISK_VERIFY` + Read fallback)
+ */
+export async function queryTauriVerifyBlock(driveIndex: number, lba: number, sectorCount: number): Promise<any | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    return await (window as any).__TAURI__.core.invoke('verify_lba_block', { driveIndex, lba, sectorCount });
+  } catch (err) {
+    console.warn('Tauri verify_lba_block failed:', err);
+    return null;
+  }
+}
+
+/**
+ * S.M.A.R.T. Off-line / Captive Self-Test execution via Tauri Core IPC (`SMART_SEND_DRIVE_COMMAND`)
+ */
+export async function queryTauriRunSmartSelfTest(
+  driveIndex: number,
+  testType: SmartSelfTestType | 'abort'
+): Promise<{
+  supported: boolean;
+  accepted: boolean;
+  statusText: string;
+  executionCode?: number;
+}> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      supported: false,
+      accepted: false,
+      statusText: '웹 브라우저 보안 샌드박스에서는 커널 SMART Self-Test 패스스루 명령을 전송할 수 없습니다. Windows 데스크톱(Tauri) 환경에서 실행하세요.'
+    };
+  }
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('run_smart_self_test', { driveIndex, testType });
+    return {
+      supported: Boolean(res?.supported),
+      accepted: Boolean(res?.accepted),
+      statusText: String(res?.statusText || 'Unknown SMART response'),
+      executionCode: typeof res?.executionCode === 'number' ? res.executionCode : undefined
+    };
+  } catch (err: any) {
+    return {
+      supported: false,
+      accepted: false,
+      statusText: `SMART Self-Test 호출 실패: ${err?.message || 'IOCTL error'}`
+    };
+  }
+}
+
+/**
+ * S.M.A.R.T. Self-Test progress polling via Tauri Core IPC
+ */
+export async function queryTauriSmartSelfTestStatus(
+  driveIndex: number,
+  driveId: string,
+  testType: SmartSelfTestType | null
+): Promise<SmartSelfTestState> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      driveId,
+      supported: false,
+      status: 'unsupported',
+      testType,
+      progressPct: 0,
+      executionCode: null,
+      statusText: '브라우저 샌드박스에서는 커널 S.M.A.R.T. Self-Test를 조회할 수 없습니다.',
+      reason: 'Tauri Windows 관리자 권한 필요'
+    };
+  }
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('get_smart_self_test_status', { driveIndex });
+    const supported = Boolean(res?.supported);
+    const inProgress = Boolean(res?.inProgress);
+    const pct = typeof res?.progressPct === 'number' ? res.progressPct : 0;
+    const code = typeof res?.executionCode === 'number' ? res.executionCode : null;
+
+    let status: SmartSelfTestState['status'] = 'idle';
+    if (!supported) status = 'unsupported';
+    else if (inProgress) status = 'running';
+    else if (code === 0x00) status = 'completed';
+    else if (code !== null && code >= 0x10 && code <= 0x80) status = 'aborted';
+
+    return {
+      driveId,
+      supported,
+      status,
+      testType,
+      progressPct: pct,
+      executionCode: code,
+      statusText: String(res?.statusText || 'Idle'),
+      lastUpdatedAt: Date.now()
+    };
+  } catch (err: any) {
+    return {
+      driveId,
+      supported: false,
+      status: 'unsupported',
+      testType,
+      progressPct: 0,
+      executionCode: null,
+      statusText: `상태 조회 실패: ${err?.message || 'IOCTL Error'}`
+    };
+  }
+}
+
+/**
+ * Polls live OS hardware drive temperatures via Tauri Core IPC
+ */
+export async function queryTauriPollTemperatures(): Promise<{ driveIndex: number; temperatureC: number | null }[]> {
+  if (!isTauriDesktopRuntime()) return [];
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('poll_drive_temperatures');
+    if (Array.isArray(res)) {
+      return res.map((r: any) => ({
+        driveIndex: Number(r.driveIndex),
+        temperatureC: typeof r.temperatureC === 'number' && r.temperatureC > 0 ? Number(r.temperatureC) : null
+      }));
+    }
+    return [];
+  } catch {
+    return [];
+  }
 }

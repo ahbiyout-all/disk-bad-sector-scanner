@@ -349,6 +349,7 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
                         "worst": e.worst_value,
                         "threshold": e.threshold_value,
                         "raw": format!("{}", e.raw_value),
+                        "rawHex": format!("0x{:012X}", e.raw_value & 0xFFFFFFFFFFFF),
                         "status": if e.health_status == 0 { "good" } else if e.health_status == 1 { "warning" } else { "critical" }
                     })
                 }).collect::<Vec<_>>()
@@ -458,17 +459,172 @@ fn run_tray_guardian_check(poll_interval_sec: u32, temp_threshold_c: u32, alert_
     }))
 }
 
+#[tauri::command]
+fn verify_lba_block(drive_index: u32, lba: u64, sector_count: u64) -> Result<serde_json::Value, String> {
+    let mut sector_size: u32 = 512;
+    let handle = unsafe { DS_OpenDriveDirect(drive_index, &mut sector_size) };
+    if handle.is_null() {
+        return Err(format!("Failed to open physical drive {}", drive_index));
+    }
+
+    let mut total_latency_ms = 0.0;
+    let mut final_result: DSBlockResult = unsafe { std::mem::zeroed() };
+    let mut remaining = sector_count.max(1);
+    let mut current_lba = lba;
+    let mut all_ok = true;
+
+    while remaining > 0 {
+        let chunk = remaining.min(u32::MAX as u64) as u32;
+        let mut chunk_res: DSBlockResult = unsafe { std::mem::zeroed() };
+        let ok = unsafe { DS_VerifyLbaBlock(handle, current_lba, chunk, &mut chunk_res) };
+        total_latency_ms += chunk_res.latency_ms;
+        final_result = chunk_res;
+        if !ok {
+            all_ok = false;
+            break;
+        }
+        current_lba = current_lba.saturating_add(chunk as u64);
+        remaining -= chunk as u64;
+    }
+
+    unsafe { DS_CloseDrive(handle) };
+
+    if !all_ok {
+        return Err("Verify operation returned failure".to_string());
+    }
+
+    Ok(serde_json::json!({
+        "startLba": lba,
+        "sectorCount": sector_count,
+        "latencyMs": total_latency_ms,
+        "statusCode": final_result.status_code,
+        "win32ErrorCode": final_result.win32_error_code
+    }))
+}
+
+#[tauri::command]
+fn run_smart_self_test(drive_index: u32, test_type: String) -> Result<serde_json::Value, String> {
+    let mut sector_size: u32 = 512;
+    let handle = unsafe { DS_OpenDriveDirect(drive_index, &mut sector_size) };
+    if handle.is_null() {
+        return Err(format!("Failed to open physical drive {}", drive_index));
+    }
+
+    let code: u32 = match test_type.as_str() {
+        "short" => 1,
+        "extended" => 2,
+        "conveyance" => 3,
+        "abort" => 127,
+        _ => 1,
+    };
+
+    let ok = unsafe { DS_StartSmartSelfTest(handle, code) };
+    unsafe { DS_CloseDrive(handle) };
+
+    Ok(serde_json::json!({
+        "accepted": ok,
+        "testType": test_type,
+        "code": code
+    }))
+}
+
+#[tauri::command]
+fn get_smart_self_test_status(drive_index: u32) -> Result<serde_json::Value, String> {
+    let mut sector_size: u32 = 512;
+    let handle = unsafe { DS_OpenDriveDirect(drive_index, &mut sector_size) };
+    if handle.is_null() {
+        return Err(format!("Failed to open physical drive {}", drive_index));
+    }
+
+    let mut exec_code: u32 = 0;
+    let mut progress_pct: u32 = 0;
+    let ok = unsafe { DS_GetSmartSelfTestStatus(handle, &mut exec_code, &mut progress_pct) };
+    unsafe { DS_CloseDrive(handle) };
+
+    if !ok {
+        return Err("S.M.A.R.T. self-test status unsupported on this controller".to_string());
+    }
+
+    let nibble = (exec_code >> 4) & 0x0F;
+    let status = if nibble == 0x0F {
+        "running"
+    } else if nibble == 0x00 {
+        "completed"
+    } else if nibble == 0x01 {
+        "aborted"
+    } else {
+        "failed"
+    };
+
+    Ok(serde_json::json!({
+        "executionCode": exec_code,
+        "progressPct": progress_pct,
+        "status": status
+    }))
+}
+
+#[tauri::command]
+fn poll_drive_temperatures() -> Result<Vec<serde_json::Value>, String> {
+    let mut temps = Vec::new();
+    for i in 0..32u32 {
+        let mut sector_size: u32 = 512;
+        let handle = unsafe { DS_OpenDriveDirect(i, &mut sector_size) };
+        if handle.is_null() {
+            continue;
+        }
+        let mut detail: DSPhysicalDriveDetail = unsafe { std::mem::zeroed() };
+        unsafe { DS_GetDriveDetails(handle, &mut detail) };
+        let mut temp_c: Option<u32> = if detail.temperature_celsius > 0 && detail.temperature_celsius < 150 {
+            Some(detail.temperature_celsius)
+        } else {
+            None
+        };
+
+        if temp_c.is_none() {
+            let mut nvme_log: DSNvmeHealthLog = unsafe { std::mem::zeroed() };
+            if unsafe { DS_GetNvmeDeepTelemetry(handle, &mut nvme_log) } && nvme_log.temperature_celsius > 0 && nvme_log.temperature_celsius < 150 {
+                temp_c = Some(nvme_log.temperature_celsius as u32);
+            }
+        }
+
+        if temp_c.is_none() {
+            let mut entries: [DSSmartEntry; 32] = unsafe { std::mem::zeroed() };
+            let count = unsafe { DS_GetSmartTelemetry(handle, entries.as_mut_ptr(), 32) };
+            for j in 0..(count.max(0) as usize) {
+                if entries[j].attribute_id == 0xC2 || entries[j].attribute_id == 0xBE {
+                    let t = (entries[j].raw_value & 0xFF) as u32;
+                    if t > 0 && t < 150 {
+                        temp_c = Some(t);
+                        break;
+                    }
+                }
+            }
+        }
+
+        unsafe { DS_CloseDrive(handle) };
+        temps.push(serde_json::json!({
+            "driveIndex": i,
+            "temperatureC": temp_c
+        }));
+    }
+    Ok(temps)
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_native_engine_version,
             scan_lba_block,
+            verify_lba_block,
             get_physical_drives,
             read_raw_sector,
             scan_multiple_drives_parallel,
             attempt_sector_repair,
             execute_bit_carving,
-            run_tray_guardian_check
+            run_tray_guardian_check,
+            run_smart_self_test,
+            get_smart_self_test_status,
+            poll_drive_temperatures
         ])
         .run(tauri::generate_context!())
         .expect("error while running DiskSentinel Pro tauri application");

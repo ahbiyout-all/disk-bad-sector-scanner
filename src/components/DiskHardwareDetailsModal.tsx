@@ -693,7 +693,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
         {/* Modal Footer */}
         <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 flex items-center justify-between text-xs">
           <span className="text-slate-500 dark:text-slate-400">
-            엔진: DiskSentinel Pro v4.6.0 Hardware Probe Engine
+            엔진: Disk Bad Sector Scanner v4.6.0 Hardware Probe Engine
           </span>
           <button
             onClick={onClose}

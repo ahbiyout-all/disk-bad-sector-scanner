@@ -1,9 +1,9 @@
-# DiskSentinel Pro - Project Implementation Roadmap (ROADMAP.md)
+# Disk Bad Sector Scanner - Project Implementation Roadmap (ROADMAP.md)
 
-- **Application**: DiskSentinel Pro (디스크 배드섹터 정밀 검사기)
+- **Application**: Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기)
 - **Current Version**: v4.6.0
 - **Author**: AhBiYout (GitHub: [AhBiYout-all](https://github.com/AhBiYout-all))
-- **Affiliation**: CISNet (http://www.cisnet.co.kr)
+- **Affiliation**: CISNet (https://www.cisnet.co.kr)
 - **Official Blog**: https://ahbiyoutvibe.blogspot.com/
 
 ---
@@ -108,24 +108,27 @@
 
 ---
 
-### [TASK-BUILD-05] Windows Batch & CI/CD Pipeline Automation
-- **Description**: Windows CRLF 규격 배치 스크립트(`build.bat`, `build-dll.bat`, `git-push-auto.bat`) 및 Inno Setup 인스톨러 빌드 자동화.
+### [TASK-BUILD-05] Windows Batch & CI/CD Pipeline Automation (Node 22/24 + Installer-Only Release)
+- **Description**: Windows CRLF 규격 배치 스크립트(`build.bat`, `build-dll.bat`, `git-push-auto.bat`) 및 Inno Setup Unpacked 인스톨러 + Node.js 22/24 GitHub Actions 빌드 자동화.
 - **Priority**: P1
-- **Dependencies**: Inno Setup (`ISCC.exe`), MinGW / MSVC
+- **Dependencies**: Inno Setup (`ISCC.exe`), MinGW / MSVC, Node.js 22 LTS / 24
 - **Target Files**:
   - `build.bat`
   - `build-dll.bat`
   - `git-push-auto.bat`
   - `setup.iss`
-  - `scripts/bundle-essential-release.mjs`
+  - `scripts/package-cross-platform.mjs`
+  - `.github/workflows/ci.yml`
+  - `.github/workflows/release.yml`
 - **Implementation Plan**:
-  1. `build.bat`에서 `build-dll.bat --no-pause` 호출 연계.
-  2. `bundle:release`를 통해 `github-release/` 및 `.github-release/` 핵심 소스 자동 미러링.
-  3. Inno Setup 전처리기 매크로 연동.
+  1. `build.bat`에서 `package.json` 버전 동적 파싱 및 `build-dll.bat --no-pause` 호출 연계.
+  2. `package-cross-platform.mjs`를 통해 `dist/` 내 불필요한 문서·포터블 파일 제거 감사 및 Unpacked 스테이징 수행.
+  3. GitHub Actions를 Node.js 22/24 (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`)로 전환하고 GitHub Releases에 오직 Windows 인스톨러(`.exe`)만 첨부.
+  4. Inno Setup 전처리기 매크로(`{#AppVersion}`), 강제종료·기존설치 분기·라이선스·바탕화면 바로가기·이중 방화벽 규칙 연동.
 - **Acceptance Criteria**:
-  - 배치 스크립트 무결성 보장 및 무인 빌드 파이프라인 구축.
+  - 배치 스크립트 무결성 보장, Node.js 20 deprecation 경고 0건, 인스톨러 내 불필요/포터블 파일 0건.
 - **Validation**:
-  - `node scripts/bundle-essential-release.mjs` 실행 통과.
+  - `node scripts/package-cross-platform.mjs` 실행 통과.
 - **Current Status**: `VERIFIED`
 - **Remaining Blockers**: None
 

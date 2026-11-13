@@ -52,7 +52,7 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
             </div>
             <div>
               <div className="text-[10px] font-mono uppercase tracking-wider opacity-90">
-                DiskSentinel Pro Scan Completed
+                Disk Bad Sector Scanner Scan Completed
               </div>
               <h2 className="text-base sm:text-lg font-extrabold tracking-tight">
                 {hasBadSectors ? '⚠️ 배드섹터 검출 경고' : '🎉 디스크 표면 검사 정상 완료'}

@@ -1,5 +1,5 @@
 # ===================================================================
-# DiskSentinel Pro - Comprehensive Git Ignore Specification
+# Disk Bad Sector Scanner - Comprehensive Git Ignore Specification
 # Repository: https://github.com/AhBiYout-all/disk-bad-sector-scanner
 # Strictly keeps only essential source code, configurations, and docs.
 # All temporary, generated, binary, IDE, and build artifacts are excluded.
@@ -161,6 +161,8 @@ $RECYCLE.BIN/
 .eslintcache
 *.tsbuildinfo
 .aistudio/
+public/assets/aistudio/
+RELEASE_NOTES.md
 
 # -------------------------------------------------------------------
 # 9. Local Deployment & Push Automation Scripts (User Excluded)

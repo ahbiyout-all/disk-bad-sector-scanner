@@ -100,7 +100,7 @@ export function createScanRecordFromSession(
  */
 export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[] = []) {
   const metadataRows = [
-    ['=== DiskSentinel Pro 디스크 표면 무결성 진단 보고서 ==='],
+    ['=== Disk Bad Sector Scanner 디스크 표면 무결성 진단 보고서 ==='],
     ['보고서 ID (Report ID)', record.id],
     ['검사 일시 (Scan Date)', record.date],
     ['드라이브 모델 (Drive Model)', `"${record.driveModel}"`],
@@ -212,7 +212,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
   // Header Title
   ctx.fillStyle = '#FFFFFF';
   ctx.font = 'bold 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif';
-  ctx.fillText('DiskSentinel Pro - 디스크 표면 정밀 진단 보고서', 50, 60);
+  ctx.fillText('Disk Bad Sector Scanner - 디스크 표면 정밀 진단 보고서', 50, 60);
 
   ctx.fillStyle = '#A5B4FC';
   ctx.font = '600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", monospace';
@@ -220,7 +220,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
 
   ctx.fillStyle = '#94A3B8';
   ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText('엔진: DiskSentinel Pro v4.6.0 Native Core | CISNet (AhBiYout)', 50, 115);
+  ctx.fillText('엔진: Disk Bad Sector Scanner v4.6.0 Native Core | CISNet (AhBiYout)', 50, 115);
 
   // Certificate ID badge in header
   ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
@@ -502,7 +502,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
 
   ctx.fillStyle = '#64748B';
   ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif';
-  ctx.fillText('공식 발급 엔진: DiskSentinel Pro Native Core | 소속: CISNet (https://www.cisnet.co.kr) | 개발자: AhBiYout (GitHub: AhBiYout-all)', 50, footerY + 25);
+  ctx.fillText('공식 발급 엔진: Disk Bad Sector Scanner Native Core | 소속: CISNet (https://www.cisnet.co.kr) | 개발자: AhBiYout (GitHub: AhBiYout-all)', 50, footerY + 25);
 
   ctx.fillStyle = '#94A3B8';
   ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif';

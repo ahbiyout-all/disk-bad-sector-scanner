@@ -1,7 +1,7 @@
 [package]
 name = "disksentinel-pro-app"
 version = "4.6.0"
-description = "DiskSentinel Pro Desktop Native Application"
+description = "Disk Bad Sector Scanner Desktop Native Application"
 authors = ["AhBiYout <https://github.com/AhBiYout-all>"]
 license = "Apache-2.0"
 edition = "2021"

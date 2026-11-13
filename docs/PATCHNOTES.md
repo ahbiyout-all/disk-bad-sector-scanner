@@ -1,4 +1,4 @@
-# DiskSentinel Pro (디스크 배드섹터 검사기) - Patch Notes & Versions
+# Disk Bad Sector Scanner (디스크 배드섹터 검사기) - Patch Notes & Versions
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (MAJOR.MINOR.PATCH).
 
@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file. This projec
 
 ## [v4.6.0] - 2026-11-13
 ### Added
+- **공식 앱 브랜드 통합 (`Disk Bad Sector Scanner`) 및 예측 장애 분석(Z-Score)**:
+  - 앱 타이틀, Tauri/네이티브 런처(`DiskBadSectorScanner.exe`), 인스톨러(`DiskBadSectorScanner_Setup_v4.6.0.exe`), GitHub 저장소(`disk-bad-sector-scanner`) 메타데이터 전면 통일.
+  - D3 레이턴시 분포의 Z-Score 및 연속 물리 구간 지연 임계 초과를 감지해 사전 열화 경고(`Degradation Warning`)를 로깅하는 예측 장애 분석 엔진 탑재.
 - **D3.js 실시간 섹터별 읽기 속도 및 I/O 레이턴시 분포 히스토그램 (`LatencyHistogramDashboard.tsx`)**:
   - 실시간 표면 검사 I/O 레이턴시(ms) 및 읽기 속도(MB/s) 분포를 D3 기반 SVG 히스토그램(로그 티어 / D3 균등 분포, Y축 로그/선형 전환)으로 시각화하여 배드섹터 전조 증상(이중 봉우리·긴 꼬리 왜도)을 즉시 판별.
   - **검사 방식(`Quick` vs `Full`) 연동 통계 정밀도 동적 조정**: `Quick` 모드 선택 시 8-Bin 고속 샘플링 정밀도(0.1ms 단위, 표본 오차한계 `±ms` 산출), `Full` 모드 선택 시 20-Bin 초정밀 전수 분석(0.01ms 단위)을 자동 적용하며 수동 전환 셀렉터 지원.
@@ -14,18 +17,22 @@ All notable changes to this project will be documented in this file. This projec
     - 지연 `>= 100ms` 구간 막대를 고대비 경고 오렌지-레드 그라데이션(`#EF4444` ↔ `#F97316`), 대각선 해치 오버레이, `#C2410C` 테두리 및 음영 배경으로 별도 강조하고 위험(`>500ms`)/오류 구간은 레드(`#DC2626`)로 구분.
     - 차트 상단 헤더에 실시간 `Slow/Critical (≥100ms)` 총 개수 및 비율 카운터(`총 N개 (X.X%)`) 탑재.
   - **구간별 LBA 드릴다운 인스펙터**: 히스토그램 막대 클릭 시 해당 지연 구간의 상세 LBA 목록과 개별 섹터 블록 선택 연동.
+- **Inno Setup 6 폴더 풀림(Unpacked Multi-File) 인스톨러 및 무음 방화벽 고도화 (`setup.iss`, `build.bat`)**:
+  - 고유 AppId(`{8E4C7A21-5B94-4F18-9D32-6A1E9C4F0B7D}`), 실행 중인 프로세스 선행 강제 종료(`taskkill`), 기존 설치 삭제/덮어쓰기 선택 프롬프트, Apache 2.0 라이선스 선언(`docs\LICENSE_KR.md`), 바탕화면 바로가기 기본 체크, 무인 설치(`/SILENT`, `/VERYSILENT`), 기본/버전 표기 방화벽 규칙 자동 등록 완비.
+  - 인스톨러 내 불필요한 문서·포터블 파일·임시 파일(`.zip`, `*.md`, `*.txt`, `.gitignore`, `aistudio/`) 유입 원천 차단.
 - **S.M.A.R.T. 임계치 초과 시각 경고 및 툴팁 (`HealthSummaryDashboard.tsx`)**:
   - 핵심 S.M.A.R.T. 속성이 제조사 한계 임계값(Threshold)을 초과하거나 근접 시 경고 배지, 행 하이라이트, 상세 툴팁으로 즉각 알림.
-- **Windows IOCTL/WMI 네이티브 32-드라이브 다중 탐색 및 장치 인식률 강화**:
-  - `\\.\PhysicalDrive0` ~ `PhysicalDrive31` 전수 조사 및 논리 드라이브 문자/볼륨 매핑을 C++, Rust, Tauri IPC 전 계층에 구현하여 SSD/HDD/NVMe/외장 USB 장치 인식률 극대화.
+- **Windows IOCTL/WMI 네이티브 32-드라이브 다중 탐색 및 JSON 데이터 마이그레이션**:
+  - `\\.\PhysicalDrive0` ~ `PhysicalDrive31` 전수 조사 및 볼륨 매핑 구현, 사용자 설정·검사 이력 JSON 내보내기/복원 추가.
 
 ### Changed & Fixed
+- **GitHub Actions Node.js 22 LTS / 24 전환 및 인스톨러 단일 릴리스 전환**:
+  - Node.js 20 EOL 대응을 위해 CI/CD 워크플로(`ci.yml`, `release.yml`)를 Node.js 22 LTS / 24 (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`)로 업그레이드.
+  - 물리 디스크 직접 진단이 불가능한 모바일(APK/iOS) 및 불필요한 포터블 ZIP 배포를 제거하고 공식 Windows 인스톨러(`.exe`)만 GitHub Releases 에셋으로 업로드하도록 개편.
 - **전 계층 더미/모의 코드 완전 제거 및 실측 API 전면 교체 (Zero-Dummy Refactoring)**:
   - C++, Rust, Tauri, TypeScript 전 계층에 잔존하던 하드코딩 폴백과 난수 시뮬레이션을 제거하고 커널 Direct I/O, IOCTL 및 브라우저 실측 API(OPFS / File System Access / StorageManager)로 전면 교체(미지원 하드웨어 센서는 `N/A` 정직 표기).
 - **심층 코드 감사(Self-Reflection Audit) 및 결함 수정**:
-  - `@types/d3` 엄격 타입 추론(`d3.max<Datum, number>`), TypeScript 리터럴 유니온 내로잉, 비동기 스캔 상태 정합성 보완.
-- **통합 버전 동기화 (`v4.6.0`)**:
-  - `package.json`, `package-lock.json`, `setup.iss`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/src/main.rs`, `src/native/rust/`, `DiskSentinelLauncher.cpp/.cs`, `projectInfo.ts`, `reportGenerator.ts`, `docs/` 일괄 동기화.
+  - `@types/d3` 엄격 타입 추론(`d3.max<Datum, number>`), TypeScript 리터럴 유니온 내로잉, 비동기 스캔 상태 정합성 보완, `.gitignore` + `git-push-auto.bat` 보안 스캔 정비.
 
 ---
 
@@ -40,10 +47,9 @@ All notable changes to this project will be documented in this file. This projec
   - 무인 설치(`/SILENT`, `/VERYSILENT`, `/S`) 실행 시 대화창을 건너뛰고 무인 클린 업그레이드를 자동 수행하도록 지원.
 - **방화벽 규칙 사전 무음 자동 등록 (Dual Firewall Rules)**:
   - 인스톨러 설치 시 기본 앱 이름(`DiskSentinel Pro`)과 버전 표기 앱 이름(`DiskSentinel Pro v4.5.0`)을 윈도우 방화벽 인바운드 허용 규칙으로 백그라운드에서 조용히 등록하고, 삭제 시 깔끔하게 자동 해제.
-- **포터블/인스톨러 배포용 빌드 스크립트 8단계 완전 자동화 (`build.bat`, `package-cross-platform.mjs`)**:
-  - 불필요한 임시 문서 및 포터블 전용 아티팩트가 인스톨러에 혼입되지 않도록 격리 필터링.
-  - 포터블 ZIP 아카이브(`DiskSentinel-Pro-v4.5.0-Portable.zip`) 및 폴더 풀림(Unpacked Multi-File) 인스톨러 패키지 생성.
-  - Windows 내장 `.NET csc.exe` 또는 C++ 컴파일러를 통한 네이티브 런처(`DiskSentinelPro.exe`) 자동 빌드 및 Inno Setup(`ISCC.exe`) 자동 컴파일 지원.
+- **인스톨러 배포 빌드 스크립트 자동화 (`build.bat`, `package-cross-platform.mjs`)**:
+  - 불필요한 임시 문서 및 포터블 전용 아티팩트가 인스톨러에 혼입되지 않도록 격리 필터링 및 폴더 풀림(Unpacked Multi-File) 스테이징 검증.
+  - Windows 내장 `.NET csc.exe` 또는 C++ 컴파일러를 통한 네이티브 런처 자동 빌드 및 Inno Setup(`ISCC.exe`) 자동 컴파일 지원.
 - **창 크기 800x600 고정 및 탭 기반 메뉴 분산 배치**:
   - `src-tauri/tauri.conf.json`에 데스크톱 앱 창 크기를 800x600으로 고정 및 리사이즈 비활성화 설정.
   - 고정된 800x600 공간에 맞추어 상단 메뉴 및 고급 도구(Rayon 병렬 스캔, 트레이 가디언, 비트 카빙, 외장 관리, 제조사 특성)를 직관적인 풀다운 탭 및 퀵 셀렉트 칩(Quick Select Chips)으로 분산 재배치.
@@ -161,5 +167,4 @@ All notable changes to this project will be documented in this file. This projec
 
 ## [v4.0.0] - 2026-10-01
 ### Added
-- **크로스 플랫폼 모바일 진단 연동**: Android (UFS/eMMC/MTP) 및 iOS 맞춤형 모바일 드라이브 정밀 진단 가상 프레임워크 설계.
-- **다크 모드 고도화**: 대시보드 전체 테마 가독성 보정 알고리즘 적용 및 미려한 폰트 대비 자동 튜닝.
+- **다크 모드 고도화 및 데스크톱 스토리지 진단 기반**: 대시보드 전체 테마 가독성 보정 알고리즘 적용 및 고대비 하드웨어 계측 UI 구축. (모바일 APK/iOS 패키징은 OS 샌드박스 제약으로 후속 데스크톱 전용 개편에서 완전 제외됨)

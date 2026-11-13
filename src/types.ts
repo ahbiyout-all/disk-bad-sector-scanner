@@ -57,6 +57,7 @@ export interface DriveSmartAttribute {
   worst: number;
   threshold: number;
   raw: string;
+  rawHex?: string;
   status: 'good' | 'warning' | 'critical';
   description: string;
 }
@@ -237,3 +238,75 @@ export interface SavedScanRecord {
   recommendation: string;
   mediaSpecificDiagnosis?: string;
 }
+
+export type SurfaceTestType = 'verify' | 'read' | 'butterfly' | 'erase';
+
+export interface ResponseBucketCounts {
+  lt5ms: number;
+  lt20ms: number;
+  lt50ms: number;
+  lt150ms: number;
+  lt500ms: number;
+  gt500ms: number;
+  bad: number;
+}
+
+export interface LbaTracePoint {
+  seqIndex: number;
+  blockId: number;
+  lba: number;
+  latencyMs: number;
+  throughputMbSec: number;
+  status: SectorState;
+  passSide?: 'outer' | 'inner' | 'sequential';
+}
+
+export type DiagnosticTaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'aborted';
+
+export interface DiagnosticTask {
+  id: string;
+  driveId: string;
+  driveModel: string;
+  driveType: DiskDrive['type'];
+  testType: SurfaceTestType;
+  scanMode: 'quick' | 'full';
+  methodId: SpecializedScanMethodId;
+  status: DiagnosticTaskStatus;
+  startBlock: number;
+  endBlock: number;
+  stepSequence: { blockIndex: number; passSide: 'outer' | 'inner' | 'sequential' }[];
+  completedSteps: number;
+  currentBlockIndex: number;
+  currentLba: number;
+  speedMultiplier: number;
+  speedMbPerSec: number;
+  elapsedSeconds: number;
+  buckets: ResponseBucketCounts;
+  blocks: SectorBlock[];
+  lbaTrace: LbaTracePoint[];
+  eraseTargetLabel?: string;
+  createdAt: number;
+  finishedAt?: number;
+}
+
+export type SmartSelfTestType = 'short' | 'extended' | 'conveyance';
+
+export interface SmartSelfTestState {
+  driveId: string;
+  supported: boolean;
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'unsupported';
+  testType: SmartSelfTestType | null;
+  progressPct: number;
+  executionCode: number | null;
+  statusText: string;
+  startedAt?: number;
+  lastUpdatedAt?: number;
+  reason?: string;
+}
+
+export interface ThermalHistoryPoint {
+  timestamp: number;
+  label: string;
+  temperatureC: number;
+}
+

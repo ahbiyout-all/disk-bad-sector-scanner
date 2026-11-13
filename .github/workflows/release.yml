@@ -1,4 +1,4 @@
-name: Desktop Installer Build & GitHub Release Packaging
+name: Windows Desktop Installer & GitHub Release
 
 on:
   push:
@@ -8,54 +8,64 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Release Tag (e.g. v4.5.0)'
+        description: 'Release Tag (e.g. v4.6.0)'
         required: true
-        default: 'v4.5.0'
+        default: 'v4.6.0'
 
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  # 1. Frontend Build Job (Runs on Linux for stability)
+  # 1. Frontend Build & Version Sync Job (Ubuntu + Node.js 24)
   build-frontend:
-    name: Build Web Assets (Ubuntu)
+    name: Build Web Runtime (Ubuntu / Node 24)
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.version_info.outputs.tag_name }}
+      clean_version: ${{ steps.version_info.outputs.clean_version }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: 'npm'
 
       - name: Install Dependencies
         run: npm install
 
+      - name: Type Check & Lint
+        run: npm run lint
+
       - name: Determine Version & Generate Release Notes
         id: version_info
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version_tag }}" ]; then
             TAG="${{ inputs.version_tag }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${{ github.ref_name }}"
           else
-            TAG="latest-snapshot"
+            TAG="v${PKG_VERSION}"
           fi
 
-          if [[ ! "$TAG" =~ ^v ]] && [[ "$TAG" != "latest-snapshot" ]]; then
+          if [[ ! "$TAG" =~ ^v ]]; then
             TAG="v$TAG"
           fi
+          CLEAN_VER="${TAG#v}"
 
           echo "tag_name=$TAG" >> $GITHUB_OUTPUT
-          
+          echo "clean_version=$CLEAN_VER" >> $GITHUB_OUTPUT
+
           cat << EOF > RELEASE_NOTES.md
-          ## 🚀 DiskSentinel Pro $TAG Release
+          ## Disk Bad Sector Scanner $TAG Release
 
           [제작자 및 공식 채널 안내]
           - 개발자: AhBiYout
@@ -63,24 +73,27 @@ jobs:
           - 공식 구글 블로그: https://ahbiyoutvibe.blogspot.com/
           - 소속: https://www.cisnet.co.kr
 
-          ### 📦 배포 설치 파일 목록 (Release Assets)
-          1. **Inno Setup Installer (.exe)**: \`DiskSentinel_Setup_$TAG.exe\`
-             - Windows 표준 설치 프로그램 (방화벽 규칙 자동 등록 지원)
-          2. **Desktop Setup Package (.zip)**: \`DiskSentinel-Pro-$TAG-Desktop-Setup-Package.zip\`
-             - Inno Setup 스펙 및 빌드 스크립트 포함 원본 패키지
-          3. **Cross-Platform PC Portable (.zip)**: \`DiskSentinel-Pro-$TAG-PC-Windows-macOS-Linux.zip\`
-             - 무설치 포터블 실행 패키지
+          ### 배포 설치 파일 (Windows Unpacked Installer Only)
+          - **Inno Setup Windows Installer (.exe)**: \`DiskBadSectorScanner_Setup_${TAG}.exe\`
+            - 폴더 풀림(Unpacked Multi-File) 개별 파일 설치 (불필요한 문서/포터블 파일 제외)
+            - 실행 중인 기존 앱 강제 종료 → 기존 설치 감지(삭제/덮어쓰기 선택) → 라이선스 → 설치 → 바탕화면 바로가기 → 자동 실행
+            - Windows 프로그램 추가/제거 정식 등록 & 무인 설치(\`/SILENT\`, \`/VERYSILENT\`) 지원
+            - 기본 이름(\`Disk Bad Sector Scanner\`) 및 버전 표기(\`Disk Bad Sector Scanner ${TAG}\`) 방화벽 규칙 자동 등록
 
-          ### 🛡️ 주요 기능 및 업데이트
-          - Node.js 22 LTS 런타임 최적화 빌드
-          - W3C StorageManager & OPFS Buffer Probe 실측 텔레메트리 연동
-          - 실시간 디스크 배드섹터 검출 및 S.M.A.R.T. 정밀 분석
-          - 파일/볼륨 직접 마운트 검사 및 비트 카빙 데이터 수복
+          ### 주요 기능
+          - HDDScan 스타일 4종 표면 검사 (Verify / Read / Butterfly / Erase) 및 응답 지연 7단계 버킷
+          - D3.js 실시간 I/O 레이턴시 히스토그램 (≥100ms Slow/Critical 오렌지·레드 하이라이트 및 실시간 카운터)
+          - 예측 장애 분석(Z-Score 기반 연속 결함 구간 감시) 및 S.M.A.R.T. Self-Test
+          - JSON 설정/검사 이력 백업 및 복원 마이그레이션
+          - Node.js 22 LTS / 24 기반 GitHub Actions 자동 빌드 파이프라인
           EOF
         shell: bash
 
-      - name: Build Web Application
+      - name: Build Application
         run: npm run build
+
+      - name: Sanitize Dist & Stage Unpacked Layout
+        run: node scripts/package-cross-platform.mjs "${{ steps.version_info.outputs.clean_version }}"
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -90,9 +103,9 @@ jobs:
             dist/
             RELEASE_NOTES.md
 
-  # 2. Desktop Packaging & Release Job (Runs on Windows for Inno Setup)
+  # 2. Windows Installer Build & GitHub Release Job (Installer .exe Only)
   release-desktop:
-    name: Package & Publish Release (Windows)
+    name: Build Installer (.exe) & Publish Release
     needs: build-frontend
     runs-on: windows-latest
     steps:
@@ -104,56 +117,56 @@ jobs:
         with:
           name: web-dist
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Compile Native Components
+      - name: Compile Native Windows Host & Core Engine
         run: |
           if (!(Test-Path "bin/native")) { New-Item -Path "bin/native" -ItemType Directory -Force }
-          
-          echo "--- Compiling C# Launcher ---"
+
+          echo "--- Compiling .NET Native Desktop Host (DiskBadSectorScanner.exe) ---"
           $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (!(Test-Path $csc)) { throw "csc.exe not found at $csc" }
-          & $csc /target:winexe /out:bin\native\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs
-          
-          echo "--- Compiling C++ Core Engine (DLL) ---"
-          # MSVC environment is already set up by the previous action
-          cl.exe /LD /O2 /D DISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native
-          
-          if (!(Test-Path "bin/native/DiskSentinelPro.exe")) { throw "Launcher build failed" }
-          if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { throw "Core engine build failed" }
+          & $csc /nologo /target:winexe /optimize+ /out:bin\native\DiskBadSectorScanner.exe src\native\DiskSentinelLauncher.cs
+
+          echo "--- Compiling C++ Core Engine (DiskSentinelNativeCore.dll) ---"
+          cl.exe /O2 /LD /MD /EHsc /D_WIN32 /DDISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native
+
+          if (!(Test-Path "bin/native/DiskBadSectorScanner.exe")) { throw "Host executable build failed" }
+          if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { throw "Core engine DLL build failed" }
         shell: pwsh
 
-      - name: Package Desktop Assets (ZIP)
+      - name: Audit Unpacked Runtime Staging
         run: |
-          node scripts/package-cross-platform.mjs "${{ needs.build-frontend.outputs.tag_name }}"
+          node scripts/package-cross-platform.mjs "${{ needs.build-frontend.outputs.clean_version }}"
         shell: pwsh
 
-      - name: Compile Inno Setup Installer (EXE)
+      - name: Compile Inno Setup Installer (EXE Only)
         run: |
-          iscc.exe /DAppVersion="${{ needs.build-frontend.outputs.tag_name }}" setup.iss
+          if (!(Test-Path "Output")) { New-Item -Path "Output" -ItemType Directory -Force }
+          iscc.exe /DAppVersion="${{ needs.build-frontend.outputs.clean_version }}" /O"Output" setup.iss
+          Get-ChildItem -Path "Output"
         shell: pwsh
 
-      - name: Publish to GitHub Releases
+      - name: Publish Installer to GitHub Releases
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
           tag_name: ${{ needs.build-frontend.outputs.tag_name }}
-          name: DiskSentinel Pro ${{ needs.build-frontend.outputs.tag_name }}
+          name: Disk Bad Sector Scanner ${{ needs.build-frontend.outputs.tag_name }}
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
           make_latest: true
           files: |
-            dist-packages/*.zip
             Output/*.exe
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

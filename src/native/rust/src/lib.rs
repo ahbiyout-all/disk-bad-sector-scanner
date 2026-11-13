@@ -1781,6 +1781,220 @@ pub unsafe extern "system" fn DS_ExecuteBitCarvingRecovery(
 }
 
 // ---------------------------------------------------------------------------
+// 14. DS_VerifyLbaBlock (Hardware Surface Verification via IOCTL_DISK_VERIFY)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_VerifyLbaBlock(
+    drive_handle: *mut c_void,
+    lba: u64,
+    count: u32,
+    out_result: *mut DSBlockResult,
+) -> bool {
+    if drive_handle.is_null() || out_result.is_null() || count == 0 {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED, GetLastError};
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        const IOCTL_DISK_VERIFY_CODE: u32 = 0x00070014;
+
+        #[repr(C)]
+        struct VerifyInformation {
+            starting_offset: i64,
+            length: u32,
+        }
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        let sec_size = ctx.sector_size.max(512);
+        let verify_info = VerifyInformation {
+            starting_offset: (lba as i64) * (sec_size as i64),
+            length: count.saturating_mul(sec_size),
+        };
+
+        let start = Instant::now();
+        let mut bytes_returned: u32 = 0;
+        let ok = DeviceIoControl(
+            ctx.raw_handle as _,
+            IOCTL_DISK_VERIFY_CODE,
+            &verify_info as *const _ as _,
+            std::mem::size_of::<VerifyInformation>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        );
+        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+        if ok != 0 {
+            let res = &mut *out_result;
+            res.start_lba = lba;
+            res.sector_count = count as u64;
+            res.latency_ms = latency_ms;
+            res.win32_error_code = 0;
+            copy_str_to_fixed_bytes("VERIFY_OK", &mut res.error_mnemonic);
+            res.status_code = match latency_ms {
+                ms if ms < 10.0 => DSSectorStatus::Good as u32,
+                ms if ms < 50.0 => DSSectorStatus::Normal as u32,
+                ms if ms < 150.0 => DSSectorStatus::Slow as u32,
+                _ => DSSectorStatus::Critical as u32,
+            };
+            return true;
+        }
+
+        let err = GetLastError();
+        if err == ERROR_INVALID_FUNCTION || err == ERROR_NOT_SUPPORTED || err == ERROR_ACCESS_DENIED {
+            return DS_ScanLbaBlock(drive_handle, lba, count, out_result);
+        }
+
+        let res = &mut *out_result;
+        res.start_lba = lba;
+        res.sector_count = count as u64;
+        res.latency_ms = latency_ms;
+        res.win32_error_code = err;
+        copy_str_to_fixed_bytes(&format!("VERIFY_ERR_{}", err), &mut res.error_mnemonic);
+        res.status_code = DSSectorStatus::Bad as u32;
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (lba, count, out_result);
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 15. DS_StartSmartSelfTest & DS_GetSmartSelfTestStatus (ATA SMART Self-Test)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_StartSmartSelfTest(
+    drive_handle: *mut c_void,
+    test_type_code: u32,
+) -> bool {
+    if drive_handle.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            SMART_SEND_DRIVE_COMMAND, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
+        scip.cBufferSize = 0;
+        scip.irDriveRegs.bFeaturesReg = 0xD4; // EXECUTE_OFFLINE_DIAGS
+        scip.irDriveRegs.bSectorCountReg = 1;
+        scip.irDriveRegs.bSectorNumberReg = (test_type_code & 0xFF) as u8;
+        scip.irDriveRegs.bCylLowReg = 0x4F;
+        scip.irDriveRegs.bCylHighReg = 0xC2;
+        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bCommandReg = 0xB0; // SMART_CMD
+
+        let mut out_params: SENDCMDOUTPARAMS = std::mem::zeroed();
+        let mut bytes_returned: u32 = 0;
+        DeviceIoControl(
+            ctx.raw_handle as _,
+            SMART_SEND_DRIVE_COMMAND,
+            &scip as *const _ as _,
+            std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+            &mut out_params as *mut _ as _,
+            std::mem::size_of::<SENDCMDOUTPARAMS>() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        ) != 0
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = test_type_code;
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_GetSmartSelfTestStatus(
+    drive_handle: *mut c_void,
+    out_exec_code: *mut u32,
+    out_progress_pct: *mut u32,
+) -> bool {
+    if drive_handle.is_null() || out_exec_code.is_null() || out_progress_pct.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            SMART_RCV_DRIVE_DATA, SMART_READ_ATTRIBUTE_VALUES, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
+        scip.cBufferSize = 512;
+        scip.irDriveRegs.bFeaturesReg = SMART_READ_ATTRIBUTE_VALUES;
+        scip.irDriveRegs.bSectorCountReg = 1;
+        scip.irDriveRegs.bSectorNumberReg = 1;
+        scip.irDriveRegs.bCylLowReg = 0x4F;
+        scip.irDriveRegs.bCylHighReg = 0xC2;
+        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bCommandReg = 0xB0;
+
+        let out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
+        let mut out_buf = vec![0u8; out_size];
+        let mut bytes_returned: u32 = 0;
+
+        if DeviceIoControl(
+            ctx.raw_handle as _,
+            SMART_RCV_DRIVE_DATA,
+            &scip as *const _ as _,
+            std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+            out_buf.as_mut_ptr() as _,
+            out_size as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        ) == 0 || bytes_returned < 528 {
+            return false;
+        }
+
+        let p_out = out_buf.as_ptr() as *const SENDCMDOUTPARAMS;
+        let exec_byte = *(*p_out).bBuffer.as_ptr().add(363);
+        *out_exec_code = exec_byte as u32;
+
+        let status_nibble = (exec_byte >> 4) & 0x0F;
+        if status_nibble == 0x0F {
+            let rem_pct = ((exec_byte & 0x0F) as u32) * 10;
+            *out_progress_pct = if rem_pct <= 100 { 100 - rem_pct } else { 0 };
+        } else if status_nibble == 0x00 {
+            *out_progress_pct = 100;
+        } else {
+            *out_progress_pct = 0;
+        }
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        *out_exec_code = 0;
+        *out_progress_pct = 0;
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helper: Copy string safely to fixed byte array
 // ---------------------------------------------------------------------------
 fn copy_str_to_fixed_bytes(src: &str, dst: &mut [u8]) {

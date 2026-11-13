@@ -29,7 +29,7 @@ export interface ReleaseInfo {
 }
 
 export const PROJECT_INFO = {
-  appName: 'DiskSentinel Pro',
+  appName: 'Disk Bad Sector Scanner',
   appKoreanName: '디스크 배드섹터 검사기',
   version: 'v4.6.0',
   versionNumber: '4.6.0',

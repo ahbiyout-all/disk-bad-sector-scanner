@@ -3,7 +3,7 @@ name = "disksentinel-core"
 version = "4.6.0"
 edition = "2021"
 authors = ["AhBiYout <https://github.com/AhBiYout-all>"]
-description = "High-Performance Pure Native Rust Core Engine for DiskSentinel Pro (Direct Win32 I/O, S.M.A.R.T. Telemetry, Bad Sector Healing)"
+description = "High-Performance Pure Native Rust Core Engine for Disk Bad Sector Scanner (Direct Win32 I/O, S.M.A.R.T. Telemetry, Bad Sector Healing)"
 license = "Apache-2.0"
 
 [lib]
@@ -11,7 +11,7 @@ name = "disksentinel_core"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "DiskSentinelPro"
+name = "DiskBadSectorScanner"
 path = "src/main.rs"
 
 [dependencies]

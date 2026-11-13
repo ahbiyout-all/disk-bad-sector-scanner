@@ -1,4 +1,19 @@
-# DiskSentinel Pro - Developer Work Log (작업 로그)
+# Disk Bad Sector Scanner - Developer Work Log (작업 로그)
+
+### 2026-11-13 (v4.6.0 브랜드 일원화, Inno Setup 폴더 풀림 인스톨러, GitHub Actions Node 24 전환 및 저장소 정비)
+- **공식 앱 명칭 `Disk Bad Sector Scanner` 일원화 및 메타데이터/자동 업데이터 정합성 확보**:
+  - `setup.iss`, `build.bat`, `build-dll.bat`, `build-rust.bat`, `scripts/package-cross-platform.mjs`, `src/utils/updater.ts`, `src/native/DiskSentinelLauncher.cs/.cpp`, `src/native/rust/Cargo.toml`, `src-tauri/Cargo.toml`, `README.md`, `docs/` 전반의 구형 브랜드 잔재를 `Disk Bad Sector Scanner` 및 실행 파일 `DiskBadSectorScanner.exe`로 통합.
+  - 레거시 `public/DiskSentinelPro.bat`, `public/DiskSentinelPro.vbs`를 제거하고 `vite build` 산출물 `dist/` 내 불필요한 `.gitignore`/`aistudio` 폴더가 인스톨러에 유입되지 않도록 차단.
+- **Inno Setup 6 폴더 풀림(Unpacked Multi-File) 인스톨러 고도화 (`setup.iss`)**:
+  - 고유 AppId(`{8E4C7A21-5B94-4F18-9D32-6A1E9C4F0B7D}`) 및 전용 설치 폴더(`{autopf}\Disk Bad Sector Scanner`) 부여, Windows 프로그램 추가/제거 정식 메타데이터(`UninstallDisplayName`, `UninstallDisplayIcon`, `VersionInfo*`) 등록.
+  - 설치 시퀀스 완비: **실행 중 앱 강제 종료(`taskkill` + `CloseApplications=yes`) → 기존 설치 감지(삭제 후 재설치/덮어쓰기/취소 선택) → Apache 2.0 라이선스 선언(`docs\LICENSE_KR.md`) → 폴더 풀림 개별 파일 설치 → 바탕화면 바로가기 기본 체크 → 앱 실행**.
+  - `[Files]` 엄격 제외 규칙으로 문서(`*.md`, `*.txt`), 포터블 파일(`*Portable*`, `*.zip`), 임시/로그 파일 유입 원천 차단.
+  - 무인 설치(`/SILENT`, `/VERYSILENT`) 완벽 지원 및 방화벽 인·아웃바운드 규칙(`Disk Bad Sector Scanner`, `Disk Bad Sector Scanner v4.6.0`) 사전 조용히 자동 등록/삭제 구현.
+- **GitHub Actions Node.js 20 EOL 대응 (Node.js 22 LTS / 24 전환) 및 인스톨러 단일 릴리스**:
+  - `.github/workflows/ci.yml`, `.github/workflows/release.yml`에 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` 및 `node-version: 22.x / 24.x`를 적용해 Node.js 20 Deprecated 경고 완전 해소.
+  - 모바일(APK/iOS) 및 포터블 ZIP 패키징을 제거하고 GitHub Releases에는 오직 공식 Windows 인스톨러(`Output\DiskBadSectorScanner_Setup_v4.6.0.exe`)만 생성·첨부되도록 개편.
+- **저장소 `.gitignore` 전면 정비 및 `git-push-auto.bat` 생성**:
+  - `git-push-auto.bat` 신규 작성(린트 검증, 개인 이메일/비밀정보 스캔, 핵심 소스 선별 스테이징, 자동 푸시) 및 `.gitignore` 내 `git-push-auto.bat` 자체 제외 규칙 확인.
 
 ### 2026-11-13 (v4.6.0 D3 Latency Histogram, 32-Drive IOCTL/WMI Enumeration, Zero-Dummy Audit & SMART Alerts)
 - **D3.js 기반 실시간 섹터별 읽기 속도 및 I/O 레이턴시 분포 히스토그램 구축 (`LatencyHistogramDashboard.tsx`)**:

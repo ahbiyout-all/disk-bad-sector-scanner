@@ -1,7 +1,7 @@
 // ===================================================================
-// DiskSentinel Pro - Zero-Dependency Native Windows Host (.NET / C#)
+// Disk Bad Sector Scanner - Zero-Dependency Native Windows Host (.NET / C#)
 // Compiles directly via Windows built-in csc.exe:
-//   %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:dist\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs
+//   %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:bin\native\DiskBadSectorScanner.exe src\native\DiskSentinelLauncher.cs
 // License: Apache-2.0
 // ===================================================================
 
@@ -27,8 +27,8 @@ namespace DiskSentinel
                 if (flag == "-v" || flag == "--version")
                 {
                     MessageBox.Show(
-                        string.Format("DiskSentinel Pro v{0}\nNative Core Engine v{1}\nDeveloper: AhBiYout", AppVersion, EngineVersion),
-                        "DiskSentinel Pro Version",
+                        string.Format("Disk Bad Sector Scanner v{0}\nNative Core Engine v{1}\nDeveloper: AhBiYout", AppVersion, EngineVersion),
+                        "Disk Bad Sector Scanner Version",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
                     return;
@@ -57,8 +57,8 @@ namespace DiskSentinel
             if (string.IsNullOrEmpty(htmlPath))
             {
                 MessageBox.Show(
-                    "Could not find 'index.html'.\nPlease ensure DiskSentinelPro.exe is located inside the DiskSentinelPro directory.",
-                    "DiskSentinel Pro - Error",
+                    "Could not find 'index.html'.\nPlease ensure DiskBadSectorScanner.exe is located inside the Disk Bad Sector Scanner directory.",
+                    "Disk Bad Sector Scanner - Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 return;

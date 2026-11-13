@@ -110,7 +110,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
   };
 
   const handleTestTrayAlert = () => {
-    const title = '🛡️ DiskSentinel Pro 가디언 트레이 경보';
+    const title = '🛡️ Disk Bad Sector Scanner 가디언 트레이 경보';
     const tempDisplay = status.highestTempCelsius !== null ? `${status.highestTempCelsius}°C` : '센서 N/A';
     const body = `[정기 진단 완료] 전체 ${drives.length}대 드라이브 점검 (${effectiveDriveName}, 최고 온도: ${tempDisplay})`;
     if (soundAlert) {

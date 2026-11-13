@@ -2,22 +2,26 @@
 setlocal enabledelayedexpansion
 
 :: =====================================================================
-:: DiskSentinel Pro - Automated Build and Packaging Pipeline v4.5.0
-:: Windows Native CRLF Desktop App & Setup Distribution Pipeline
+:: Disk Bad Sector Scanner - Automated Build and Installer Pipeline
+:: Dynamic Version Read from package.json
 :: Author: AhBiYout (AhBiYout-all)
 :: Repository: https://github.com/AhBiYout-all/disk-bad-sector-scanner
 :: =====================================================================
 
 echo ===================================================================
-echo   DiskSentinel Pro - Automated Build and Packaging Pipeline v4.5.0
+echo   Disk Bad Sector Scanner - Automated Build ^& Installer Pipeline
 echo ===================================================================
 
-echo [STEP 1] Checking Node.js and npm environment...
-node --version
+echo [STEP 1] Checking Node.js and reading dynamic version...
+node --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Node.js is not installed or not in PATH.
     goto END_BUILD
 )
+
+for /f "delims=" %%v in ('node -p "require('./package.json').version"') do set "APP_VERSION=%%v"
+if "%APP_VERSION%"=="" set "APP_VERSION=4.6.0"
+echo -^> Detected Application Version: v%APP_VERSION%
 
 echo [STEP 2] Installing dependencies if needed...
 if not exist "node_modules\" (
@@ -35,38 +39,43 @@ if errorlevel 1 (
     goto END_BUILD
 )
 
-echo [STEP 4] Building production Vite bundle (Single-file inline optimization)...
+echo [STEP 4] Building production Vite bundle (Unpacked Runtime Assets)...
 call npm run build
 if errorlevel 1 (
     echo [ERROR] Vite production build failed.
     goto END_BUILD
 )
 
-echo [STEP 5] Compiling Native Windows Desktop Host (DiskSentinelPro.exe)...
+echo [STEP 5] Building Native DLL and Desktop Host Executable...
+if not exist "bin\native" mkdir "bin\native"
+call build-dll.bat --no-pause
+if errorlevel 1 (
+    echo [INFO] Native C++ compiler not detected, checking .NET csc.exe fallback...
+)
+
 set "CSC_EXE="
 if exist "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" set "CSC_EXE=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if "!CSC_EXE!"=="" if exist "%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe" set "CSC_EXE=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 
-if "!CSC_EXE!"=="" goto NO_CSC
-echo -> Found Windows .NET C# Compiler: !CSC_EXE!
-"!CSC_EXE!" /nologo /target:winexe /optimize+ /out:dist\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs >nul 2>&1
-if not exist "dist\DiskSentinelPro.exe" (
-    "!CSC_EXE!" /nologo /target:winexe /optimize+ /out:dist\DiskSentinelPro.exe src\native\DiskSentinelLauncher.cs
-)
-if exist "dist\DiskSentinelPro.exe" (
-    echo [SUCCESS] Compiled native host executable: dist\DiskSentinelPro.exe
-)
-goto STEP_6
-
-:NO_CSC
-echo -> csc.exe not found. Checking bin\native\DiskSentinelPro.exe...
-if exist "bin\native\DiskSentinelPro.exe" (
-    copy /y "bin\native\DiskSentinelPro.exe" "dist\DiskSentinelPro.exe" >nul
-    echo [SUCCESS] Copied existing bin\native\DiskSentinelPro.exe to dist\
+if not "!CSC_EXE!"=="" (
+    echo -^> Compiling DiskBadSectorScanner.exe via .NET C# Compiler...
+    "!CSC_EXE!" /nologo /target:winexe /optimize+ /out:bin\native\DiskBadSectorScanner.exe src\native\DiskSentinelLauncher.cs
 )
 
-:STEP_6
-echo [STEP 6] Compiling Inno Setup Installer Executable (if ISCC is installed)...
+if not exist "bin\native\DiskBadSectorScanner.exe" (
+    echo [WARNING] Native host executable DiskBadSectorScanner.exe was not built.
+) else (
+    echo [SUCCESS] Native desktop host ready: bin\native\DiskBadSectorScanner.exe
+)
+
+echo [STEP 6] Auditing unpacked installer files (removing unwanted docs/portable artifacts)...
+call node scripts/package-cross-platform.mjs "%APP_VERSION%"
+if errorlevel 1 (
+    echo [ERROR] Staging audit failed.
+    goto END_BUILD
+)
+
+echo [STEP 7] Compiling Inno Setup Installer Executable (Output\DiskBadSectorScanner_Setup_v%APP_VERSION%.exe)...
 set "ISCC_PATH="
 if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" set "ISCC_PATH=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if "!ISCC_PATH!"=="" if exist "C:\Program Files\Inno Setup 6\ISCC.exe" set "ISCC_PATH=C:\Program Files\Inno Setup 6\ISCC.exe"
@@ -76,46 +85,35 @@ if "!ISCC_PATH!"=="" (
 )
 
 if "!ISCC_PATH!"=="" goto NO_ISCC
-echo -> Found Inno Setup Compiler: !ISCC_PATH!
-echo -> Compiling setup.iss with pre-installation check logic...
-if not exist "dist-packages" mkdir "dist-packages"
-"!ISCC_PATH!" /DAppVersion=4.5.0 /O"dist-packages" setup.iss
-if exist "dist-packages\DiskSentinel_Setup_v4.5.0.exe" (
-    echo [SUCCESS] Windows Installer created: dist-packages\DiskSentinel_Setup_v4.5.0.exe
+if not exist "Output" mkdir "Output"
+"!ISCC_PATH!" /DAppVersion=%APP_VERSION% /O"Output" setup.iss
+if exist "Output\DiskBadSectorScanner_Setup_v%APP_VERSION%.exe" (
+    echo [SUCCESS] Windows Installer created: Output\DiskBadSectorScanner_Setup_v%APP_VERSION%.exe
 )
-goto STEP_7
+goto SUMMARY
 
 :NO_ISCC
-echo -> Note: Inno Setup Compiler (ISCC.exe) not found in standard paths.
-echo    Unpacked distribution bundle will be generated.
+echo -^> Note: Inno Setup Compiler (ISCC.exe) not found.
+echo    Unpacked installer files staged cleanly in dist-packages\.
 
-:STEP_7
-echo [STEP 7] Organizing release assets into versioned output directory (dist-v4.5.0)...
-if not exist "dist-v4.5.0" mkdir "dist-v4.5.0"
-xcopy /E /I /Y "dist" "dist-v4.5.0" >nul
-if exist "dist-packages\" (
-    if not exist "dist-v4.5.0\packages" mkdir "dist-v4.5.0\packages"
-    xcopy /E /I /Y "dist-packages\*" "dist-v4.5.0\packages\" >nul
-)
-
+:SUMMARY
+echo.
 echo ===================================================================
-echo   BUILD AND PACKAGING SUCCESSFUL! (Version 4.5.0)
+echo   BUILD AND INSTALLER PACKAGING COMPLETED! (v%APP_VERSION%)
 echo ===================================================================
 echo [Deliverables Summary]
-echo   1. Portable Executable Package: dist-packages\DiskSentinel-Pro-v4.5.0-Portable.zip (if generated)
-echo   2. Setup Installer Executable : dist-packages\DiskSentinel_Setup_v4.5.0.exe (if ISCC present)
-echo   3. Pre-Install Check Logic    : Overwrite vs Clean Uninstall prompt enabled
-echo   4. Unattended / Silent Mode   : Supported via /SILENT or /VERYSILENT
-echo   5. Firewall Auto-Registration : Silently adds 'DiskSentinel Pro' and versioned rules
+echo   1. Unpacked Staged Runtime  : dist-packages\DiskBadSectorScanner-Unpacked-v%APP_VERSION%\
+echo   2. Windows Setup Installer  : Output\DiskBadSectorScanner_Setup_v%APP_VERSION%.exe
+echo   3. Install Sequence         : Kill running app -^> Existing check -^> License -^> Unpacked Install -^> Shortcut -^> Launch
+echo   4. Unattended Silent Mode   : /SILENT or /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+echo   5. Firewall Rules           : Base ('Disk Bad Sector Scanner') ^& Versioned ('Disk Bad Sector Scanner v%APP_VERSION%')
 echo ===================================================================
-echo Output release directory: %CD%\dist-v4.5.0
-echo Packages release directory: %CD%\dist-packages
 echo.
 
-if exist "dist-packages" (
+if exist "Output" (
+    explorer "Output"
+) else if exist "dist-packages" (
     explorer "dist-packages"
-) else (
-    explorer "dist-v4.5.0"
 )
 
 :END_BUILD
