@@ -52,24 +52,24 @@ export interface TailoredActionMethod {
  * Detect Storage Manufacturer from drive name/model
  */
 export function detectVendor(drive: DiskDrive): StorageVendor {
-  const text = `${drive.name} ${drive.model}`.toLowerCase();
+  const text = `${drive.name} ${drive.model} ${drive.hardwareSpecs?.vendorName || ''} ${drive.hardwareSpecs?.modelNumber || ''}`.toLowerCase();
   
-  if (text.includes('samsung') || text.includes('mz-v') || text.includes('bar plus')) {
+  if (text.includes('samsung') || text.includes('mz-v') || text.includes('bar plus') || text.includes('pm9a1')) {
     return 'samsung';
   }
   if (text.includes('seagate') || text.includes('barracuda') || text.includes('ironwolf') || text.includes('one touch') || text.includes('st2000') || text.includes('stkz')) {
     return 'seagate';
   }
-  if (text.includes('wd') || text.includes('western digital') || text.includes('passport') || text.includes('wdc') || text.includes('blue') || text.includes('black') || text.includes('red')) {
+  if (text.includes('wd') || text.includes('western digital') || text.includes('passport') || text.includes('wdc') || text.includes('blue') || text.includes('black') || text.includes('red') || text.includes('wd_black')) {
     return 'wd';
   }
   if (text.includes('sandisk') || text.includes('cruzer') || text.includes('sdssde')) {
     return 'sandisk';
   }
-  if (text.includes('hynix') || text.includes('gold p31') || text.includes('platinum p41')) {
+  if (text.includes('hynix') || text.includes('gold p31') || text.includes('platinum p41') || text.includes('shgp31') || text.includes('shpp41')) {
     return 'sk_hynix';
   }
-  if (text.includes('crucial') || text.includes('micron') || text.includes('mx500') || text.includes('p5')) {
+  if (text.includes('crucial') || text.includes('micron') || text.includes('mx500') || text.includes('p5') || text.includes('ct1000')) {
     return 'crucial';
   }
   if (text.includes('toshiba') || text.includes('kioxia') || text.includes('canvio') || text.includes('exceria') || text.includes('mg08') || text.includes('dt01') || text.includes('hdtc') || text.includes('thnsn')) {
@@ -271,7 +271,7 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
       busBandwidth: isUsb2 ? 'USB 2.0 (실효 ~35MB/s 대역폭 병목)' : isUasp ? 'USB 3.2 Gen 2 UASP (10Gbps / ~1,050MB/s)' : 'USB 3.0 BOT (5Gbps / ~450MB/s)',
       powerDelivery: isUsb2 ? 'USB 2.0 (5V 500mA / 2.5W - 전력 강하 위험 높음)' : 'USB 3.x (5V 900mA~15W - 정상)',
       trimSupportStatus: isUasp ? 'UASP 패킷을통한 TRIM / UNMAP 파스스루 지원' : 'BOT 프로토콜 제한으로 OS TRIM 지원 불가 (가비지 컬렉션 내장 처리)',
-      thermalThrottlingRisk: drive.temperatureC > 48 ? 'High' : drive.temperatureC > 40 ? 'Medium' : 'Low',
+      thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 48 ? 'High' : drive.temperatureC !== null && drive.temperatureC > 40 ? 'Medium' : 'Low',
       smrCacheBehavior: drive.type === 'EXTERNAL_HDD' ? '외장 SMR 구조: 대용량 쓰기 시 300ms+ 헤드 지연 가능성' : 'USB SLC 캐시 소진 시 직결 TLC/QLC 쓰기 감속',
       cableCrcVulnerability: 'USB 케이블 단자 오염, Micro-B 젠더 유격 시 S.M.A.R.T. ID #199 UltraDMA CRC Error 감지 위험'
     };
@@ -285,7 +285,7 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
       busBandwidth: 'PCIe Gen4 x4 (최대 7,000MB/s)',
       powerDelivery: '메인보드 3.3V Direct 레일 (최대 10W 서지 케이파빌리티)',
       trimSupportStatus: 'OS 네이티브 NVMe Dataset Management (TRIM) 100% 지원',
-      thermalThrottlingRisk: drive.temperatureC > 65 ? 'Critical' : drive.temperatureC > 50 ? 'Medium' : 'Low',
+      thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 65 ? 'Critical' : drive.temperatureC !== null && drive.temperatureC > 50 ? 'Medium' : 'Low',
       smrCacheBehavior: 'SLC TurboWrite/nCache 동적 버퍼링 (소진 시 본래 TLC 속도 유지)',
       cableCrcVulnerability: 'PCIe M.2 골드핑거 직접 체결로 케이블 CRC 에러 원천 차단'
     };
@@ -298,7 +298,7 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
     busBandwidth: 'SATA III 6.0Gbps (실효 ~550MB/s)',
     powerDelivery: '파워서플라이 12V (스핀들 모터) + 5V (로직) 직결',
     trimSupportStatus: drive.type === 'HDD' ? 'N/A (기계식 플래터)' : 'SATA AHCI TRIM (Deterministic Read ZEROs)',
-    thermalThrottlingRisk: drive.temperatureC > 45 ? 'Medium' : 'Low',
+    thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 45 ? 'Medium' : 'Low',
     smrCacheBehavior: drive.type === 'HDD' ? '플래터 ZBR 외주/내주 속도 차이 (외주 220MB/s -> 내주 100MB/s)' : 'SATA DRAM 캐시 유무에 따른 4K 랜덤 지연',
     cableCrcVulnerability: 'SATA 데이터 케이블 접촉 불량 시 S.M.A.R.T. ID #199 에러 증가'
   };
@@ -308,18 +308,15 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
  * Generate 4 - 6 prioritized, highly tailored action methods based on drive vendor, media type, and current SMART state.
  */
 export function getTailoredActionMethods(
-  drive: DiskDrive, 
+  drive: DiskDrive,
   telemetry?: ScanTelemetry
 ): TailoredActionMethod[] {
   const vendor = detectVendor(drive);
   const vendorProfile = getVendorProfile(vendor);
-  const mediaAnalysis = getDriveMediaAnalysis(drive);
   const actions: TailoredActionMethod[] = [];
 
-  const badCount = telemetry?.badCount ?? drive.seededBadSectors?.length ?? 0;
-  const criticalCount = telemetry?.criticalCount ?? 0;
+  const badCount = telemetry?.badCount ?? 0;
   const pendingSectors = drive.smartAttributes.find(a => a.id === 197);
-  const reallocatedSectors = drive.smartAttributes.find(a => a.id === 5);
   const crcErrors = drive.smartAttributes.find(a => a.id === 199);
 
   // 1. Critical Sector Repair Action if Bad sectors exist
@@ -396,13 +393,14 @@ export function getTailoredActionMethods(
   }
 
   // 4. Thermal & Cache Strategy Action
-  if (drive.temperatureC > 45 || drive.type === 'NVMe' || drive.type === 'EXTERNAL_SSD') {
+  if ((drive.temperatureC !== null && drive.temperatureC > 45) || drive.type === 'NVMe' || drive.type === 'EXTERNAL_SSD') {
+    const tempDisplay = drive.temperatureC !== null ? `${drive.temperatureC}°C` : '센서 N/A';
     actions.push({
       id: 'action-thermal-cache',
       category: 'thermal_cache',
       categoryKo: '발열 관리 & 쓰기 캐시 최적화',
-      priority: drive.temperatureC > 50 ? 'HIGH' : 'INFO',
-      title: `[발열 & 캐시] ${drive.temperatureC}°C 내부 발열 제어 및 SLC 버퍼 관리`,
+      priority: drive.temperatureC !== null && drive.temperatureC > 50 ? 'HIGH' : 'INFO',
+      title: `[발열 & 캐시] ${tempDisplay} 발열 제어 및 SLC 버퍼 관리`,
       description: drive.type === 'NVMe'
         ? 'NVMe SSD는 70°C 이상 도달 시 써멀 스로틀링이 발동하여 속도를 저하시킵니다.'
         : '외장 SSD는 밀폐 하우징 특성상 대량 스캔 중 발열을 방지해야 합니다.',

@@ -1,18 +1,18 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * DiskSentinel Pro - Native Hardware Direct Probe Engine
- * Real Web StorageManager API, Direct Physical Buffer I/O Benchmark, 
- * Real File System Access & File Slicing Engine, WebUSB & Web Serial Hardware Probes.
+ * Real Tauri Win32 IOCTL, W3C OPFS / StorageManager API,
+ * HTML5 File/Directory Slicing, WebUSB & Web Serial Hardware Probes.
  */
 
-import { 
-  DiskDrive, 
-  DriveSmartAttribute, 
-  SpecializedScanMethodId, 
-  DiskHardwareSpecs, 
-  DiskVolumePartition 
+import {
+  DiskDrive,
+  DriveSmartAttribute,
+  SpecializedScanMethodId,
+  DiskHardwareSpecs,
+  DiskVolumePartition
 } from '../types';
 
 export interface NativeSystemStorageInfo {
@@ -22,12 +22,13 @@ export interface NativeSystemStorageInfo {
   usageGb: number;
   usedPercentage: number;
   isPersistent: boolean;
-  benchmarkReadMbSec: number;
-  benchmarkWriteMbSec: number;
-  measuredLatencyMs: number;
-  measuredLatencyUs: number;
-  measuredRandom4kIops: number;
-  cpuCores: number;
+  opfsSupported: boolean;
+  benchmarkReadMbSec: number | null;
+  benchmarkWriteMbSec: number | null;
+  measuredLatencyMs: number | null;
+  measuredLatencyUs: number | null;
+  measuredRandom4kIops: number | null;
+  cpuCores: number | null;
   deviceMemoryGb?: number;
   osPlatform: string;
   isWindows: boolean;
@@ -51,8 +52,105 @@ export const KNOWN_USB_STORAGE_VENDORS: Record<number, { name: string; controlle
   0x8564: { name: 'Transcend Information, Inc.', controller: 'Transcend High-Speed Controller', typicalBus: 'USB 3.1 Gen1' }
 };
 
+const OPFS_PROBE_FILENAME = '__disksentinel_io_probe__.bin';
+
+export function isTauriDesktopRuntime(): boolean {
+  return typeof window !== 'undefined' && typeof (window as any).__TAURI__?.core?.invoke === 'function';
+}
+
 /**
- * Real Native Web Storage & Hardware Buffer Benchmark Probe
+ * Real Origin Private File System (OPFS) Disk I/O Benchmark Probe
+ * Performs actual filesystem write, flush/close, and read-back verification in the browser sandbox.
+ */
+async function benchmarkRealOpfsIo(): Promise<{
+  opfsSupported: boolean;
+  readMbSec: number | null;
+  writeMbSec: number | null;
+  latencyMs: number | null;
+  latencyUs: number | null;
+  random4kIops: number | null;
+}> {
+  if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') {
+    return {
+      opfsSupported: false,
+      readMbSec: null,
+      writeMbSec: null,
+      latencyMs: null,
+      latencyUs: null,
+      random4kIops: null
+    };
+  }
+
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fileHandle = await root.getFileHandle(OPFS_PROBE_FILENAME, { create: true });
+
+    const testSize = 512 * 1024; // 512 KB real OPFS file payload
+    const payload = new Uint8Array(testSize);
+    for (let i = 0; i < testSize; i++) {
+      payload[i] = (i * 131 + 17) & 0xff;
+    }
+
+    // Real OPFS Write + Flush
+    const tw0 = performance.now();
+    const writable = await fileHandle.createWritable();
+    await writable.write(payload);
+    await writable.close();
+    const tw1 = performance.now();
+    const writeMs = Math.max(0.05, tw1 - tw0);
+
+    // Real OPFS Sequential Read
+    const tr0 = performance.now();
+    const file = await fileHandle.getFile();
+    const readBuf = await file.arrayBuffer();
+    const readView = new Uint8Array(readBuf);
+    let checksum = 0;
+    for (let i = 0; i < readView.length; i += 512) {
+      checksum ^= readView[i];
+    }
+    const tr1 = performance.now();
+    void checksum;
+    const readMs = Math.max(0.05, tr1 - tr0);
+
+    // Real 4KB Random Offset Slices inside OPFS File
+    const chunkCount = 8;
+    const t4k0 = performance.now();
+    for (let c = 0; c < chunkCount; c++) {
+      const offset = ((c * 61440) % Math.max(4096, testSize - 4096));
+      const sliceBuf = await file.slice(offset, offset + 4096).arrayBuffer();
+      if (sliceBuf.byteLength === 0) break;
+    }
+    const t4k1 = performance.now();
+    const avg4kMs = Math.max(0.01, (t4k1 - t4k0) / chunkCount);
+
+    const writeMbSec = Number(((testSize / (1024 * 1024)) / (writeMs / 1000)).toFixed(1));
+    const readMbSec = Number(((readView.length / (1024 * 1024)) / (readMs / 1000)).toFixed(1));
+    const measuredLatencyMs = Number(avg4kMs.toFixed(3));
+    const measuredLatencyUs = Math.max(1, Math.round(avg4kMs * 1000));
+    const random4kIops = Math.max(1, Math.round(1000 / avg4kMs));
+
+    return {
+      opfsSupported: true,
+      readMbSec,
+      writeMbSec,
+      latencyMs: measuredLatencyMs,
+      latencyUs: measuredLatencyUs,
+      random4kIops
+    };
+  } catch {
+    return {
+      opfsSupported: false,
+      readMbSec: null,
+      writeMbSec: null,
+      latencyMs: null,
+      latencyUs: null,
+      random4kIops: null
+    };
+  }
+}
+
+/**
+ * Real Native Web Storage & OPFS I/O Probe
  */
 export async function probeNativeSystemStorage(): Promise<NativeSystemStorageInfo> {
   let quotaBytes = 0;
@@ -65,74 +163,42 @@ export async function probeNativeSystemStorage(): Promise<NativeSystemStorageInf
       quotaBytes = estimate.quota || 0;
       usageBytes = estimate.usage || 0;
     } catch {
-      // Fallback
+      // Restricted context
     }
 
     if (navigator.storage.persisted) {
       try {
         isPersistent = await navigator.storage.persisted();
       } catch {
-        // Fallback
+        // Restricted context
       }
     }
   }
 
-  // Real Buffer Direct I/O Speed Measurement (1MB Direct TypedArray Memory Benchmark)
-  const bufferSize = 1024 * 1024; // 1 MB
-  const testBuffer = new Uint8Array(bufferSize);
-  
-  // Fill buffer (Write Test)
-  const t0 = performance.now();
-  for (let i = 0; i < bufferSize; i += 64) {
-    testBuffer[i] = i & 0xff;
-  }
-  const t1 = performance.now();
-  const writeTimeMs = Math.max(0.01, t1 - t0);
-
-  // Read buffer (Read Test)
-  let sum = 0;
-  const t2 = performance.now();
-  for (let i = 0; i < bufferSize; i += 64) {
-    sum += testBuffer[i];
-  }
-  const t3 = performance.now();
-  const readTimeMs = Math.max(0.01, t3 - t2);
-
-  // 4KB Random Block Latency & IOPS Probe (16 iterations)
-  const blockSize4k = 4096;
-  const block4k = new Uint8Array(blockSize4k);
-  let randomSeekSum = 0;
-  const tRandomStart = performance.now();
-  for (let round = 0; round < 16; round++) {
-    const offset = (round * 257) % blockSize4k;
-    block4k[offset] = (offset ^ round) & 0xff;
-    randomSeekSum += block4k[offset];
-  }
-  const tRandomEnd = performance.now();
-  const random4kElapsedMs = Math.max(0.005, (tRandomEnd - tRandomStart) / 16);
-  const latencyUs = Math.max(1, Math.round(random4kElapsedMs * 1000));
-  const estimatedIops = Math.min(250000, Math.max(5000, Math.round(1000000 / latencyUs)));
-
-  // Prevent dead-code elimination by compiler
-  void sum;
-  void randomSeekSum;
-
-  const writeMbSec = Number(((1 / (writeTimeMs / 1000))).toFixed(1));
-  const readMbSec = Number(((1 / (readTimeMs / 1000))).toFixed(1));
-  const measuredLatencyMs = Number(readTimeMs.toFixed(3));
+  const opfsBench = await benchmarkRealOpfsIo();
 
   const quotaGb = Number((quotaBytes / (1024 * 1024 * 1024)).toFixed(1));
   const usageGb = Number((usageBytes / (1024 * 1024 * 1024)).toFixed(2));
   const usedPercentage = quotaBytes > 0 ? Number(((usageBytes / quotaBytes) * 100).toFixed(1)) : 0;
 
-  const cpuCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
-  const deviceMemoryGb = typeof navigator !== 'undefined' && 'deviceMemory' in navigator ? (navigator as any).deviceMemory : undefined;
+  const cpuCores = typeof navigator !== 'undefined' && typeof navigator.hardwareConcurrency === 'number'
+    ? navigator.hardwareConcurrency
+    : null;
+  const deviceMemoryGb = typeof navigator !== 'undefined' && 'deviceMemory' in navigator
+    ? (navigator as any).deviceMemory
+    : undefined;
 
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isWindows = ua.includes('Windows');
   const isMac = ua.includes('Macintosh') || ua.includes('Mac OS');
   const isLinux = ua.includes('Linux') && !ua.includes('Android');
-  const osPlatform = isWindows ? 'Microsoft Windows 11/10 64-bit' : isMac ? 'Apple macOS (Darwin)' : isLinux ? 'Linux OS (POSIX)' : 'Host Operating System';
+  const osPlatform = isWindows
+    ? 'Microsoft Windows'
+    : isMac
+    ? 'Apple macOS'
+    : isLinux
+    ? 'Linux OS'
+    : 'Browser Host OS';
 
   return {
     quotaBytes,
@@ -141,11 +207,12 @@ export async function probeNativeSystemStorage(): Promise<NativeSystemStorageInf
     usageGb,
     usedPercentage,
     isPersistent,
-    benchmarkReadMbSec: Math.min(7200, Math.max(100, readMbSec)),
-    benchmarkWriteMbSec: Math.min(6500, Math.max(80, writeMbSec)),
-    measuredLatencyMs,
-    measuredLatencyUs: latencyUs,
-    measuredRandom4kIops: estimatedIops,
+    opfsSupported: opfsBench.opfsSupported,
+    benchmarkReadMbSec: opfsBench.readMbSec,
+    benchmarkWriteMbSec: opfsBench.writeMbSec,
+    measuredLatencyMs: opfsBench.latencyMs,
+    measuredLatencyUs: opfsBench.latencyUs,
+    measuredRandom4kIops: opfsBench.random4kIops,
     cpuCores,
     deviceMemoryGb,
     osPlatform,
@@ -156,16 +223,30 @@ export async function probeNativeSystemStorage(): Promise<NativeSystemStorageInf
 }
 
 /**
- * Real WebUSB hardware device direct enumeration probe
+ * Real WebUSB hardware device enumeration probe
  */
-export async function probeWebUsbDevices(): Promise<{ vendorId: number; productId: number; deviceName: string }[]> {
+export async function probeWebUsbDevices(): Promise<{
+  vendorId: number;
+  productId: number;
+  deviceName: string;
+  manufacturerName?: string;
+  serialNumber?: string;
+  usbVersionMajor?: number;
+  usbVersionMinor?: number;
+  deviceClass?: number;
+}[]> {
   if (typeof navigator !== 'undefined' && 'usb' in navigator) {
     try {
       const devices = await (navigator as any).usb.getDevices();
       return devices.map((d: any) => ({
         vendorId: d.vendorId,
         productId: d.productId,
-        deviceName: d.productName || `USB Device (${d.vendorId.toString(16)}:${d.productId.toString(16)})`
+        deviceName: d.productName || `USB Device (${d.vendorId.toString(16).padStart(4, '0')}:${d.productId.toString(16).padStart(4, '0')})`,
+        manufacturerName: d.manufacturerName,
+        serialNumber: d.serialNumber,
+        usbVersionMajor: d.usbVersionMajor,
+        usbVersionMinor: d.usbVersionMinor,
+        deviceClass: d.deviceClass
       }));
     } catch {
       return [];
@@ -176,109 +257,161 @@ export async function probeWebUsbDevices(): Promise<{ vendorId: number; productI
 
 /**
  * Real Physical Storage Discovery via Tauri Core IPC (Native Desktop Runtime)
- * Queries raw physical drives (\\\\.\\PhysicalDrive0, etc.) from Windows Win32 IOCTL
+ * Queries raw physical drives (\\\\.\\PhysicalDrive0..31) from Windows Win32 IOCTL
  */
 export async function queryTauriPhysicalDrives(): Promise<DiskDrive[]> {
-  if (typeof window === 'undefined') return [];
+  if (!isTauriDesktopRuntime()) return [];
   const tauri = (window as any).__TAURI__;
-  if (!tauri || !tauri.core || typeof tauri.core.invoke !== 'function') {
-    return [];
-  }
+
   try {
     const rawDrives = await tauri.core.invoke('get_physical_drives');
     if (Array.isArray(rawDrives) && rawDrives.length > 0) {
       return rawDrives.map((rd: any, idx: number) => {
-        const capGb = rd.totalCapacityGb || 512;
-        const temp = rd.temperatureC || 36;
-        const reliability = Math.round(rd.reliabilityScore || 99);
-        const model = rd.model || `PhysicalDrive${rd.driveIndex ?? idx}`;
-        const path = rd.devicePath || `\\\\.\\PhysicalDrive${rd.driveIndex ?? idx}`;
+        const driveIndex = typeof rd.driveIndex === 'number' ? rd.driveIndex : idx;
+        const capBytes = typeof rd.totalCapacityBytes === 'number' && rd.totalCapacityBytes > 0
+          ? rd.totalCapacityBytes
+          : (typeof rd.totalCapacityGb === 'number' && rd.totalCapacityGb > 0 ? rd.totalCapacityGb * 1024 * 1024 * 1024 : null);
+        const capGb = capBytes !== null
+          ? Number((capBytes / (1024 * 1024 * 1024)).toFixed(1))
+          : (typeof rd.totalCapacityGb === 'number' && rd.totalCapacityGb > 0 ? rd.totalCapacityGb : null);
+
+        const temp = typeof rd.temperatureC === 'number' && rd.temperatureC > 0 ? rd.temperatureC : null;
+        const reliability = typeof rd.reliabilityScore === 'number' ? Math.round(rd.reliabilityScore) : null;
+        const poh = typeof rd.powerOnHours === 'number' ? rd.powerOnHours : null;
+
+        const rawModel = (rd.model || '').trim() || `Physical Storage Device ${driveIndex}`;
+        const path = rd.devicePath || `\\\\.\\PhysicalDrive${driveIndex}`;
         const secSize = rd.sectorSize || 512;
+        const physSecSize = rd.physicalSectorSize || secSize;
+        const serial = (rd.serialNumber || '').trim() || `PhysicalDrive${driveIndex}`;
+        const bus = (rd.busType || 'Unknown').trim();
+        const busUpper = bus.toUpperCase();
+        const isUsb = busUpper === 'USB' || !!rd.isExternal;
+        const isNvme = busUpper === 'NVME';
+
+        const rawPartitions: any[] = Array.isArray(rd.partitions) ? rd.partitions : [];
+        const mountPoints: string[] = Array.isArray(rd.mountPoints) ? rd.mountPoints : [];
+        const mountLabel = mountPoints.length > 0 ? mountPoints.join(', ') : '';
+
+        const typeIcon = isUsb ? '🔌' : isNvme ? '⚡' : rd.isSsd ? '💾' : '💽';
+        const mountPrefix = mountLabel ? `[${mountLabel}] ` : '';
+        const capLabel = capGb !== null ? `${Math.round(capGb)}GB` : '용량 미상';
+        const driveName = `${typeIcon} ${mountPrefix}${rawModel} (${capLabel}) - PhysicalDrive${driveIndex}`;
+
+        const nvme = rd.nvmeTelemetry;
+
+        const partitions: DiskVolumePartition[] = rawPartitions.map((vp) => {
+          const totalB = Number(vp.totalBytes || 0);
+          const usedB = Number(vp.usedBytes || 0);
+          const freeB = Number(vp.freeBytes || 0);
+          const totalG = totalB > 0 ? Number((totalB / (1024 * 1024 * 1024)).toFixed(1)) : Number(vp.totalGb || 0);
+          const usedG = usedB > 0 ? Number((usedB / (1024 * 1024 * 1024)).toFixed(1)) : Number(vp.usedGb || 0);
+          const freeG = freeB > 0 ? Number((freeB / (1024 * 1024 * 1024)).toFixed(1)) : Math.max(0, Number((totalG - usedG).toFixed(1)));
+          const pct = totalB > 0 ? Number(((usedB / totalB) * 100).toFixed(1)) : 0;
+          return {
+            letterOrMount: vp.driveLetter || '',
+            label: vp.label || 'Volume',
+            fileSystem: vp.filesystem || 'Unknown',
+            totalGb: totalG,
+            usedGb: usedG,
+            freeGb: freeG,
+            usedPercentage: pct
+          };
+        });
+
+        // Aggregate real volume usage if partitions are present
+        const totalVolGb = partitions.reduce((acc, p) => acc + p.totalGb, 0);
+        const totalVolUsedGb = partitions.reduce((acc, p) => acc + p.usedGb, 0);
+        const aggUsedPct = totalVolGb > 0 ? Number(((totalVolUsedGb / totalVolGb) * 100).toFixed(1)) : null;
+
+        const totalLba = capBytes !== null && secSize > 0 ? Math.floor(capBytes / secSize) : 0;
+
+        const smartAttributes: DriveSmartAttribute[] = Array.isArray(rd.smartAttributes)
+          ? rd.smartAttributes.map((sa: any) => ({
+              id: Number(sa.id),
+              name: String(sa.name || `Attribute 0x${Number(sa.id).toString(16).toUpperCase()}`),
+              current: Number(sa.current),
+              worst: Number(sa.worst),
+              threshold: Number(sa.threshold),
+              raw: String(sa.raw ?? '0'),
+              status: sa.status === 'critical' || sa.status === 'warning' ? sa.status : 'good',
+              description: sa.description || 'Win32 커널 SMART IOCTL 직접 판독 속성'
+            }))
+          : [];
 
         const hwSpecs: DiskHardwareSpecs = {
           devicePhysicalPath: path,
-          vendorName: model.split(' ')[0] || 'Physical Storage',
-          modelNumber: model,
-          serialNumber: `DISK-${rd.driveIndex ?? idx}-${Math.abs((idx + 1) * 2654435761 % 1000000).toString(16).toUpperCase()}`,
-          firmwareRevision: 'WIN-IOCTL',
-          busType: 'SATA',
-          busInterfaceSpeed: 'Native Win32 IOCTL Direct Kernel Pipe',
-          formFactor: 'Physical Internal / External Drive',
-          totalCapacityBytes: capGb * 1024 * 1024 * 1024,
+          vendorName: rawModel.split(' ')[0] || (isUsb ? 'USB Storage' : 'Physical Storage'),
+          modelNumber: rawModel,
+          serialNumber: serial,
+          firmwareRevision: (rd.firmware || '').trim() || 'N/A',
+          busType: isUsb ? 'USB' : isNvme ? 'NVMe' : busUpper === 'SATA' ? 'SATA' : (bus as any),
+          busInterfaceSpeed: isNvme ? 'NVMe PCIe Bus (Win32 IOCTL)' : isUsb ? 'USB Mass Storage Bus' : `${bus} Bus`,
+          formFactor: isNvme ? 'M.2 / NVMe Solid State' : isUsb ? 'External USB Storage' : (rd.isSsd ? 'Solid State Drive' : 'Mechanical HDD'),
+          controllerVendor: 'Win32 Native Storage Subsystem',
+          totalCapacityBytes: capBytes,
           totalCapacityGb: capGb,
-          totalLbaSectors: capGb * 2097152,
+          totalLbaSectors: totalLba > 0 ? totalLba : null,
           logicalSectorSize: secSize,
-          physicalSectorSize: 4096,
-          isAdvancedFormat: true,
+          physicalSectorSize: physSecSize,
+          isAdvancedFormat: physSecSize > secSize,
           partitionStyle: 'GPT (GUID Partition Table)',
-          alignmentStatus: 'Aligned (4K sector boundary)',
-          mediaType: 'SSD (Non-Volatile NAND Flash)',
-          rotationalSpeedRpm: 0,
-          trimSupported: true,
-          trimActive: true,
-          smartSupported: true,
-          smartActive: true,
-          ncqSupported: true,
-          queueDepth: 32,
-          volatileWriteCache: true,
-          writeCacheFlushSupported: true,
-          readLookAheadSupported: true,
-          apmAamSupported: false,
-          hostReadsTb: 8.5,
-          hostWritesTb: 6.2,
-          percentageUsed: 1,
-          availableSparePercent: 100,
-          powerOnHours: rd.powerOnHours || 120,
-          powerCycles: 45,
-          unsafeShutdowns: 0,
-          mediaErrors: 0,
+          alignmentStatus: physSecSize >= secSize ? 'Aligned (4K sector boundary)' : 'N/A',
+          mediaType: isNvme || rd.isSsd ? 'SSD (Non-Volatile NAND Flash)' : 'Mechanical HDD (Magnetic Platter)',
+          rotationalSpeedRpm: isNvme || rd.isSsd ? 0 : null,
+          trimSupported: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
+          trimActive: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
+          smartSupported: smartAttributes.length > 0 || !!nvme,
+          smartActive: smartAttributes.length > 0 || !!nvme,
+          ncqSupported: isNvme || rd.isSsd ? true : null,
+          queueDepth: isNvme ? 64 : null,
+          volatileWriteCache: null,
+          writeCacheFlushSupported: null,
+          readLookAheadSupported: null,
+          apmAamSupported: !rd.isSsd,
+          hostReadsTb: nvme && typeof nvme.dataUnitsReadTb === 'number' ? Number(nvme.dataUnitsReadTb.toFixed(2)) : null,
+          hostWritesTb: nvme && typeof nvme.dataUnitsWrittenTb === 'number' ? Number(nvme.dataUnitsWrittenTb.toFixed(2)) : null,
+          percentageUsed: nvme && typeof nvme.percentageUsed === 'number' ? nvme.percentageUsed : null,
+          availableSparePercent: nvme && typeof nvme.availableSpare === 'number' ? nvme.availableSpare : null,
+          powerOnHours: poh,
+          powerCycles: nvme && nvme.powerCycles !== undefined ? Number(nvme.powerCycles) : null,
+          unsafeShutdowns: nvme && nvme.unsafeShutdowns !== undefined ? Number(nvme.unsafeShutdowns) : null,
+          mediaErrors: nvme && nvme.mediaErrors !== undefined ? Number(nvme.mediaErrors) : null,
           currentTempC: temp,
-          maxTempRecordedC: temp + 12,
-          warningTempThresholdC: 70,
-          measuredKernelLatencyUs: 15,
-          measuredSequentialReadMbSec: 1200,
-          measuredSequentialWriteMbSec: 950,
-          measuredRandom4kReadIops: 80000,
+          maxTempRecordedC: null,
+          warningTempThresholdC: null,
+          nvmeLogAvailable: !!nvme,
+          measuredKernelLatencyUs: null,
+          measuredSequentialReadMbSec: null,
+          measuredSequentialWriteMbSec: null,
+          measuredRandom4kReadIops: null,
           probeTimestamp: Date.now(),
           probeMethod: 'Native Direct Win32 IOCTL',
-          partitions: [
-            {
-              letterOrMount: `Drive ${rd.driveIndex ?? idx}`,
-              label: 'PRIMARY_PARTITION',
-              fileSystem: 'NTFS',
-              totalGb: capGb,
-              usedGb: Math.round(capGb * 0.35),
-              freeGb: Math.round(capGb * 0.65),
-              usedPercentage: 35
-            }
-          ]
+          partitions
         };
 
+        const driveType: DiskDrive['type'] = isNvme ? 'NVMe' : isUsb ? 'USB' : (rd.isSsd ? 'SSD' : 'HDD');
+        const primaryFs = partitions[0]?.fileSystem;
+
         return {
-          id: `drive-tauri-physical-${rd.driveIndex ?? idx}`,
-          name: `💾 ${model} (${capGb}GB)`,
-          model,
-          serialNumber: hwSpecs.serialNumber,
+          id: `drive-tauri-physical-${driveIndex}`,
+          name: driveName,
+          model: rawModel,
+          serialNumber: serial,
           firmware: hwSpecs.firmwareRevision,
-          type: 'SSD',
-          isExternal: false,
-          connectionType: 'internal',
+          type: driveType,
+          isExternal: isUsb,
+          connectionType: isUsb ? 'usb' : 'internal',
           capacityGb: capGb,
-          totalSectors: capGb * 2097152,
-          interface: 'Native Win32 IOCTL Direct Pipe',
+          totalSectors: totalLba > 0 ? totalLba : 1000000,
+          interface: `Native Direct IOCTL (PhysicalDrive${driveIndex})`,
           healthScore: reliability,
           temperatureC: temp,
-          powerOnHours: rd.powerOnHours || 120,
-          mountPoint: path,
-          fileSystem: 'NTFS',
-          defaultBadSectorProbability: 0,
-          seededBadSectors: [],
-          seededSlowSectors: [],
-          smartAttributes: [
-            { id: 1, name: 'Win32 IOCTL Handle Status', current: 100, worst: 100, threshold: 0, raw: 'Direct Physical Access Granted', status: 'good', description: 'OS 커널 핸들 직접 접근' },
-            { id: 2, name: 'Reallocated Sectors Count', current: 100, worst: 100, threshold: 10, raw: `${rd.reallocatedSectors || 0}`, status: (rd.reallocatedSectors || 0) > 0 ? 'warning' : 'good', description: '하드웨어 예비 섹터 재할당 수' },
-            { id: 3, name: 'Drive Hardware Temperature', current: 100, worst: 100, threshold: 0, raw: `${temp}°C`, status: temp > 55 ? 'warning' : 'good', description: '물리 칩셋 실시간 온도 센서' }
-          ],
+          powerOnHours: poh,
+          usedPercentage: aggUsedPct,
+          mountPoint: mountLabel || path,
+          fileSystem: (primaryFs as any) || 'Unknown',
+          smartAttributes,
           hardwareSpecs: hwSpecs
         } as DiskDrive;
       });
@@ -290,181 +423,148 @@ export async function queryTauriPhysicalDrives(): Promise<DiskDrive[]> {
 }
 
 /**
- * Creates an active Native Physical Host Storage DiskDrive object based on real OS environment
+ * Creates a real Host Storage DiskDrive object based on Tauri Win32 IOCTL (desktop)
+ * or W3C OPFS + StorageManager API (browser sandbox, zero synthetic sensors).
  */
 export async function createNativeHostDrive(): Promise<DiskDrive> {
-  // Check for Tauri native physical drives first
   const tauriDrives = await queryTauriPhysicalDrives();
   if (tauriDrives.length > 0) {
     return tauriDrives[0];
   }
 
   const sysInfo = await probeNativeSystemStorage();
+  const osName = sysInfo.isWindows ? 'Windows' : sysInfo.isMac ? 'macOS' : sysInfo.isLinux ? 'Linux' : 'Browser';
+  const opfsLabel = sysInfo.opfsSupported ? 'OPFS & StorageManager' : 'StorageManager Quota Only';
 
-  const isNvmeSpeed = sysInfo.benchmarkReadMbSec > 1200;
-  const isSataSsdSpeed = sysInfo.benchmarkReadMbSec > 250 && sysInfo.benchmarkReadMbSec <= 1200;
+  const hasQuota = sysInfo.quotaBytes > 0;
+  const quotaCapGb = hasQuota ? Number((sysInfo.quotaBytes / (1024 * 1024 * 1024)).toFixed(1)) : null;
+  const totalSectors = hasQuota ? Math.max(1024, Math.floor(sysInfo.quotaBytes / 512)) : 65536;
 
-  const driveType: DiskDrive['type'] = isNvmeSpeed ? 'NVMe' : isSataSsdSpeed ? 'SSD' : 'HDD';
-  const busType: DiskHardwareSpecs['busType'] = isNvmeSpeed ? 'NVMe' : 'SATA';
-  const osName = sysInfo.isWindows ? 'Windows' : sysInfo.isMac ? 'macOS' : sysInfo.isLinux ? 'Linux' : 'OS';
-
-  const modelName = `${osName} Host ${driveType} Storage (${sysInfo.benchmarkReadMbSec} MB/s)`;
-  const vendorName = sysInfo.isWindows 
-    ? 'Microsoft Windows Host Storage' 
-    : sysInfo.isMac 
-    ? 'Apple CoreStorage Host' 
-    : 'Linux System Host Storage';
-
-  const busInterface = isNvmeSpeed
-    ? `PCIe Direct Host Bus | ${sysInfo.benchmarkReadMbSec} MB/s NVMe Direct I/O`
-    : isSataSsdSpeed
-    ? `SATA III Host Bus | ${sysInfo.benchmarkReadMbSec} MB/s Solid State I/O`
-    : `Direct Storage Host Bus | ${sysInfo.benchmarkReadMbSec} MB/s`;
-
-  const controllerVendor = `${osName} Native Kernel Storage Subsystem (${sysInfo.cpuCores} CPU Cores / Direct DMA)`;
-  const formFactor = isNvmeSpeed 
-    ? 'M.2 NVMe High-Speed Host Drive' 
-    : isSataSsdSpeed 
-    ? '2.5-inch Solid State Host Storage' 
-    : 'Standard Host Storage Block Device';
-
-  const detectedQuota = sysInfo.quotaGb;
-  let hostCapacityGb = 512;
-  if (detectedQuota >= 800) hostCapacityGb = 1000;
-  else if (detectedQuota >= 400) hostCapacityGb = 512;
-  else if (detectedQuota >= 200) hostCapacityGb = 256;
-  else if (detectedQuota > 0) hostCapacityGb = Math.max(64, Math.round(detectedQuota));
-
-  const hostCapacityBytes = hostCapacityGb * 1024 * 1024 * 1024;
-  const totalSectors = hostCapacityGb * 2097152; // 512B LBA
-
-  const physicalPath = sysInfo.isWindows ? '\\\\.\\PhysicalDrive0' : sysInfo.isMac ? '/dev/disk0' : '/dev/nvme0n1';
-
-  // Real Partitions calculated from host StorageManager quota & usage
-  const realUsedGb = sysInfo.usageGb > 0 ? sysInfo.usageGb : Number((hostCapacityGb * 0.38).toFixed(1));
-  const realFreeGb = Number((Math.max(0, hostCapacityGb - realUsedGb)).toFixed(1));
-  const realUsedPct = sysInfo.usedPercentage > 0 ? sysInfo.usedPercentage : Math.round((realUsedGb / hostCapacityGb) * 100);
-
-  const mountLetter = sysInfo.isWindows ? 'C:' : sysInfo.isMac ? '/' : '/root';
-  const partitions: DiskVolumePartition[] = [
-    {
-      letterOrMount: mountLetter,
-      label: 'OS_PRIMARY',
-      fileSystem: sysInfo.isWindows ? 'NTFS' : sysInfo.isMac ? 'APFS' : 'ext4',
-      totalGb: hostCapacityGb,
-      usedGb: realUsedGb,
-      freeGb: realFreeGb,
-      usedPercentage: realUsedPct
-    }
-  ];
-
-  const smartAttrs: DriveSmartAttribute[] = [
-    { id: 1, name: 'Native I/O Buffer Latency', current: 100, worst: 100, threshold: 0, raw: `${sysInfo.measuredLatencyUs} µs (${sysInfo.measuredLatencyMs} ms)`, status: 'good', description: '실제 OS 커널 버퍼 직접 응답 속도' },
-    { id: 2, name: 'Real Sequential Read Speed', current: 99, worst: 99, threshold: 10, raw: `${sysInfo.benchmarkReadMbSec} MB/s`, status: 'good', description: '실측 순차 판독 대역폭' },
-    { id: 3, name: 'Real Sequential Write Speed', current: 99, worst: 99, threshold: 10, raw: `${sysInfo.benchmarkWriteMbSec} MB/s`, status: 'good', description: '실측 순차 쓰기 대역폭' },
-    { id: 4, name: 'Estimated Random 4K IOPS', current: 100, worst: 100, threshold: 0, raw: `${sysInfo.measuredRandom4kIops.toLocaleString()} IOPS`, status: 'good', description: '4KB 랜덤 블록 처리율' },
-    { id: 5, name: 'OS Storage Quota / Allocation', current: 100, worst: 100, threshold: 5, raw: `${sysInfo.quotaGb} GB (${sysInfo.usedPercentage}% 사용 중)`, status: 'good', description: '브라우저 및 OS 가용 할당량' },
-    { id: 6, name: 'Storage Persistence Grant', current: sysInfo.isPersistent ? 100 : 90, worst: 90, threshold: 0, raw: sysInfo.isPersistent ? 'Granted (영구 보존 허용)' : 'Volatile (OS 임시 캐시)', status: 'good', description: '데이터 영구 보존 권한' },
-    { id: 7, name: 'Host Hardware Cores', current: 100, worst: 100, threshold: 0, raw: `${sysInfo.cpuCores} Threads`, status: 'good', description: 'CPU 동시 스레드 코어 수' }
-  ];
-
-  if (sysInfo.deviceMemoryGb) {
-    smartAttrs.push({
-      id: 8,
-      name: 'Physical Device RAM',
-      current: 100,
-      worst: 100,
-      threshold: 0,
-      raw: `~${sysInfo.deviceMemoryGb} GB`,
-      status: 'good',
-      description: '물리 메모리(RAM) 용량'
-    });
-  }
-
-  const hostSerial = `HOST-${osName.toUpperCase()}-${Math.abs((sysInfo.cpuCores * 2654435761) ^ (Math.floor(sysInfo.quotaBytes / 1024) % 10000000)).toString(16).toUpperCase()}`;
-  const hostFirmware = `${osName.toUpperCase()}-KERNEL-${sysInfo.cpuCores}C`;
-
-  // Calculate realistic host writes/reads from real storage size & usage
-  const estHostWritesTb = Number((Math.max(2.4, (hostCapacityGb * 0.02) + (realUsedGb * 0.15))).toFixed(1));
-  const estHostReadsTb = Number((estHostWritesTb * 1.35).toFixed(1));
-  const estPowerOnHours = Math.max(120, Math.round(realUsedGb * 25));
+  const partitions: DiskVolumePartition[] = hasQuota
+    ? [
+        {
+          letterOrMount: 'OPFS://origin',
+          label: 'Browser Sandbox Storage Quota',
+          fileSystem: 'OPFS',
+          totalGb: sysInfo.quotaGb,
+          usedGb: sysInfo.usageGb,
+          freeGb: Number(Math.max(0, sysInfo.quotaGb - sysInfo.usageGb).toFixed(2)),
+          usedPercentage: sysInfo.usedPercentage
+        }
+      ]
+    : [];
 
   const hardwareSpecs: DiskHardwareSpecs = {
-    devicePhysicalPath: physicalPath,
-    vendorName,
-    modelNumber: modelName,
-    serialNumber: hostSerial,
-    firmwareRevision: hostFirmware,
-    busType,
-    busInterfaceSpeed: busInterface,
-    formFactor,
-    controllerVendor,
-    totalCapacityBytes: hostCapacityBytes,
-    totalCapacityGb: hostCapacityGb,
-    totalLbaSectors: totalSectors,
+    devicePhysicalPath: 'OPFS://origin-sandbox',
+    vendorName: 'Browser Storage Subsystem',
+    modelNumber: `${osName} Host Sandbox (${opfsLabel})`,
+    serialNumber: 'SANDBOX-NO-KERNEL-SERIAL',
+    firmwareRevision: 'W3C-OPFS',
+    busType: 'Unknown',
+    busInterfaceSpeed: sysInfo.benchmarkReadMbSec !== null
+      ? `OPFS 실측 ${sysInfo.benchmarkReadMbSec} MB/s Read / ${sysInfo.benchmarkWriteMbSec} MB/s Write`
+      : '웹 샌드박스 제한 (OPFS 비활성)',
+    formFactor: 'Origin Private File System Sandbox (No Raw Disk Handle)',
+    controllerVendor: `${sysInfo.osPlatform} (${sysInfo.cpuCores ?? '?'} Threads)`,
+    totalCapacityBytes: hasQuota ? sysInfo.quotaBytes : null,
+    totalCapacityGb: quotaCapGb,
+    totalLbaSectors: hasQuota ? totalSectors : null,
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: isNvmeSpeed || isSataSsdSpeed ? 'SSD (Non-Volatile NAND Flash)' : 'Mechanical HDD (Magnetic Platter)',
-    rotationalSpeedRpm: isNvmeSpeed || isSataSsdSpeed ? 0 : 7200,
-    trimSupported: true,
-    trimActive: true,
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: true,
-    queueDepth: isNvmeSpeed ? 64 : 32,
-    volatileWriteCache: true,
-    writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
-    apmAamSupported: !isNvmeSpeed,
-    hostReadsTb: estHostReadsTb,
-    hostWritesTb: estHostWritesTb,
-    percentageUsed: Math.max(1, Math.min(25, Math.round((estHostWritesTb / (hostCapacityGb * 0.6)) * 100))),
-    availableSparePercent: 100,
-    powerOnHours: estPowerOnHours,
-    powerCycles: Math.max(45, Math.round(estPowerOnHours / 12)),
-    unsafeShutdowns: 1,
-    mediaErrors: 0,
-    currentTempC: 36,
-    maxTempRecordedC: 46,
-    warningTempThresholdC: 70,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Sandbox Storage (OPFS / File API)',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
+    powerOnHours: null,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
+    currentTempC: null,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
     measuredKernelLatencyUs: sysInfo.measuredLatencyUs,
     measuredSequentialReadMbSec: sysInfo.benchmarkReadMbSec,
     measuredSequentialWriteMbSec: sysInfo.benchmarkWriteMbSec,
     measuredRandom4kReadIops: sysInfo.measuredRandom4kIops,
     probeTimestamp: Date.now(),
-    probeMethod: 'W3C StorageManager & OPFS Buffer Probe',
+    probeMethod: 'W3C OPFS & StorageManager Probe',
     partitions
   };
 
   return {
     id: 'drive-native-host-real',
-    name: `🖥️ [${mountLetter}] ${osName} 주 저장장치 (${hostCapacityGb}GB)`,
-    model: modelName,
-    serialNumber: hardwareSpecs.serialNumber,
-    firmware: hardwareSpecs.firmwareRevision,
-    type: driveType,
+    name: quotaCapGb !== null
+      ? `🖥️ [브라우저 OPFS] ${osName} 호스트 스토리지 (할당 ${quotaCapGb}GB)`
+      : `🖥️ [브라우저] ${osName} 호스트 스토리지 (센서 미제공)`,
+    model: `${osName} Host Sandbox (${opfsLabel})`,
+    serialNumber: 'SANDBOX-NO-KERNEL-SERIAL',
+    firmware: 'W3C-OPFS',
+    type: 'SSD',
     isExternal: false,
     connectionType: 'internal',
-    capacityGb: hostCapacityGb,
+    capacityGb: quotaCapGb,
     totalSectors,
-    interface: busInterface,
-    healthScore: 100,
-    temperatureC: 36,
-    powerOnHours: estPowerOnHours,
-    mountPoint: mountLetter,
-    fileSystem: sysInfo.isWindows ? 'NTFS' : sysInfo.isMac ? 'APFS' : 'ext4',
-    defaultBadSectorProbability: 0,
-    smartAttributes: smartAttrs,
-    seededBadSectors: [],
-    seededSlowSectors: [],
+    interface: sysInfo.opfsSupported
+      ? 'W3C OPFS Direct Storage Engine (No Raw SMART)'
+      : 'Browser StorageManager (Limited Access)',
+    healthScore: null,
+    temperatureC: null,
+    powerOnHours: null,
+    mountPoint: 'OPFS://',
+    fileSystem: 'OPFS',
+    smartAttributes: [],
     usedPercentage: sysInfo.usedPercentage,
     usedBytes: sysInfo.usageBytes,
-    isDemoPreset: false,
     hardwareSpecs
   };
+}
+
+/**
+ * Recursively collects real files and total byte size from a DirectoryHandle (bounded for responsiveness).
+ */
+async function collectDirectoryEntries(
+  dirHandle: any,
+  collectedFiles: File[],
+  state: { count: number; totalBytes: number },
+  maxEntries = 1500
+): Promise<void> {
+  for await (const entry of dirHandle.values()) {
+    if (state.count >= maxEntries) break;
+    state.count++;
+    if (entry.kind === 'file') {
+      try {
+        const f = await entry.getFile();
+        state.totalBytes += f.size;
+        if (collectedFiles.length < 256) {
+          collectedFiles.push(f);
+        }
+      } catch {
+        // Ignore unreadable file permission
+      }
+    } else if (entry.kind === 'directory') {
+      try {
+        await collectDirectoryEntries(entry, collectedFiles, state, maxEntries);
+      } catch {
+        // Ignore locked subdir
+      }
+    }
+  }
 }
 
 /**
@@ -473,115 +573,129 @@ export async function createNativeHostDrive(): Promise<DiskDrive> {
 export async function createNativeDriveFromDirectoryHandle(dirHandle: any): Promise<DiskDrive> {
   const folderName = dirHandle.name || 'Local_Volume';
   const t0 = performance.now();
-  let fileCount = 0;
+  const collectedFiles: File[] = [];
+  const state = { count: 0, totalBytes: 0 };
 
   try {
-    for await (const entry of dirHandle.values()) {
-      fileCount++;
-      if (fileCount > 50) break;
-    }
+    await collectDirectoryEntries(dirHandle, collectedFiles, state, 1500);
   } catch {
-    // Ignore permissions errors
+    // Ignore top-level permission issue
   }
-  const latency = Math.max(0.05, Number((performance.now() - t0).toFixed(2)));
+  const traversalLatencyMs = Math.max(0.05, Number((performance.now() - t0).toFixed(2)));
 
-  const totalSectors = 1000215808;
-  const capacityGb = 512;
+  // Pick largest file for direct byte slicing
+  const sampleFile = collectedFiles.length > 0
+    ? collectedFiles.reduce((max, f) => (f.size > max.size ? f : max), collectedFiles[0])
+    : undefined;
+
+  let measuredReadMbSec: number | null = null;
+  let sampleSliceLatencyMs = traversalLatencyMs;
+  if (sampleFile && sampleFile.size > 0) {
+    const sliceLen = Math.min(sampleFile.size, 256 * 1024);
+    const ts0 = performance.now();
+    try {
+      await sampleFile.slice(0, sliceLen).arrayBuffer();
+      const dt = Math.max(0.02, performance.now() - ts0);
+      sampleSliceLatencyMs = Number(dt.toFixed(2));
+      measuredReadMbSec = Number(((sliceLen / (1024 * 1024)) / (dt / 1000)).toFixed(1));
+    } catch {
+      // Ignore read failure
+    }
+  }
+
+  const totalBytes = state.totalBytes;
+  const totalSectors = Math.max(1, Math.ceil(totalBytes / 512));
+  const capacityGb = totalBytes > 0 ? Number((totalBytes / (1024 * 1024 * 1024)).toFixed(3)) : null;
+
   const hardwareSpecs: DiskHardwareSpecs = {
-    devicePhysicalPath: `Volume://MountPoint/${folderName}`,
-    vendorName: 'Direct Host Volume',
-    modelNumber: `Web-FSA-${folderName.toUpperCase()}`,
-    serialNumber: `FSA-VOL-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-    firmwareRevision: 'W3C-FSA-1.0',
-    busType: 'USB',
-    busInterfaceSpeed: 'Native Host Direct File System I/O (10 Gbps)',
-    formFactor: 'External USB/NVMe Volume Mount',
-    controllerVendor: 'W3C Native File System Access Driver',
-    totalCapacityBytes: capacityGb * 1024 * 1024 * 1024,
+    devicePhysicalPath: `Volume://FSA/${folderName}`,
+    vendorName: 'Host File System Volume',
+    modelNumber: `Directory: ${folderName} (${collectedFiles.length} Files)`,
+    serialNumber: 'SANDBOX-FSA-DIR',
+    firmwareRevision: 'W3C-FSA',
+    busType: 'Unknown',
+    busInterfaceSpeed: measuredReadMbSec !== null ? `File Slice 실측 ${measuredReadMbSec} MB/s` : 'Direct File System Access',
+    formFactor: 'Mounted Local Folder Volume',
+    controllerVendor: 'W3C File System Access API',
+    totalCapacityBytes: totalBytes,
     totalCapacityGb: capacityGb,
     totalLbaSectors: totalSectors,
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: 'SSD (Non-Volatile NAND Flash)',
-    rotationalSpeedRpm: 0,
-    trimSupported: true,
-    trimActive: true,
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: true,
-    queueDepth: 32,
-    volatileWriteCache: true,
-    writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
-    apmAamSupported: false,
-    hostReadsTb: 5.4,
-    hostWritesTb: 3.8,
-    percentageUsed: 1,
-    availableSparePercent: 100,
-    powerOnHours: 120,
-    powerCycles: 35,
-    unsafeShutdowns: 0,
-    mediaErrors: 0,
-    currentTempC: 32,
-    maxTempRecordedC: 40,
-    warningTempThresholdC: 70,
-    measuredKernelLatencyUs: Math.round(latency * 1000),
-    measuredSequentialReadMbSec: 1050,
-    measuredSequentialWriteMbSec: 920,
-    measuredRandom4kReadIops: 75000,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Sandbox Storage (OPFS / File API)',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
+    powerOnHours: null,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
+    currentTempC: null,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
+    measuredKernelLatencyUs: Math.round(sampleSliceLatencyMs * 1000),
+    measuredSequentialReadMbSec: measuredReadMbSec,
+    measuredSequentialWriteMbSec: null,
+    measuredRandom4kReadIops: null,
     probeTimestamp: Date.now(),
-    probeMethod: 'W3C StorageManager & OPFS Buffer Probe',
+    probeMethod: 'HTML5 Directory File Slicing & Storage Probe',
     partitions: [
       {
-        letterOrMount: `${folderName}:`,
-        label: folderName,
-        fileSystem: 'NTFS',
-        totalGb: capacityGb,
-        usedGb: 48,
-        freeGb: capacityGb - 48,
-        usedPercentage: 9.4
+        letterOrMount: `${folderName}/`,
+        label: `${collectedFiles.length} Files Scanned`,
+        fileSystem: 'Browser File API',
+        totalGb: capacityGb ?? 0,
+        usedGb: capacityGb ?? 0,
+        freeGb: 0,
+        usedPercentage: 100
       }
     ]
   };
 
   return {
     id: `drive-native-fsa-${Date.now()}`,
-    name: `📁 ${folderName} (실제 로컬 디렉토리 볼륨)`,
-    model: `Web-FSA-${folderName.toUpperCase()}`,
-    serialNumber: hardwareSpecs.serialNumber,
-    firmware: 'W3C-FSA-1.0',
+    name: `📁 ${folderName} (실제 폴더 볼륨, ${collectedFiles.length}개 파일)`,
+    model: `Directory Volume: ${folderName}`,
+    serialNumber: 'SANDBOX-FSA-DIR',
+    firmware: 'W3C-FSA',
     type: 'EXTERNAL_SSD',
     isExternal: true,
     connectionType: 'usb',
-    usbProtocol: 'NVMe over USB (UASP 10Gbps)',
-    bridgeChipset: 'W3C File System Access Native Driver',
-    mountPoint: `${folderName}:`,
-    fileSystem: 'NTFS',
+    mountPoint: `${folderName}/`,
+    fileSystem: 'Browser File API',
     capacityGb,
     totalSectors,
-    interface: 'Native Host Direct File System I/O',
-    healthScore: 100,
-    temperatureC: 32,
-    powerOnHours: 100,
-    defaultBadSectorProbability: 0,
-    seededBadSectors: [],
-    seededSlowSectors: [],
+    usedBytes: totalBytes,
+    interface: 'W3C File System Access API (Direct File Slicing)',
+    healthScore: null,
+    temperatureC: null,
+    powerOnHours: null,
+    attachedFile: sampleFile,
+    attachedFiles: collectedFiles,
     attachedFileHandle: dirHandle,
-    smartAttributes: [
-      { id: 1, name: 'Directory Tree Traversal Latency', current: 100, worst: 100, threshold: 0, raw: `${latency} ms`, status: 'good', description: '로컬 파일시스템 인덱싱 지연' },
-      { id: 2, name: 'Volume Access Permission Grant', current: 100, worst: 100, threshold: 0, raw: 'Read/Write Active', status: 'good', description: 'OS 커널 접근 권한' },
-      { id: 3, name: 'Direct Enumeration File Count', current: 100, worst: 100, threshold: 0, raw: `${fileCount}+ Entries`, status: 'good', description: '감지된 파일 및 디렉토리 수' }
-    ],
+    smartAttributes: [],
     hardwareSpecs
   };
 }
 
 /**
  * Creates a real DiskDrive object from standard HTML5 FileList (webkitdirectory folder selection)
- * Works reliably even inside cross-origin iframes where showDirectoryPicker is forbidden!
  */
 export async function createNativeDriveFromFolderFiles(files: FileList | File[]): Promise<DiskDrive> {
   const fileArray = Array.from(files);
@@ -589,123 +703,115 @@ export async function createNativeDriveFromFolderFiles(files: FileList | File[])
     throw new Error('선택된 폴더에 접근 가능한 파일이 없습니다.');
   }
 
-  // Determine root directory name from first file's webkitRelativePath if available
   const firstPath = fileArray[0].webkitRelativePath || '';
   const folderName = firstPath ? firstPath.split('/')[0] : 'Local_Folder_Volume';
 
-  // Total byte size of all files in volume
   let totalBytes = 0;
   for (const f of fileArray) {
     totalBytes += f.size;
   }
 
-  // Find the largest file to use as sample target for real byte slicing tests
   const sampleFile = fileArray.reduce((max, f) => (f.size > max.size ? f : max), fileArray[0]);
 
   const t0 = performance.now();
-  let firstChunkSample = 0;
+  let readMbSec: number | null = null;
   try {
-    const slice = sampleFile.slice(0, Math.min(sampleFile.size, 65536));
-    const buf = await slice.arrayBuffer();
-    const u8 = new Uint8Array(buf);
-    firstChunkSample = u8[0] || 0;
+    const sliceLen = Math.min(sampleFile.size, 256 * 1024);
+    if (sliceLen > 0) {
+      await sampleFile.slice(0, sliceLen).arrayBuffer();
+      const dt = Math.max(0.02, performance.now() - t0);
+      readMbSec = Number(((sliceLen / (1024 * 1024)) / (dt / 1000)).toFixed(1));
+    }
   } catch {
-    // Fallback
+    // Ignore read error
   }
   const latency = Math.max(0.01, Number((performance.now() - t0).toFixed(2)));
-  void firstChunkSample;
 
-  const totalSectors = Math.max(1000, Math.ceil(Math.max(totalBytes, 1024 * 1024 * 1024) / 512));
-  const capacityGb = Math.max(1, Math.round(Math.max(totalBytes, 1024 * 1024 * 1024) / (1024 * 1024 * 1024)));
+  const totalSectors = Math.max(1, Math.ceil(totalBytes / 512));
+  const capacityGb = totalBytes > 0 ? Number((totalBytes / (1024 * 1024 * 1024)).toFixed(3)) : 0;
 
   const hardwareSpecs: DiskHardwareSpecs = {
-    devicePhysicalPath: `Volume://${folderName}`,
-    vendorName: 'Direct Host Mounted Volume',
-    modelNumber: `DirVolume-${folderName.slice(0, 24)}`,
-    serialNumber: `VOL-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-    firmwareRevision: 'HTML5-DIR-1.0',
-    busType: 'USB',
-    busInterfaceSpeed: 'Native Host Direct Directory I/O',
-    formFactor: 'Mounted Local Folder / Storage Volume',
-    controllerVendor: 'W3C HTML5 Directory Traversal Engine',
-    totalCapacityBytes: capacityGb * 1024 * 1024 * 1024,
+    devicePhysicalPath: `Folder://${folderName}`,
+    vendorName: 'Local Directory Files',
+    modelNumber: `Folder: ${folderName.slice(0, 28)} (${fileArray.length} Files)`,
+    serialNumber: 'SANDBOX-DIR-FILES',
+    firmwareRevision: 'HTML5-FILE-API',
+    busType: 'Unknown',
+    busInterfaceSpeed: readMbSec !== null ? `File Slice 실측 ${readMbSec} MB/s` : 'HTML5 File Slice Stream',
+    formFactor: 'Mounted Local Directory File Set',
+    controllerVendor: 'W3C HTML5 File Slicing Engine',
+    totalCapacityBytes: totalBytes,
     totalCapacityGb: capacityGb,
     totalLbaSectors: totalSectors,
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: 'SSD (Non-Volatile NAND Flash)',
-    rotationalSpeedRpm: 0,
-    trimSupported: true,
-    trimActive: true,
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: true,
-    queueDepth: 32,
-    volatileWriteCache: true,
-    writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
-    apmAamSupported: false,
-    hostReadsTb: 2.1,
-    hostWritesTb: 1.4,
-    percentageUsed: 1,
-    availableSparePercent: 100,
-    powerOnHours: 120,
-    powerCycles: 45,
-    unsafeShutdowns: 0,
-    mediaErrors: 0,
-    currentTempC: 31,
-    maxTempRecordedC: 38,
-    warningTempThresholdC: 70,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Sandbox Storage (OPFS / File API)',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
+    powerOnHours: null,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
+    currentTempC: null,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
     measuredKernelLatencyUs: Math.round(latency * 1000),
-    measuredSequentialReadMbSec: 1050,
-    measuredSequentialWriteMbSec: 920,
-    measuredRandom4kReadIops: 75000,
+    measuredSequentialReadMbSec: readMbSec,
+    measuredSequentialWriteMbSec: null,
+    measuredRandom4kReadIops: null,
     probeTimestamp: Date.now(),
     probeMethod: 'HTML5 Directory File Slicing & Storage Probe',
     partitions: [
       {
-        letterOrMount: `${folderName}:`,
-        label: folderName,
-        fileSystem: 'NTFS',
+        letterOrMount: `${folderName}/`,
+        label: `${fileArray.length} Files (${(totalBytes / (1024 * 1024)).toFixed(1)} MB)`,
+        fileSystem: 'Browser File API',
         totalGb: capacityGb,
-        usedGb: Math.max(1, Math.round(totalBytes / (1024 * 1024 * 1024))),
-        freeGb: Math.max(0, capacityGb - Math.round(totalBytes / (1024 * 1024 * 1024))),
-        usedPercentage: Math.min(100, Number(((totalBytes / (capacityGb * 1024 * 1024 * 1024)) * 100).toFixed(1)))
+        usedGb: capacityGb,
+        freeGb: 0,
+        usedPercentage: 100
       }
     ]
   };
 
   return {
     id: `drive-native-folder-${Date.now()}`,
-    name: `📁 ${folderName} (로컬 디렉토리 볼륨, ${fileArray.length}개 파일)`,
+    name: `📁 ${folderName} (폴더 마운트, ${fileArray.length}개 파일)`,
     model: `DirVolume-${folderName.slice(0, 24)}`,
-    serialNumber: hardwareSpecs.serialNumber,
-    firmware: 'HTML5-DIR-1.0',
+    serialNumber: 'SANDBOX-DIR-FILES',
+    firmware: 'HTML5-FILE-API',
     type: 'EXTERNAL_SSD',
     isExternal: true,
     connectionType: 'usb',
-    usbProtocol: 'NVMe over USB (UASP 10Gbps)',
-    bridgeChipset: 'HTML5 Directory Native Stream Driver',
-    mountPoint: `${folderName}:`,
-    fileSystem: 'NTFS',
+    mountPoint: `${folderName}/`,
+    fileSystem: 'Browser File API',
     capacityGb,
     totalSectors,
-    interface: 'Native Host Direct Directory I/O',
-    healthScore: 100,
-    temperatureC: 31,
-    powerOnHours: 120,
-    defaultBadSectorProbability: 0,
-    seededBadSectors: [],
-    seededSlowSectors: [],
+    usedBytes: totalBytes,
+    interface: 'HTML5 File Slice Stream I/O',
+    healthScore: null,
+    temperatureC: null,
+    powerOnHours: null,
     attachedFile: sampleFile,
-    smartAttributes: [
-      { id: 1, name: 'Directory Indexing Latency', current: 100, worst: 100, threshold: 0, raw: `${latency} ms`, status: 'good', description: '폴더 인덱싱 및 샘플 파일 버퍼 접근 지연' },
-      { id: 2, name: 'Mounted File Count', current: 100, worst: 100, threshold: 0, raw: `${fileArray.length} Files`, status: 'good', description: '볼륨 내부 감지된 총 파일 수' },
-      { id: 3, name: 'Total Volume Aggregate Size', current: 100, worst: 100, threshold: 0, raw: `${(totalBytes / (1024 * 1024)).toFixed(2)} MB`, status: 'good', description: '디렉토리 전체 파일 용량' }
-    ],
+    attachedFiles: fileArray,
+    smartAttributes: [],
     hardwareSpecs
   };
 }
@@ -719,77 +825,79 @@ export async function createNativeDriveFromFile(file: File): Promise<DiskDrive> 
   const sizeGb = Number((file.size / (1024 * 1024 * 1024)).toFixed(3));
   const displayCap = sizeGb >= 1 ? `${sizeGb} GB` : `${sizeMb} MB`;
 
-  // Quick initial probe of first 64KB slice
   const t0 = performance.now();
-  let firstChunkSample = 0;
+  let readMbSec: number | null = null;
   try {
-    const slice = file.slice(0, Math.min(file.size, 65536));
-    const buf = await slice.arrayBuffer();
-    const u8 = new Uint8Array(buf);
-    firstChunkSample = u8[0] || 0;
+    const sliceSize = Math.min(file.size, 256 * 1024);
+    if (sliceSize > 0) {
+      const slice = file.slice(0, sliceSize);
+      const buf = await slice.arrayBuffer();
+      const dt = Math.max(0.02, performance.now() - t0);
+      readMbSec = Number(((buf.byteLength / (1024 * 1024)) / (dt / 1000)).toFixed(1));
+    }
   } catch {
-    // Ignore
+    // Ignore read error
   }
   const probeLatency = Math.max(0.01, Number((performance.now() - t0).toFixed(2)));
-  void firstChunkSample;
 
-  const totalSectors = Math.max(1000, Math.ceil(file.size / 512));
-  const capacityGb = Math.max(1, Math.round(file.size / (1024 * 1024 * 1024)));
+  const totalSectors = Math.max(1, Math.ceil(file.size / 512));
+  const capacityGb = Number((file.size / (1024 * 1024 * 1024)).toFixed(3));
 
   const hardwareSpecs: DiskHardwareSpecs = {
-    devicePhysicalPath: `RawFile://${file.name}`,
-    vendorName: 'Direct Disk Image Container',
-    modelNumber: `RealFile-${file.name.slice(0, 24)}`,
+    devicePhysicalPath: `File://${file.name}`,
+    vendorName: 'Mounted Disk Image / File',
+    modelNumber: file.name,
     serialNumber: `FILE-${Math.abs(file.lastModified).toString(16).toUpperCase()}`,
-    firmwareRevision: 'RAW-SLICE-IO',
-    busType: 'USB',
-    busInterfaceSpeed: 'Direct Buffer Memory Pass-Through (File API)',
-    formFactor: 'Virtual Disk Image / Raw Byte Stream',
-    controllerVendor: 'W3C Direct File Slicing Engine',
+    firmwareRevision: 'FILE-SLICE-IO',
+    busType: 'Unknown',
+    busInterfaceSpeed: readMbSec !== null ? `File Slice 실측 ${readMbSec} MB/s` : 'Direct File ArrayBuffer Slice',
+    formFactor: 'Raw Disk Image / Local File Byte Stream',
+    controllerVendor: 'W3C File.slice() Stream Reader',
     totalCapacityBytes: file.size,
     totalCapacityGb: capacityGb,
     totalLbaSectors: totalSectors,
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: 'SSD (Non-Volatile NAND Flash)',
-    rotationalSpeedRpm: 0,
-    trimSupported: true,
-    trimActive: false,
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: true,
-    queueDepth: 16,
-    volatileWriteCache: false,
-    writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
-    apmAamSupported: false,
-    hostReadsTb: Number((file.size / (1024 * 1024 * 1024 * 1024)).toFixed(3)),
-    hostWritesTb: 0.1,
-    percentageUsed: 0,
-    availableSparePercent: 100,
-    powerOnHours: 1,
-    powerCycles: 1,
-    unsafeShutdowns: 0,
-    mediaErrors: 0,
-    currentTempC: 30,
-    maxTempRecordedC: 35,
-    warningTempThresholdC: 70,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Sandbox Storage (OPFS / File API)',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
+    powerOnHours: null,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
+    currentTempC: null,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
     measuredKernelLatencyUs: Math.round(probeLatency * 1000),
-    measuredSequentialReadMbSec: 1450,
-    measuredSequentialWriteMbSec: 1100,
-    measuredRandom4kReadIops: 82000,
+    measuredSequentialReadMbSec: readMbSec,
+    measuredSequentialWriteMbSec: null,
+    measuredRandom4kReadIops: null,
     probeTimestamp: Date.now(),
     probeMethod: 'Real File Slice Direct IO',
     partitions: [
       {
-        letterOrMount: 'RAW:',
+        letterOrMount: 'FILE:',
         label: file.name,
-        fileSystem: file.name.endsWith('.iso') || file.name.endsWith('.img') ? 'exFAT' : 'NTFS',
-        totalGb: Number((file.size / (1024 * 1024 * 1024)).toFixed(2)),
-        usedGb: Number((file.size / (1024 * 1024 * 1024)).toFixed(2)),
+        fileSystem: 'Browser File API',
+        totalGb: capacityGb,
+        usedGb: capacityGb,
         freeGb: 0,
         usedPercentage: 100
       }
@@ -799,31 +907,23 @@ export async function createNativeDriveFromFile(file: File): Promise<DiskDrive> 
   return {
     id: `drive-native-file-${Date.now()}`,
     name: `📄 ${file.name} (${displayCap})`,
-    model: `RealFile-${file.name.slice(0, 24)}`,
+    model: file.name,
     serialNumber: hardwareSpecs.serialNumber,
-    firmware: 'RAW-SLICE-IO',
+    firmware: 'FILE-SLICE-IO',
     type: 'EXTERNAL_SSD',
     isExternal: true,
     connectionType: 'usb',
-    usbProtocol: 'NVMe over USB (UASP 10Gbps)',
-    bridgeChipset: 'W3C Direct File Slicing Engine',
-    mountPoint: 'RAW:',
-    fileSystem: file.name.endsWith('.iso') || file.name.endsWith('.img') ? 'exFAT' : 'NTFS',
+    mountPoint: 'FILE:',
+    fileSystem: 'Browser File API',
     capacityGb,
     totalSectors,
-    interface: 'Web Direct File ArrayBuffer Slicing I/O',
-    healthScore: 100,
-    temperatureC: 30,
-    powerOnHours: 1,
-    defaultBadSectorProbability: 0,
-    seededBadSectors: [],
-    seededSlowSectors: [],
+    usedBytes: file.size,
+    interface: 'Web File.slice() Direct Byte Stream',
+    healthScore: null,
+    temperatureC: null,
+    powerOnHours: null,
     attachedFile: file,
-    smartAttributes: [
-      { id: 1, name: 'Direct File Header Slice Latency', current: 100, worst: 100, threshold: 0, raw: `${probeLatency} ms`, status: 'good', description: '실제 로컬 파일 버퍼 판독 지연' },
-      { id: 2, name: 'Actual File Byte Size', current: 100, worst: 100, threshold: 0, raw: `${file.size.toLocaleString()} Bytes`, status: 'good', description: 'OS 파일시스템 실제 크기' },
-      { id: 3, name: 'Last Modified Timestamp', current: 100, worst: 100, threshold: 0, raw: new Date(file.lastModified).toLocaleString('ko-KR'), status: 'good', description: '파일 수정 일시' }
-    ],
+    smartAttributes: [],
     hardwareSpecs
   };
 }
@@ -842,107 +942,108 @@ export async function requestPhysicalWebUsbDevice(): Promise<DiskDrive | null> {
   try {
     await device.open();
   } catch {
-    // Some devices might require OS permissions
+    // OS-claimed mass storage interfaces often restrict .open() in WebUSB; descriptor metadata remains accessible.
   }
 
   const vendorHex = device.vendorId.toString(16).padStart(4, '0').toUpperCase();
   const prodHex = device.productId.toString(16).padStart(4, '0').toUpperCase();
   const known = KNOWN_USB_STORAGE_VENDORS[device.vendorId];
-  const mfr = device.manufacturerName || (known ? known.name : 'USB Storage Device');
-  const devName = device.productName || `USB Device [VID:0x${vendorHex}]`;
+  const mfr = device.manufacturerName || (known ? known.name : `USB Vendor 0x${vendorHex}`);
+  const devName = device.productName || `USB Device [0x${vendorHex}:0x${prodHex}]`;
   const serial = device.serialNumber || `USB-${vendorHex}-${prodHex}`;
-  const isUsb3 = (device.usbVersionMajor || 2) >= 3;
-  const bridge = known ? known.controller : `${mfr} High-Speed USB Bridge`;
-  const busSpeed = known ? known.typicalBus : isUsb3 ? 'USB 3.2 Gen1 (5 Gbps)' : 'USB 2.0 High-Speed (480 Mbps)';
+  const isUsb3 = typeof device.usbVersionMajor === 'number' ? device.usbVersionMajor >= 3 : undefined;
+  const usbVer = typeof device.usbVersionMajor === 'number'
+    ? `${device.usbVersionMajor}.${device.usbVersionMinor ?? 0}`
+    : undefined;
+  const bridge = known ? known.controller : `${mfr} USB Interface`;
+  const busSpeed = known
+    ? known.typicalBus
+    : isUsb3 === true
+    ? `USB ${usbVer} SuperSpeed`
+    : isUsb3 === false
+    ? `USB ${usbVer} High-Speed`
+    : 'USB Peripheral Link';
 
   const hardwareSpecs: DiskHardwareSpecs = {
     devicePhysicalPath: `USB://VID_${vendorHex}&PID_${prodHex}`,
     vendorName: mfr,
     modelNumber: `${mfr} ${devName}`,
     serialNumber: serial,
-    firmwareRevision: `USB-${device.deviceVersionMajor || 1}.${device.deviceVersionMinor || 0}`,
+    firmwareRevision: typeof device.deviceVersionMajor === 'number'
+      ? `${device.deviceVersionMajor}.${device.deviceVersionMinor ?? 0}`
+      : 'N/A',
     busType: 'USB',
     busInterfaceSpeed: busSpeed,
-    formFactor: 'USB Portable Flash / External Drive',
+    formFactor: 'WebUSB Connected Peripheral',
     controllerVendor: bridge,
-    totalCapacityBytes: 64 * 1024 * 1024 * 1024,
-    totalCapacityGb: 64,
-    totalLbaSectors: 125000000,
+    totalCapacityBytes: null,
+    totalCapacityGb: null,
+    totalLbaSectors: null,
     logicalSectorSize: 512,
-    physicalSectorSize: 4096,
-    isAdvancedFormat: true,
-    partitionStyle: 'MBR (Master Boot Record)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: 'Flash Memory Card / USB BOT',
-    rotationalSpeedRpm: 0,
-    trimSupported: isUsb3,
-    trimActive: isUsb3,
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: isUsb3,
-    queueDepth: isUsb3 ? 32 : 1,
-    volatileWriteCache: false,
-    writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
-    apmAamSupported: false,
-    hostReadsTb: 2.1,
-    hostWritesTb: 1.4,
-    percentageUsed: 5,
-    availableSparePercent: 100,
-    powerOnHours: 120,
-    powerCycles: 28,
-    unsafeShutdowns: 1,
-    mediaErrors: 0,
-    currentTempC: 33,
-    maxTempRecordedC: 42,
-    warningTempThresholdC: 70,
-    measuredKernelLatencyUs: isUsb3 ? 420 : 1850,
-    measuredSequentialReadMbSec: isUsb3 ? 420 : 38,
-    measuredSequentialWriteMbSec: isUsb3 ? 350 : 25,
-    measuredRandom4kReadIops: isUsb3 ? 18000 : 1200,
+    physicalSectorSize: 512,
+    isAdvancedFormat: false,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Direct Hardware Peripheral',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
+    powerOnHours: null,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
+    currentTempC: null,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
+    measuredKernelLatencyUs: null,
+    measuredSequentialReadMbSec: null,
+    measuredSequentialWriteMbSec: null,
+    measuredRandom4kReadIops: null,
     probeTimestamp: Date.now(),
-    probeMethod: 'WebUSB Hardware Pipe',
-    partitions: [
-      {
-        letterOrMount: 'USB:',
-        label: 'USB_FLASH',
-        fileSystem: 'exFAT',
-        totalGb: 64,
-        usedGb: 14.5,
-        freeGb: 49.5,
-        usedPercentage: 22.6
-      }
-    ]
+    probeMethod: 'WebUSB Device Descriptor',
+    usbDeviceInfo: {
+      vendorId: device.vendorId,
+      productId: device.productId,
+      usbVersion: usbVer,
+      deviceClass: device.deviceClass
+    },
+    partitions: []
   };
 
   return {
     id: `drive-usb-real-${device.vendorId}-${device.productId}-${Date.now()}`,
-    name: `🔌 ${devName} (${mfr})`,
+    name: `🔌 ${devName} (VID:0x${vendorHex} PID:0x${prodHex})`,
     model: `${mfr} ${devName}`,
     serialNumber: serial,
-    firmware: `USB-${device.deviceVersionMajor || 1}.${device.deviceVersionMinor || 0}`,
+    firmware: hardwareSpecs.firmwareRevision,
     type: 'USB',
     isExternal: true,
     connectionType: 'usb',
-    usbProtocol: isUsb3 ? 'NVMe over USB (UASP 10Gbps)' : 'BOT (Bulk-Only Transport)',
-    isUsb2: !isUsb3,
+    usbProtocol: isUsb3 ? 'UASP (USB Attached SCSI Protocol)' : 'BOT (Bulk-Only Transport)',
+    isUsb2: isUsb3 === false,
     bridgeChipset: bridge,
-    mountPoint: 'USB:',
-    fileSystem: 'exFAT',
-    capacityGb: 64,
-    totalSectors: 125000000,
-    interface: `WebUSB Hardware Pass-Through (${busSpeed})`,
-    healthScore: 100,
-    temperatureC: 33,
-    powerOnHours: 120,
-    defaultBadSectorProbability: 0,
-    seededBadSectors: [],
-    seededSlowSectors: [],
-    smartAttributes: [
-      { id: 1, name: 'WebUSB Hardware Pipe Status', current: 100, worst: 100, threshold: 0, raw: 'Hardware Connected', status: 'good', description: '물리 USB 인터페이스 페어링 상태' },
-      { id: 2, name: 'USB Vendor & Product ID', current: 100, worst: 100, threshold: 0, raw: `0x${vendorHex} : 0x${prodHex}`, status: 'good', description: '공식 USB-IF 식별 번호' },
-      { id: 3, name: 'USB Device Class Protocol', current: 100, worst: 100, threshold: 0, raw: `Class ${device.deviceClass || 0}`, status: 'good', description: 'USB 기기 클래스 사양' }
-    ],
+    mountPoint: `VID_${vendorHex}&PID_${prodHex}`,
+    fileSystem: 'Unknown',
+    capacityGb: null,
+    totalSectors: 0,
+    interface: `WebUSB Descriptor (${busSpeed})`,
+    healthScore: null,
+    temperatureC: null,
+    powerOnHours: null,
+    smartAttributes: [],
     hardwareSpecs
   };
 }
@@ -959,173 +1060,288 @@ export async function requestPhysicalWebSerialDevice(): Promise<DiskDrive | null
   if (!port) return null;
 
   const info = port.getInfo ? port.getInfo() : {};
-  const usbVendor = info.usbVendorId ? info.usbVendorId.toString(16).toUpperCase() : 'COM';
-  const usbProd = info.usbProductId ? info.usbProductId.toString(16).toUpperCase() : 'PORT';
+  const usbVendor = info.usbVendorId ? info.usbVendorId.toString(16).padStart(4, '0').toUpperCase() : 'N/A';
+  const usbProd = info.usbProductId ? info.usbProductId.toString(16).padStart(4, '0').toUpperCase() : 'N/A';
+
+  const hardwareSpecs: DiskHardwareSpecs = {
+    devicePhysicalPath: `SERIAL://VID_${usbVendor}&PID_${usbProd}`,
+    vendorName: usbVendor !== 'N/A' ? `USB-UART 0x${usbVendor}` : 'Serial COM Port',
+    modelNumber: `Serial Bridge (0x${usbVendor}:0x${usbProd})`,
+    serialNumber: `SERIAL-${usbVendor}-${usbProd}`,
+    firmwareRevision: 'N/A',
+    busType: 'USB',
+    busInterfaceSpeed: 'Web Serial COM Interface',
+    formFactor: 'Serial Hardware Link',
+    controllerVendor: 'Web Serial Port API',
+    totalCapacityBytes: null,
+    totalCapacityGb: null,
+    totalLbaSectors: null,
+    logicalSectorSize: 512,
+    physicalSectorSize: 512,
+    isAdvancedFormat: false,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Direct Hardware Peripheral',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
+    powerOnHours: null,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
+    currentTempC: null,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
+    measuredKernelLatencyUs: null,
+    measuredSequentialReadMbSec: null,
+    measuredSequentialWriteMbSec: null,
+    measuredRandom4kReadIops: null,
+    probeTimestamp: Date.now(),
+    probeMethod: 'Web Serial Port Link',
+    usbDeviceInfo: info.usbVendorId
+      ? {
+          vendorId: info.usbVendorId,
+          productId: info.usbProductId || 0
+        }
+      : undefined,
+    partitions: []
+  };
 
   return {
     id: `drive-serial-real-${Date.now()}`,
-    name: `⚡ COM Serial Port Hardware [VID:0x${usbVendor}]`,
-    model: `UART/Serial USB Bridge (0x${usbVendor}:0x${usbProd})`,
-    serialNumber: `SERIAL-PORT-${usbVendor}`,
-    firmware: 'UART-115200',
+    name: `⚡ COM Serial Port [VID:0x${usbVendor} PID:0x${usbProd}]`,
+    model: `Serial Hardware Bridge (0x${usbVendor}:0x${usbProd})`,
+    serialNumber: hardwareSpecs.serialNumber,
+    firmware: 'N/A',
     type: 'USB',
     isExternal: true,
     connectionType: 'usb',
-    usbProtocol: 'BOT (Bulk-Only Transport)',
     mountPoint: 'COM:',
-    fileSystem: 'FAT32',
-    capacityGb: 32,
-    totalSectors: 62500000,
-    interface: 'Web Serial Hardware Direct Link',
-    healthScore: 100,
-    temperatureC: 31,
-    powerOnHours: 24,
-    defaultBadSectorProbability: 0,
-    seededBadSectors: [],
-    seededSlowSectors: [],
-    smartAttributes: [
-      { id: 1, name: 'Serial Port Handle Status', current: 100, worst: 100, threshold: 0, raw: 'Port Claimed', status: 'good', description: 'COM 시리얼 버스 직접 연결' },
-      { id: 2, name: 'UART Baudrate Clock', current: 100, worst: 100, threshold: 0, raw: '115,200 bps', status: 'good', description: '물리 통신 보오레이트' }
-    ]
+    fileSystem: 'Unknown',
+    capacityGb: null,
+    totalSectors: 0,
+    interface: 'Web Serial Port Link',
+    healthScore: null,
+    temperatureC: null,
+    powerOnHours: null,
+    smartAttributes: [],
+    hardwareSpecs
   };
 }
 
 /**
  * Live Deep Hardware Specification Re-Probe:
- * Re-measures microsecond latency and buffer bandwidth, updating hardware specs.
+ * Refreshes real native Tauri IOCTL drives or OPFS/File metrics without fabricating kernel stats.
  */
 export async function probeDetailedDriveHardware(drive: DiskDrive): Promise<DiskHardwareSpecs> {
+  if (drive.id.startsWith('drive-tauri-physical-')) {
+    const refreshed = await queryTauriPhysicalDrives();
+    const match = refreshed.find(d => d.id === drive.id);
+    if (match?.hardwareSpecs) {
+      return match.hardwareSpecs;
+    }
+  }
+
   const sysInfo = await probeNativeSystemStorage();
-  
+
   if (drive.hardwareSpecs) {
+    const isFile = Boolean(drive.attachedFile);
     return {
       ...drive.hardwareSpecs,
-      measuredKernelLatencyUs: sysInfo.measuredLatencyUs,
-      measuredSequentialReadMbSec: sysInfo.benchmarkReadMbSec,
-      measuredSequentialWriteMbSec: sysInfo.benchmarkWriteMbSec,
-      measuredRandom4kReadIops: sysInfo.measuredRandom4kIops,
+      measuredKernelLatencyUs: isFile ? drive.hardwareSpecs.measuredKernelLatencyUs : sysInfo.measuredLatencyUs,
+      measuredSequentialReadMbSec: isFile ? drive.hardwareSpecs.measuredSequentialReadMbSec : sysInfo.benchmarkReadMbSec,
+      measuredSequentialWriteMbSec: isFile ? drive.hardwareSpecs.measuredSequentialWriteMbSec : sysInfo.benchmarkWriteMbSec,
+      measuredRandom4kReadIops: isFile ? drive.hardwareSpecs.measuredRandom4kReadIops : sysInfo.measuredRandom4kIops,
       currentTempC: drive.temperatureC,
       probeTimestamp: Date.now()
     };
   }
 
-  // Generate fallback specs
-  const hostCap = drive.capacityGb || 512;
   return {
-    devicePhysicalPath: drive.isExternal ? `USB://${drive.id}` : '\\\\.\\PhysicalDrive0',
-    vendorName: drive.model.split(' ')[0] || 'Generic Storage',
+    devicePhysicalPath: drive.isExternal ? `Device://${drive.id}` : 'OPFS://origin-sandbox',
+    vendorName: drive.model.split(' ')[0] || 'Storage Device',
     modelNumber: drive.model,
     serialNumber: drive.serialNumber,
     firmwareRevision: drive.firmware,
-    busType: drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'SATA',
+    busType: drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'Unknown',
     busInterfaceSpeed: drive.interface,
-    formFactor: drive.type === 'NVMe' ? 'M.2 2280 NVMe' : drive.isExternal ? 'Portable USB Storage' : '2.5-inch Internal SSD',
-    controllerVendor: drive.bridgeChipset || 'Native Host Storage Controller',
-    totalCapacityBytes: hostCap * 1024 * 1024 * 1024,
-    totalCapacityGb: hostCap,
-    totalLbaSectors: drive.totalSectors || hostCap * 2097152,
+    formFactor: drive.isExternal ? 'External Storage' : 'Host Storage',
+    controllerVendor: drive.bridgeChipset || 'Host Storage Controller',
+    totalCapacityBytes: drive.capacityGb !== null ? Math.round(drive.capacityGb * 1024 * 1024 * 1024) : null,
+    totalCapacityGb: drive.capacityGb,
+    totalLbaSectors: drive.totalSectors > 0 ? drive.totalSectors : null,
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: drive.type === 'HDD' ? 'Mechanical HDD (Magnetic Platter)' : 'SSD (Non-Volatile NAND Flash)',
-    rotationalSpeedRpm: drive.type === 'HDD' ? 7200 : 0,
-    trimSupported: drive.type !== 'HDD',
-    trimActive: drive.type !== 'HDD',
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: true,
-    queueDepth: drive.type === 'NVMe' ? 64 : 32,
-    volatileWriteCache: true,
-    writeCacheFlushSupported: true,
-    readLookAheadSupported: true,
-    apmAamSupported: drive.type === 'HDD',
-    hostReadsTb: 12.5,
-    hostWritesTb: 9.8,
-    percentageUsed: 2,
-    availableSparePercent: 100,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: 'Sandbox Storage (OPFS / File API)',
+    rotationalSpeedRpm: null,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: false,
+    smartActive: false,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: null,
+    hostWritesTb: null,
+    percentageUsed: null,
+    availableSparePercent: null,
     powerOnHours: drive.powerOnHours,
-    powerCycles: 150,
-    unsafeShutdowns: 1,
-    mediaErrors: 0,
+    powerCycles: null,
+    unsafeShutdowns: null,
+    mediaErrors: null,
     currentTempC: drive.temperatureC,
-    maxTempRecordedC: 45,
-    warningTempThresholdC: 70,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: false,
     measuredKernelLatencyUs: sysInfo.measuredLatencyUs,
     measuredSequentialReadMbSec: sysInfo.benchmarkReadMbSec,
     measuredSequentialWriteMbSec: sysInfo.benchmarkWriteMbSec,
     measuredRandom4kReadIops: sysInfo.measuredRandom4kIops,
     probeTimestamp: Date.now(),
-    probeMethod: 'W3C StorageManager & OPFS Buffer Probe'
+    probeMethod: 'W3C OPFS & StorageManager Probe'
   };
 }
 
 /**
- * Rescans all system storage and updates drive specs live
+ * Rescans all system storage and updates drive list live
  */
 export async function rescanAllDrives(currentDrives: DiskDrive[]): Promise<DiskDrive[]> {
   const tauriDrives = await queryTauriPhysicalDrives();
-  const newHostDrive = await createNativeHostDrive();
   const usbDevices = await probeWebUsbDevices();
 
   const updated: DiskDrive[] = [];
+  const seenIds = new Set<string>();
 
-  // Add refreshed host drive
-  updated.push(newHostDrive);
-
-  // Add any additional physical drives detected via Tauri
-  for (const td of tauriDrives) {
-    if (!updated.some(u => u.id === td.id)) {
-      updated.push(td);
+  if (tauriDrives.length > 0) {
+    for (const td of tauriDrives) {
+      if (!seenIds.has(td.id)) {
+        seenIds.add(td.id);
+        updated.push(td);
+      }
+    }
+  } else {
+    const newHostDrive = await createNativeHostDrive();
+    if (!seenIds.has(newHostDrive.id)) {
+      seenIds.add(newHostDrive.id);
+      updated.push(newHostDrive);
     }
   }
 
-  // Preserve any mounted directory or file drives with refreshed hardware specs
+  // Preserve user-mounted files, folders, and connected USB/Serial handles
   for (const d of currentDrives) {
     if (d.id === 'drive-native-host-real') continue;
-    if (d.attachedFile || d.attachedFileHandle) {
-      updated.push(d);
-    } else if (d.isDemoPreset) {
-      updated.push(d);
-    } else {
+    if (d.id.startsWith('drive-tauri-physical-')) continue;
+    if (!seenIds.has(d.id)) {
+      seenIds.add(d.id);
       updated.push(d);
     }
   }
 
-  // Also if new WebUSB devices are detected that aren't in the list
   for (const usb of usbDevices) {
     const existing = updated.find(d => d.id.includes(`${usb.vendorId}-${usb.productId}`));
     if (!existing) {
       const known = KNOWN_USB_STORAGE_VENDORS[usb.vendorId];
-      const mfr = known ? known.name : 'USB Device';
+      const mfr = usb.manufacturerName || (known ? known.name : 'USB Device');
       const vendorHex = usb.vendorId.toString(16).padStart(4, '0').toUpperCase();
       const prodHex = usb.productId.toString(16).padStart(4, '0').toUpperCase();
-      const newUsbDrive: DiskDrive = {
+      const isUsb3 = typeof usb.usbVersionMajor === 'number' ? usb.usbVersionMajor >= 3 : undefined;
+
+      updated.push({
         id: `drive-usb-real-${usb.vendorId}-${usb.productId}-${Date.now()}`,
-        name: `🔌 ${usb.deviceName} (${mfr})`,
+        name: `🔌 ${usb.deviceName} (VID:0x${vendorHex} PID:0x${prodHex})`,
         model: `${mfr} ${usb.deviceName}`,
-        serialNumber: `USB-${vendorHex}-${prodHex}`,
-        firmware: 'USB-3.2',
+        serialNumber: usb.serialNumber || `USB-${vendorHex}-${prodHex}`,
+        firmware: typeof usb.usbVersionMajor === 'number' ? `USB ${usb.usbVersionMajor}.${usb.usbVersionMinor ?? 0}` : 'N/A',
         type: 'USB',
         isExternal: true,
         connectionType: 'usb',
-        usbProtocol: 'NVMe over USB (UASP 10Gbps)',
-        bridgeChipset: known ? known.controller : 'Generic USB Storage Controller',
-        mountPoint: 'USB:',
-        fileSystem: 'exFAT',
-        capacityGb: 64,
-        totalSectors: 125000000,
-        interface: 'WebUSB Direct Hardware Pipe',
-        healthScore: 100,
-        temperatureC: 32,
-        powerOnHours: 50,
-        defaultBadSectorProbability: 0,
-        smartAttributes: [
-          { id: 1, name: 'WebUSB Hardware State', current: 100, worst: 100, threshold: 0, raw: 'Auto-Discovered', status: 'good', description: '물리 USB 인터페이스 자동 감지' }
-        ]
-      };
-      updated.push(newUsbDrive);
+        usbProtocol: isUsb3 ? 'UASP (USB Attached SCSI Protocol)' : 'BOT (Bulk-Only Transport)',
+        bridgeChipset: known ? known.controller : 'USB Hardware Interface',
+        mountPoint: `VID_${vendorHex}&PID_${prodHex}`,
+        fileSystem: 'Unknown',
+        capacityGb: null,
+        totalSectors: 0,
+        interface: 'WebUSB Descriptor (No Raw Block Access)',
+        healthScore: null,
+        temperatureC: null,
+        powerOnHours: null,
+        smartAttributes: [],
+        hardwareSpecs: {
+          devicePhysicalPath: `USB://VID_${vendorHex}&PID_${prodHex}`,
+          vendorName: mfr,
+          modelNumber: `${mfr} ${usb.deviceName}`,
+          serialNumber: usb.serialNumber || `USB-${vendorHex}-${prodHex}`,
+          firmwareRevision: 'N/A',
+          busType: 'USB',
+          busInterfaceSpeed: known ? known.typicalBus : 'USB Peripheral Link',
+          formFactor: 'WebUSB Hardware Peripheral',
+          controllerVendor: known ? known.controller : 'WebUSB Driver',
+          totalCapacityBytes: null,
+          totalCapacityGb: null,
+          totalLbaSectors: null,
+          logicalSectorSize: 512,
+          physicalSectorSize: 512,
+          isAdvancedFormat: false,
+          partitionStyle: 'N/A (Sandbox)',
+          alignmentStatus: 'N/A',
+          mediaType: 'Direct Hardware Peripheral',
+          rotationalSpeedRpm: null,
+          trimSupported: null,
+          trimActive: null,
+          smartSupported: false,
+          smartActive: false,
+          ncqSupported: null,
+          queueDepth: null,
+          volatileWriteCache: null,
+          writeCacheFlushSupported: null,
+          readLookAheadSupported: null,
+          apmAamSupported: null,
+          hostReadsTb: null,
+          hostWritesTb: null,
+          percentageUsed: null,
+          availableSparePercent: null,
+          powerOnHours: null,
+          powerCycles: null,
+          unsafeShutdowns: null,
+          mediaErrors: null,
+          currentTempC: null,
+          maxTempRecordedC: null,
+          warningTempThresholdC: null,
+          nvmeLogAvailable: false,
+          measuredKernelLatencyUs: null,
+          measuredSequentialReadMbSec: null,
+          measuredSequentialWriteMbSec: null,
+          measuredRandom4kReadIops: null,
+          probeTimestamp: Date.now(),
+          probeMethod: 'WebUSB Device Descriptor',
+          usbDeviceInfo: {
+            vendorId: usb.vendorId,
+            productId: usb.productId,
+            usbVersion: typeof usb.usbVersionMajor === 'number' ? `${usb.usbVersionMajor}.${usb.usbVersionMinor ?? 0}` : undefined,
+            deviceClass: usb.deviceClass
+          },
+          partitions: []
+        }
+      });
     }
   }
 
@@ -1133,16 +1349,56 @@ export async function rescanAllDrives(currentDrives: DiskDrive[]): Promise<DiskD
 }
 
 /**
+ * Helper to resolve a File + byte offset across either single attachedFile or folder attachedFiles.
+ */
+function resolveFileTargetForBlock(
+  drive: DiskDrive,
+  blockIndex: number,
+  totalBlocks: number
+): { file: File; offset: number; chunkSize: number } | null {
+  const files = drive.attachedFiles && drive.attachedFiles.length > 0
+    ? drive.attachedFiles
+    : drive.attachedFile
+    ? [drive.attachedFile]
+    : [];
+
+  if (files.length === 0) return null;
+
+  const nonEmpty = files.filter(f => f.size > 0);
+  if (nonEmpty.length === 0) {
+    return { file: files[0], offset: 0, chunkSize: 0 };
+  }
+
+  const totalBytes = nonEmpty.reduce((acc, f) => acc + f.size, 0);
+  const targetBytePos = Math.floor((blockIndex / Math.max(1, totalBlocks)) * totalBytes);
+
+  let cursor = 0;
+  for (const f of nonEmpty) {
+    if (targetBytePos < cursor + f.size) {
+      const localOffset = targetBytePos - cursor;
+      const chunkSize = Math.min(256 * 1024, Math.max(512, f.size - localOffset));
+      return { file: f, offset: localOffset, chunkSize };
+    }
+    cursor += f.size;
+  }
+
+  const last = nonEmpty[nonEmpty.length - 1];
+  const chunkSize = Math.min(256 * 1024, last.size);
+  return { file: last, offset: Math.max(0, last.size - chunkSize), chunkSize };
+}
+
+/**
  * Real Physical Sector Probe:
- * Actually reads the real attached file chunk OR executes real physical memory buffer benchmark.
+ * - Tauri Desktop: Real Win32 ReadFile / LBA scan via `scan_lba_block`
+ * - Mounted File / Folder: Real `File.slice()` read + Adler-32 checksum + measured latency
+ * - Host Browser Drive: Real OPFS write/read/verify block probe
+ * - Restricted / No Handle: Honest error code (never invents RAM benchmark fake disk speeds)
  */
 export async function executeRealPhysicalSectorProbe(
   drive: DiskDrive,
   methodId: SpecializedScanMethodId,
   blockIndex: number,
-  totalBlocks: number,
-  isBadSeeded: boolean = false,
-  isSlowSeeded: boolean = false
+  totalBlocks: number
 ): Promise<{
   status: 'good' | 'normal' | 'slow' | 'critical' | 'bad';
   latencyMs: number;
@@ -1151,9 +1407,8 @@ export async function executeRealPhysicalSectorProbe(
   checksum?: string;
   zoneTag?: 'Outer Track' | 'Middle Zone' | 'Inner Track' | 'MBR/FAT Area' | 'NAND Die Ch1' | 'NAND Die Ch2' | 'UASP Stream';
 }> {
-  const progressRatio = blockIndex / totalBlocks;
+  const progressRatio = blockIndex / Math.max(1, totalBlocks);
 
-  // Determine Zone Tag
   let zoneTag: 'Outer Track' | 'Middle Zone' | 'Inner Track' | 'MBR/FAT Area' | 'NAND Die Ch1' | 'NAND Die Ch2' | 'UASP Stream' | undefined;
   if (drive.type === 'HDD' || methodId.startsWith('hdd')) {
     if (progressRatio < 0.33) zoneTag = 'Outer Track';
@@ -1167,20 +1422,63 @@ export async function executeRealPhysicalSectorProbe(
     zoneTag = 'MBR/FAT Area';
   }
 
-  // 1. If an actual physical file is attached, read its real byte slice!
-  if (drive.attachedFile) {
-    const file = drive.attachedFile;
-    const sliceStart = Math.floor((blockIndex / totalBlocks) * file.size);
-    const chunkSize = Math.max(512, Math.min(256 * 1024, Math.floor(file.size / totalBlocks) || 4096));
-    const sliceEnd = Math.min(file.size, sliceStart + chunkSize);
+  // 0. Native Tauri Win32 Physical Drive I/O
+  if (drive.id.startsWith('drive-tauri-physical-')) {
+    const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+    const startLba = (BigInt(blockIndex) * BigInt(Math.max(1, drive.totalSectors))) / BigInt(Math.max(1, totalBlocks));
+    const secBytes = drive.hardwareSpecs?.logicalSectorSize || 512;
 
+    try {
+      const res = await queryTauriScanBlock(driveIndex, Number(startLba), 128);
+      if (res) {
+        const latencyMs = Number(res.latencyMs ?? 0);
+        const status: 'good' | 'normal' | 'slow' | 'critical' | 'bad' =
+          res.statusCode === 0 ? (latencyMs < 10 ? 'good' : 'normal') :
+          res.statusCode === 1 ? 'normal' :
+          res.statusCode === 2 ? 'slow' :
+          res.statusCode === 3 ? 'critical' : 'bad';
+
+        const throughputMbSec = latencyMs > 0
+          ? Number((((128 * secBytes) / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1))
+          : 0;
+
+        return {
+          status,
+          latencyMs,
+          throughputMbSec,
+          errorCode: res.statusCode >= 4 ? `WIN32_ERROR_${res.win32ErrorCode}` : undefined,
+          checksum: status !== 'bad' ? 'WIN32_IO_OK' : undefined,
+          zoneTag
+        };
+      }
+      return {
+        status: 'bad',
+        latencyMs: -1,
+        throughputMbSec: 0,
+        errorCode: 'WIN32_IOCTL_NO_RESPONSE',
+        zoneTag
+      };
+    } catch (err: any) {
+      return {
+        status: 'bad',
+        latencyMs: -1,
+        throughputMbSec: 0,
+        errorCode: `WIN32_IO_ERROR: ${err?.message || 'Access Denied'}`,
+        zoneTag
+      };
+    }
+  }
+
+  // 1. Real Attached File / Mounted Directory File Slicing
+  const fileTarget = resolveFileTargetForBlock(drive, blockIndex, totalBlocks);
+  if (fileTarget) {
+    const { file, offset, chunkSize } = fileTarget;
     const t0 = performance.now();
     try {
-      const slice = file.slice(sliceStart, sliceEnd);
+      const slice = file.slice(offset, offset + chunkSize);
       const buffer = await slice.arrayBuffer();
       const u8 = new Uint8Array(buffer);
 
-      // Compute Adler-32 checksum on actual file bytes
       let a = 1;
       let b = 0;
       const step = Math.max(1, Math.floor(u8.length / 256));
@@ -1193,31 +1491,16 @@ export async function executeRealPhysicalSectorProbe(
 
       const t1 = performance.now();
       const latencyMs = Math.max(0.02, Number((t1 - t0).toFixed(3)));
-      const bytesRead = u8.length;
-      const throughputMbSec = latencyMs > 0 ? Number(((bytesRead / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1)) : 500;
+      const throughputMbSec = u8.length > 0
+        ? Number(((u8.length / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1))
+        : 0;
 
-      // Real evaluation:
-      if (isBadSeeded) {
-        return {
-          status: 'bad',
-          latencyMs: -1,
-          throughputMbSec: 0,
-          errorCode: 'UNC (Real File Data Uncorrectable Error)',
-          zoneTag
-        };
+      if (latencyMs > 250) {
+        return { status: 'critical', latencyMs, throughputMbSec, errorCode: 'CRITICAL I/O LATENCY', checksum, zoneTag };
       }
-
-      if (latencyMs > 100 || isSlowSeeded) {
-        return {
-          status: latencyMs > 250 ? 'critical' : 'slow',
-          latencyMs,
-          throughputMbSec,
-          errorCode: latencyMs > 250 ? 'CRITICAL DELAY' : 'SLOW RESPONSE',
-          checksum,
-          zoneTag
-        };
+      if (latencyMs > 100) {
+        return { status: 'slow', latencyMs, throughputMbSec, errorCode: 'SLOW FILE READ DELAY', checksum, zoneTag };
       }
-
       return {
         status: latencyMs > 25 ? 'normal' : 'good',
         latencyMs,
@@ -1230,118 +1513,312 @@ export async function executeRealPhysicalSectorProbe(
         status: 'bad',
         latencyMs: -1,
         throughputMbSec: 0,
-        errorCode: `I/O ERROR: ${err?.message || 'File Read Failure'}`,
+        errorCode: `FILE_IO_ERROR: ${err?.message || 'Read Failure'}`,
         zoneTag
       };
     }
   }
 
-  // 2. Real Physical Micro Memory & Buffer I/O Benchmark on Host Machine
-  // Allocate real 64KB TypedArray buffer and measure real hardware execution latency
-  const benchmarkBytes = 64 * 1024; // 64 KB per sector probe
-  const probeBuffer = new Uint8Array(benchmarkBytes);
+  // 2. Host Origin Storage: Real OPFS Read/Verify Probe
+  if (drive.id === 'drive-native-host-real' && typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const fh = await root.getFileHandle(OPFS_PROBE_FILENAME, { create: true });
+      let file = await fh.getFile();
+      if (file.size < 65536) {
+        const initBuf = new Uint8Array(65536);
+        for (let i = 0; i < initBuf.length; i++) initBuf[i] = (i * 13 + 7) & 0xff;
+        const w = await fh.createWritable();
+        await w.write(initBuf);
+        await w.close();
+        file = await fh.getFile();
+      }
 
-  const t0 = performance.now();
-  // Real write cycle
-  for (let i = 0; i < benchmarkBytes; i += 64) {
-    probeBuffer[i] = (blockIndex ^ i) & 0xff;
+      const sliceLen = Math.min(65536, file.size);
+      const offset = file.size > sliceLen ? (blockIndex * 4096) % (file.size - sliceLen) : 0;
+
+      const t0 = performance.now();
+      const buf = await file.slice(offset, offset + sliceLen).arrayBuffer();
+      const u8 = new Uint8Array(buf);
+      let a = 1;
+      let b = 0;
+      const step = Math.max(1, Math.floor(u8.length / 256));
+      for (let i = 0; i < u8.length; i += step) {
+        a = (a + u8[i]) % 65521;
+        b = (b + a) % 65521;
+      }
+      const t1 = performance.now();
+      const latencyMs = Math.max(0.02, Number((t1 - t0).toFixed(3)));
+      const throughputMbSec = Number(((u8.length / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1));
+      const checksum = `0x${((((b << 16) | a) >>> 0)).toString(16).padStart(8, '0').toUpperCase()}`;
+
+      return {
+        status: latencyMs > 150 ? 'slow' : latencyMs > 25 ? 'normal' : 'good',
+        latencyMs,
+        throughputMbSec,
+        checksum,
+        zoneTag
+      };
+    } catch (err: any) {
+      return {
+        status: 'bad',
+        latencyMs: -1,
+        throughputMbSec: 0,
+        errorCode: `OPFS_ACCESS_DENIED: ${err?.message || 'Storage sandbox blocked'}`,
+        zoneTag
+      };
+    }
   }
-  // Real read cycle with checksum
-  let a = 1;
-  let b = 0;
-  for (let i = 0; i < benchmarkBytes; i += 64) {
-    a = (a + probeBuffer[i]) % 65521;
-    b = (b + a) % 65521;
-  }
-  const t1 = performance.now();
-  const measuredRealLatencyMs = Math.max(0.01, Number((t1 - t0).toFixed(3)));
-  const checksum = `0x${(((b << 16) | a) >>> 0).toString(16).padStart(8, '0').toUpperCase()}`;
-  const throughputMbSec = Number(((benchmarkBytes / (1024 * 1024)) / (measuredRealLatencyMs / 1000)).toFixed(1));
 
-  // If bad sector is present
-  if (isBadSeeded) {
-    let errorCode = 'UNC (Uncorrectable Physical Media Error)';
-    if (drive.type === 'NVMe') errorCode = 'NVMe Media & Data Integrity Error (0x0281)';
-    else if (drive.isUsb2) errorCode = 'USB Flash Raw Read Fail / ECC Uncorrectable';
-
-    return {
-      status: 'bad',
-      latencyMs: -1,
-      throughputMbSec: 0,
-      errorCode,
-      zoneTag
-    };
-  }
-
-  // If slow sector is present
-  if (isSlowSeeded) {
-    const slowLatency = Number((measuredRealLatencyMs * 180 + 120).toFixed(1));
-    return {
-      status: slowLatency > 300 ? 'critical' : 'slow',
-      latencyMs: slowLatency,
-      throughputMbSec: Number((throughputMbSec / 15).toFixed(1)),
-      errorCode: slowLatency > 300 ? 'CRITICAL BUS DELAY' : 'SLOW LATENCY',
-      checksum,
-      zoneTag
-    };
-  }
-
-  // Map measured real hardware latency into sector status
+  // 3. Devices without raw block handles in Browser Sandbox (e.g. WebUSB/WebSerial descriptor-only handles)
   return {
-    status: measuredRealLatencyMs > 5.0 ? 'normal' : 'good',
-    latencyMs: measuredRealLatencyMs,
-    throughputMbSec,
-    checksum,
+    status: 'bad',
+    latencyMs: -1,
+    throughputMbSec: 0,
+    errorCode: 'KERNEL_HANDLE_REQUIRED (브라우저에서는 RAW LBA 직접 읽기 불가 - 파일 마운트 또는 Tauri 앱 필요)',
     zoneTag
   };
 }
 
 /**
- * Real Zero-Fill Memory Buffer Repair Engine:
- * Actually writes 0x00 to a genuine 64KB TypedArray, tests DMA write bandwidth,
- * and verifies that every byte is zero.
+ * Real Zero-Fill Block Repair Engine:
+ * - Tauri Desktop: Calls Win32 DeviceIoControl / WriteFile sector repair
+ * - OPFS / Writable FileHandle: Writes real zero buffer & verifies read-back bytes
+ * - Read-only Web File / Restricted Hardware: Explicitly reports unsupported instead of faking RAM zeroing
  */
 export async function executeRealZeroFillRepairBlock(
   blockIndex: number,
-  lba: number
+  lba: number,
+  drive?: DiskDrive
 ): Promise<{
   success: boolean;
   latencyMs: number;
   throughputMbSec: number;
   bytesWritten: number;
   verifiedZeros: boolean;
+  unsupportedReason?: string;
 }> {
-  const blockSize = 64 * 1024; // 64 KB
-  const buffer = new Uint8Array(blockSize);
-  
-  // Fill with junk first to verify zeroing works
-  buffer.fill(0xff);
+  if (drive?.id.startsWith('drive-tauri-physical-')) {
+    const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+    const t0 = performance.now();
+    const success = await queryTauriRepairSector(driveIndex, lba, 128);
+    const t1 = performance.now();
+    const latencyMs = Math.max(0.01, Number((t1 - t0).toFixed(3)));
+    const throughputMbSec = success ? Number((((64 * 1024) / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1)) : 0;
 
-  const t0 = performance.now();
-  // Perform zero fill
-  buffer.fill(0x00);
-  const t1 = performance.now();
+    return {
+      success,
+      latencyMs,
+      throughputMbSec,
+      bytesWritten: success ? 64 * 1024 : 0,
+      verifiedZeros: success,
+      unsupportedReason: success ? undefined : 'Win32 물리 디스크 쓰기 거부됨 (관리자 권한 및 볼륨 잠금 해제 필요)'
+    };
+  }
 
-  const latencyMs = Math.max(0.01, Number((t1 - t0).toFixed(3)));
-  const throughputMbSec = Number(((blockSize / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1));
+  // Real OPFS Zero-Fill Write + Read-Back Verify for sandbox host drive
+  if (drive?.id === 'drive-native-host-real' && typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const fh = await root.getFileHandle(OPFS_PROBE_FILENAME, { create: true });
+      const blockSize = 64 * 1024;
+      const zeros = new Uint8Array(blockSize);
 
-  // Verify all bytes are 0
-  let isZero = true;
-  for (let i = 0; i < blockSize; i += 128) {
-    if (buffer[i] !== 0x00) {
-      isZero = false;
-      break;
+      const t0 = performance.now();
+      const writable = await fh.createWritable();
+      await writable.write({ type: 'write', position: 0, data: zeros });
+      await writable.close();
+
+      // Verify written bytes on disk are 0x00
+      const verifyFile = await fh.getFile();
+      const verifyBuf = new Uint8Array(await verifyFile.slice(0, blockSize).arrayBuffer());
+      let verified = verifyBuf.byteLength === blockSize;
+      for (let i = 0; i < verifyBuf.length; i += 64) {
+        if (verifyBuf[i] !== 0) {
+          verified = false;
+          break;
+        }
+      }
+      const t1 = performance.now();
+      const latencyMs = Math.max(0.05, Number((t1 - t0).toFixed(3)));
+      const throughputMbSec = Number(((blockSize / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1));
+
+      return {
+        success: verified,
+        latencyMs,
+        throughputMbSec,
+        bytesWritten: blockSize,
+        verifiedZeros: verified
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        latencyMs: 0,
+        throughputMbSec: 0,
+        bytesWritten: 0,
+        verifiedZeros: false,
+        unsupportedReason: `OPFS 쓰기 실패: ${err?.message || 'Permission denied'}`
+      };
     }
   }
 
-  // Brief yield for smooth UI animation
-  await new Promise(r => setTimeout(r, 8));
+  return {
+    success: false,
+    latencyMs: 0,
+    throughputMbSec: 0,
+    bytesWritten: 0,
+    verifiedZeros: false,
+    unsupportedReason: '브라우저 읽기 전용 파일/USB 핸들에서는 물리 LBA 섹터 덮어쓰기가 허용되지 않습니다. 데스크톱 관리자 권한(Tauri Win32)에서 실행하세요.'
+  };
+}
+
+/**
+ * Real Raw Sector Reading via Tauri Core IPC
+ */
+export async function queryTauriRawSector(driveIndex: number, lba: number, size: number): Promise<Uint8Array | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    const bytes = await (window as any).__TAURI__.core.invoke('read_raw_sector', { driveIndex, lba, size });
+    if (bytes instanceof Uint8Array) return bytes;
+    if (Array.isArray(bytes)) return new Uint8Array(bytes);
+    return null;
+  } catch (err) {
+    console.warn('Tauri raw sector read failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Real Native Bit Carving via Tauri Core IPC
+ */
+export async function queryTauriBitCarving(driveIndex: number, lba: number, clusterSpan: number): Promise<any | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    return await (window as any).__TAURI__.core.invoke('execute_bit_carving', {
+      driveIndex,
+      lba,
+      clusterSpan
+    });
+  } catch (err) {
+    console.warn('Tauri bit carving failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Real Native Tray Guardian Poll via Tauri Core IPC
+ */
+export async function queryTauriTrayGuardianCheck(
+  pollIntervalSec: number,
+  tempThresholdC: number,
+  alertOnPendingSector: boolean
+): Promise<any | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    return await (window as any).__TAURI__.core.invoke('run_tray_guardian_check', {
+      pollIntervalSec,
+      tempThresholdC,
+      alertOnPendingSector
+    });
+  } catch (err) {
+    console.warn('Tauri tray guardian failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Real Multi-Drive Parallel Scanning via Tauri Core IPC
+ */
+export async function queryTauriParallelScan(targets: any[]): Promise<any[] | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    return await (window as any).__TAURI__.core.invoke('scan_multiple_drives_parallel', { targets });
+  } catch (err) {
+    console.warn('Tauri parallel scan failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Real Sector Repair via Tauri Core IPC
+ */
+export async function queryTauriRepairSector(driveIndex: number, lba: number, count: number): Promise<boolean> {
+  if (!isTauriDesktopRuntime()) return false;
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('attempt_sector_repair', { driveIndex, lba, count });
+    return !!res?.success;
+  } catch (err) {
+    console.warn('Tauri sector repair failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Real Sector Scanning via Tauri Core IPC
+ */
+export async function queryTauriScanBlock(driveIndex: number, lba: number, sectorCount: number): Promise<any | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    return await (window as any).__TAURI__.core.invoke('scan_lba_block', { driveIndex, lba, sectorCount });
+  } catch (err) {
+    console.warn('Tauri scan block failed:', err);
+    return null;
+  }
+}
+
+export interface StorageRecognitionDiagnostics {
+  isDesktopNative: boolean;
+  probedChannelRange: string;
+  totalChannelsProbed: number;
+  discoveredPhysicalDrives: number;
+  mappedVolumeCount: number;
+  sharingFlags: string;
+  accessModeFallback: string;
+  busTypesDetected: string[];
+  driveList: {
+    index: number;
+    path: string;
+    model: string;
+    bus: string;
+    capacityGb: number | null;
+    mountPoints: string[];
+    isExternal: boolean;
+  }[];
+}
+
+/**
+ * Diagnostic Hardware Probe:
+ * Inspects all 32 PhysicalDrive channels, volume mappings, and access flags
+ */
+export async function getStorageDeviceRecognitionSummary(): Promise<StorageRecognitionDiagnostics> {
+  const isTauri = isTauriDesktopRuntime();
+  const physicalDrives = await queryTauriPhysicalDrives();
+
+  const driveList = physicalDrives.map(d => {
+    const driveIdx = parseInt(d.id.replace('drive-tauri-physical-', ''), 10) || 0;
+    return {
+      index: driveIdx,
+      path: d.hardwareSpecs?.devicePhysicalPath || `\\\\.\\PhysicalDrive${driveIdx}`,
+      model: d.model,
+      bus: d.hardwareSpecs?.busType || d.type,
+      capacityGb: d.capacityGb,
+      mountPoints: d.hardwareSpecs?.partitions?.map(p => p.letterOrMount).filter(Boolean) || (d.mountPoint ? [d.mountPoint] : []),
+      isExternal: Boolean(d.isExternal)
+    };
+  });
+
+  const busTypes = Array.from(new Set(physicalDrives.map(d => d.hardwareSpecs?.busType || d.type)));
+  const mappedVolumes = driveList.flatMap(d => d.mountPoints).filter(m => m.endsWith(':'));
 
   return {
-    success: isZero,
-    latencyMs,
-    throughputMbSec,
-    bytesWritten: blockSize,
-    verifiedZeros: isZero
+    isDesktopNative: isTauri,
+    probedChannelRange: '\\\\.\\PhysicalDrive0 ~ \\\\.\\PhysicalDrive31',
+    totalChannelsProbed: 32,
+    discoveredPhysicalDrives: physicalDrives.length,
+    mappedVolumeCount: mappedVolumes.length,
+    sharingFlags: 'FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE',
+    accessModeFallback: 'GENERIC_READ | GENERIC_WRITE -> GENERIC_READ -> 0 (Query Access)',
+    busTypesDetected: busTypes,
+    driveList
   };
 }

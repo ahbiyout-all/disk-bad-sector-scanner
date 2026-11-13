@@ -19,8 +19,8 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "advapi32.lib")
 
-#define APP_VERSION "4.5.0"
-#define NATIVE_CORE_VERSION "4.5.0"
+#define APP_VERSION "4.6.0"
+#define NATIVE_CORE_VERSION "4.6.0"
 
 bool IsRunningAsAdmin() {
     BOOL isAdmin = FALSE;

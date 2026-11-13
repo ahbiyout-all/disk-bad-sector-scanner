@@ -1,24 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DiskDrive, DiskHardwareSpecs } from '../types';
-import { 
-  X, 
-  Cpu, 
-  HardDrive, 
-  Zap, 
-  Layers, 
-  ShieldCheck, 
-  Thermometer, 
-  Clock, 
-  Activity, 
-  RefreshCw, 
-  CheckCircle2, 
-  AlertTriangle, 
-  Usb, 
+import { probeNativeSystemStorage, NativeSystemStorageInfo } from '../utils/nativeDriveEngine';
+import {
+  X,
+  Cpu,
+  Zap,
+  Layers,
+  ShieldCheck,
+  Activity,
+  RefreshCw,
+  CheckCircle2,
   Database,
-  Sliders,
-  Server,
-  Compass,
-  Gauge
+  Play,
+  Info
 } from 'lucide-react';
 
 interface DiskHardwareDetailsModalProps {
@@ -36,64 +30,119 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
 }) => {
   const [activeTab, setActiveTab] = useState<'architecture' | 'geometry' | 'endurance' | 'benchmark'>('architecture');
   const [isRescanning, setIsRescanning] = useState<boolean>(false);
+  const [isBenchmarking, setIsBenchmarking] = useState<boolean>(false);
   const [rescanSuccess, setRescanSuccess] = useState<string | null>(null);
+  const [liveBenchmark, setLiveBenchmark] = useState<NativeSystemStorageInfo | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let mounted = true;
+    probeNativeSystemStorage().then(info => {
+      if (mounted) {
+        setLiveBenchmark(info);
+      }
+    }).catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [isOpen, drive.id]);
 
   if (!isOpen) return null;
 
-  const specs: DiskHardwareSpecs = drive.hardwareSpecs || {
+  const getSmartRawNullable = (id: number): number | null => {
+    const attr = drive.smartAttributes.find(a => a.id === id);
+    if (!attr) return null;
+    const val = parseInt(attr.raw.replace(/[^0-9]/g, ''), 10);
+    return isNaN(val) ? null : val;
+  };
+
+  const rawReadsVal = getSmartRawNullable(0xF2);
+  const rawWritesVal = getSmartRawNullable(0xF1);
+  const realReadsTb = rawReadsVal !== null ? Number((rawReadsVal / 2048 / 1024).toFixed(2)) : null;
+  const realWritesTb = rawWritesVal !== null ? Number((rawWritesVal / 2048 / 1024).toFixed(2)) : null;
+
+  const isFileDrive = Boolean(drive.attachedFile);
+  const measuredLatencyUs = isFileDrive
+    ? (drive.hardwareSpecs?.measuredKernelLatencyUs ?? null)
+    : (liveBenchmark?.measuredLatencyUs ?? drive.hardwareSpecs?.measuredKernelLatencyUs ?? null);
+  const measuredReadMbSec = isFileDrive
+    ? (drive.hardwareSpecs?.measuredSequentialReadMbSec ?? null)
+    : (liveBenchmark?.benchmarkReadMbSec ?? drive.hardwareSpecs?.measuredSequentialReadMbSec ?? null);
+  const measuredWriteMbSec = isFileDrive
+    ? (drive.hardwareSpecs?.measuredSequentialWriteMbSec ?? null)
+    : (liveBenchmark?.benchmarkWriteMbSec ?? drive.hardwareSpecs?.measuredSequentialWriteMbSec ?? null);
+  const measuredIops = isFileDrive
+    ? (drive.hardwareSpecs?.measuredRandom4kReadIops ?? null)
+    : (liveBenchmark?.measuredRandom4kIops ?? drive.hardwareSpecs?.measuredRandom4kReadIops ?? null);
+
+  const specs: DiskHardwareSpecs = drive.hardwareSpecs ? {
+    ...drive.hardwareSpecs,
+    currentTempC: drive.temperatureC,
+    powerOnHours: drive.powerOnHours,
+    measuredKernelLatencyUs: measuredLatencyUs,
+    measuredSequentialReadMbSec: measuredReadMbSec,
+    measuredSequentialWriteMbSec: measuredWriteMbSec,
+    measuredRandom4kReadIops: measuredIops,
+    probeTimestamp: liveBenchmark ? Date.now() : drive.hardwareSpecs.probeTimestamp
+  } : {
     vendorName: drive.model.split(' ')[0] || 'Physical Storage',
     modelNumber: drive.model,
     serialNumber: drive.serialNumber,
     firmwareRevision: drive.firmware,
-    busType: drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'SATA',
+    busType: drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'Unknown',
     busInterfaceSpeed: drive.interface,
-    formFactor: drive.type === 'NVMe' ? 'M.2 2280 NVMe' : drive.isExternal ? 'Portable USB Media' : '2.5-inch Internal SSD',
-    controllerVendor: drive.bridgeChipset || 'Native Controller Engine',
-    totalCapacityBytes: drive.capacityGb * 1024 * 1024 * 1024,
+    formFactor: drive.type === 'NVMe' ? 'M.2 NVMe' : drive.isExternal ? 'Portable Storage' : 'Host Storage',
+    controllerVendor: drive.bridgeChipset || 'Host Storage Controller',
+    totalCapacityBytes: drive.capacityGb !== null ? Math.round(drive.capacityGb * 1024 * 1024 * 1024) : null,
     totalCapacityGb: drive.capacityGb,
-    totalLbaSectors: drive.totalSectors,
+    totalLbaSectors: drive.totalSectors > 0 ? drive.totalSectors : null,
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: 'Aligned (4K sector boundary)',
-    mediaType: drive.type === 'HDD' ? 'Mechanical HDD (Magnetic Platter)' : 'SSD (Non-Volatile NAND Flash)',
-    rotationalSpeedRpm: drive.type === 'HDD' ? 7200 : 0,
-    trimSupported: drive.type !== 'HDD',
-    trimActive: drive.type !== 'HDD',
-    smartSupported: true,
-    smartActive: true,
-    ncqSupported: true,
-    queueDepth: drive.type === 'NVMe' ? 64 : 32,
-    volatileWriteCache: true,
-    writeCacheFlushSupported: true,
-    apmAamSupported: drive.type === 'HDD',
-    hostReadsTb: Number(((drive.powerOnHours * 0.0027) + (drive.capacityGb * 0.011)).toFixed(1)),
-    hostWritesTb: Number(((drive.powerOnHours * 0.002) + (drive.capacityGb * 0.008)).toFixed(1)),
-    percentageUsed: Math.max(1, Math.min(100, Math.round(drive.powerOnHours / 3500))),
-    availableSparePercent: 100,
+    partitionStyle: 'N/A (Sandbox)',
+    alignmentStatus: 'N/A',
+    mediaType: drive.type === 'HDD' ? 'Mechanical HDD (Magnetic Platter)' : 'Sandbox Storage (OPFS / File API)',
+    rotationalSpeedRpm: drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD' ? null : 0,
+    trimSupported: null,
+    trimActive: null,
+    smartSupported: drive.smartAttributes.length > 0,
+    smartActive: drive.smartAttributes.length > 0,
+    ncqSupported: null,
+    queueDepth: null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: null,
+    hostReadsTb: realReadsTb,
+    hostWritesTb: realWritesTb,
+    percentageUsed: null,
+    availableSparePercent: null,
     powerOnHours: drive.powerOnHours,
-    powerCycles: Math.max(10, Math.round(drive.powerOnHours / 16)),
-    unsafeShutdowns: Math.min(10, Math.round(drive.powerOnHours / 2000)),
-    mediaErrors: (drive.seededBadSectors && drive.seededBadSectors.length) || 0,
+    powerCycles: getSmartRawNullable(0x0C),
+    unsafeShutdowns: getSmartRawNullable(0xAE),
+    mediaErrors: null,
     currentTempC: drive.temperatureC,
-    maxTempRecordedC: Math.round(drive.temperatureC + 6),
-    warningTempThresholdC: 70,
-    measuredKernelLatencyUs: 18,
-    measuredSequentialReadMbSec: 1850,
-    measuredSequentialWriteMbSec: 1420,
-    measuredRandom4kReadIops: 95000,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    measuredKernelLatencyUs: measuredLatencyUs,
+    measuredSequentialReadMbSec: measuredReadMbSec,
+    measuredSequentialWriteMbSec: measuredWriteMbSec,
+    measuredRandom4kReadIops: measuredIops,
     probeTimestamp: Date.now(),
-    probeMethod: 'W3C StorageManager & OPFS Buffer Probe'
+    probeMethod: 'W3C OPFS & StorageManager Probe'
   };
 
   const handleRescanClick = async () => {
-    if (!onRescanHardware || isRescanning) return;
+    if (isRescanning) return;
     setIsRescanning(true);
     setRescanSuccess(null);
     try {
-      await onRescanHardware();
-      setRescanSuccess('디스크 장치 하드웨어 정보 및 커널 I/O 실측 프로브가 최신 상태로 갱신되었습니다.');
+      const [newBench] = await Promise.all([
+        probeNativeSystemStorage(),
+        onRescanHardware ? onRescanHardware() : Promise.resolve()
+      ]);
+      setLiveBenchmark(newBench);
+      setRescanSuccess('디스크 장치 하드웨어 정보 및 실시간 I/O 프로브가 갱신되었습니다.');
       setTimeout(() => setRescanSuccess(null), 3000);
     } catch {
       setRescanSuccess('하드웨어 재탐색 중 오류가 발생했습니다.');
@@ -102,9 +151,34 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     }
   };
 
+  const handleRunLiveBenchmark = async () => {
+    if (isBenchmarking) return;
+    setIsBenchmarking(true);
+    setRescanSuccess(null);
+    try {
+      const result = await probeNativeSystemStorage();
+      setLiveBenchmark(result);
+      setRescanSuccess(
+        result.opfsSupported
+          ? '실시간 OPFS 디스크 쓰기/플러시/읽기 벤치마크가 완료되었습니다.'
+          : '현재 브라우저 컨텍스트에서 OPFS 직접 쓰기 벤치마크가 제한되어 있습니다.'
+      );
+      setTimeout(() => setRescanSuccess(null), 3500);
+    } catch {
+      setRescanSuccess('실측 벤치마크 실행 중 오류가 발생했습니다.');
+    } finally {
+      setIsBenchmarking(false);
+    }
+  };
+
+  const formatBoolNullable = (val: boolean | null | undefined, trueLabel: string, falseLabel: string) => {
+    if (val === null || val === undefined) return 'N/A (미제공)';
+    return val ? trueLabel : falseLabel;
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs font-sans animate-in fade-in duration-150">
-      <div 
+      <div
         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden"
         role="dialog"
         aria-modal="true"
@@ -130,7 +204,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 )}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
-                {specs.devicePhysicalPath || drive.model} · {drive.capacityGb} GB · S/N: {specs.serialNumber}
+                {specs.devicePhysicalPath || drive.model} · {drive.capacityGb !== null ? `${drive.capacityGb} GB` : '용량 N/A'} · S/N: {specs.serialNumber}
               </p>
             </div>
           </div>
@@ -141,7 +215,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 onClick={handleRescanClick}
                 disabled={isRescanning}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
-                title="실제 하드웨어 저장장치 및 커널 I/O 실측 프로브 재실행"
+                title="실제 하드웨어 저장장치 및 I/O 실측 프로브 재실행"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
                 <span className="hidden sm:inline">실시간 재탐색</span>
@@ -157,7 +231,6 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           </div>
         </div>
 
-        {/* Rescan notification banner */}
         {rescanSuccess && (
           <div className="bg-emerald-50 dark:bg-emerald-950/60 border-b border-emerald-200 dark:border-emerald-800 px-4 py-2 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
             <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -165,7 +238,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           </div>
         )}
 
-        {/* Top Quick Status Pill Bar */}
+        {/* Top Quick Status Bar */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-xs">
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">인터페이스 대역폭</div>
@@ -176,28 +249,30 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">물리 섹터 규격</div>
             <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate mt-0.5">
-              {specs.physicalSectorSize}B ({specs.isAdvancedFormat ? 'Advanced Format' : 'Legacy 512B'})
+              {specs.physicalSectorSize}B ({specs.isAdvancedFormat ? 'Advanced Format' : 'Standard'})
             </div>
           </div>
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">TRIM / 명령 큐</div>
             <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400 truncate mt-0.5">
-              {specs.trimSupported ? 'TRIM 활성' : '미지원'} · 큐 {specs.queueDepth}
+              {specs.trimSupported === null ? 'N/A' : specs.trimSupported ? 'TRIM 활성' : '미지원'} · 큐 {specs.queueDepth !== null ? specs.queueDepth : 'N/A'}
             </div>
           </div>
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">실측 커널 지연율</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">실측 I/O 지연율</div>
             <div className="font-mono font-bold text-sky-600 dark:text-sky-400 truncate mt-0.5">
-              {specs.measuredKernelLatencyUs} µs ({specs.measuredRandom4kReadIops.toLocaleString()} IOPS)
+              {specs.measuredKernelLatencyUs !== null
+                ? `${specs.measuredKernelLatencyUs} µs (${specs.measuredRandom4kReadIops !== null ? `${specs.measuredRandom4kReadIops.toLocaleString()} IOPS` : 'IOPS N/A'})`
+                : 'N/A'}
             </div>
           </div>
         </div>
 
         {/* Tab Controls */}
-        <div className="flex items-center gap-1 px-4 pt-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <div className="flex items-center gap-1 px-4 pt-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto">
           <button
             onClick={() => setActiveTab('architecture')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'architecture'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -209,7 +284,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
 
           <button
             onClick={() => setActiveTab('geometry')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'geometry'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -221,7 +296,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
 
           <button
             onClick={() => setActiveTab('endurance')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'endurance'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -233,20 +308,20 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
 
           <button
             onClick={() => setActiveTab('benchmark')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'benchmark'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
             <Activity className="w-3.5 h-3.5" />
-            <span>실측 커널 I/O 벤치마크</span>
+            <span>실측 스토리지 I/O 벤치마크</span>
           </button>
         </div>
 
         {/* Tab Content Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          
+
           {/* TAB 1: ARCHITECTURE */}
           {activeTab === 'architecture' && (
             <div className="space-y-4">
@@ -262,7 +337,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">모델명 (Model Number)</span>
-                    <span className="font-semibold font-mono text-slate-900 dark:text-slate-100">{specs.modelNumber}</span>
+                    <span className="font-semibold font-mono text-slate-900 dark:text-slate-100 truncate max-w-[200px]">{specs.modelNumber}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">일련번호 (Serial Number)</span>
@@ -278,11 +353,11 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">컨트롤러 칩셋 사양</span>
-                    <span className="font-mono text-indigo-600 dark:text-indigo-400">{specs.controllerVendor || 'In-House Storage Controller'}</span>
+                    <span className="font-mono text-indigo-600 dark:text-indigo-400">{specs.controllerVendor || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
-                    <span className="text-slate-500">물리적 경로 (Physical Path)</span>
-                    <span className="font-mono text-slate-800 dark:text-slate-200">{specs.devicePhysicalPath || '\\\\.\\PhysicalDrive0'}</span>
+                    <span className="text-slate-500">물리/가상 경로 (Device Path)</span>
+                    <span className="font-mono text-slate-800 dark:text-slate-200">{specs.devicePhysicalPath || drive.mountPoint || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">스토리지 미디어 타입</span>
@@ -299,41 +374,42 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">TRIM / UNMAP 명령</div>
-                    <div className="font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{specs.trimSupported ? '지원 (Active)' : '미지원'}</span>
+                    <div className="font-bold text-slate-800 dark:text-slate-200 mt-1 flex items-center gap-1">
+                      <CheckCircle2 className={`w-3.5 h-3.5 ${specs.trimSupported ? 'text-emerald-500' : 'text-slate-400'}`} />
+                      <span>{formatBoolNullable(specs.trimSupported, '지원 (Active)', '미지원')}</span>
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">S.M.A.R.T. 상태 모니터링</div>
-                    <div className="font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{specs.smartSupported ? '정상 활성화' : '비활성'}</span>
+                    <div className="font-bold text-slate-800 dark:text-slate-200 mt-1 flex items-center gap-1">
+                      <CheckCircle2 className={`w-3.5 h-3.5 ${specs.smartSupported ? 'text-emerald-500' : 'text-slate-400'}`} />
+                      <span>{specs.smartSupported ? '정상 활성화' : '미제공 (N/A)'}</span>
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">하드웨어 큐 깊이 (Queue Depth)</div>
                     <div className="font-mono font-bold text-slate-900 dark:text-slate-100 mt-1">
-                      {specs.queueDepth} Commands ({specs.busType === 'NVMe' ? '64K Queues' : 'NCQ'})
+                      {specs.queueDepth !== null
+                        ? `${specs.queueDepth} Commands (${specs.busType === 'NVMe' ? 'NVMe' : 'NCQ'})`
+                        : 'N/A'}
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">휘발성 쓰기 캐시 (Write Cache)</div>
-                    <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-1 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{specs.volatileWriteCache ? '활성화 (Flush 지원)' : '비활성'}</span>
+                    <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-1">
+                      {formatBoolNullable(specs.volatileWriteCache, '활성화 (Flush 지원)', '비활성')}
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">선행 판독 (Read Look-Ahead)</div>
                     <div className="font-bold text-slate-800 dark:text-slate-200 mt-1">
-                      {specs.readLookAheadSupported ? '지원됨' : '미지원'}
+                      {formatBoolNullable(specs.readLookAheadSupported, '지원됨', '미지원')}
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">고급 전원 관리 (APM / ASPM)</div>
                     <div className="font-bold text-slate-800 dark:text-slate-200 mt-1">
-                      {specs.apmAamSupported ? '지원됨' : 'OS Direct Link'}
+                      {formatBoolNullable(specs.apmAamSupported, '지원됨', '미지원 / OS 제어')}
                     </div>
                   </div>
                 </div>
@@ -351,14 +427,17 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2.5 text-xs">
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
-                    <span className="text-slate-500">총 물리 저장 용량</span>
+                    <span className="text-slate-500">총 물리/할당 용량</span>
                     <span className="font-bold font-mono text-slate-900 dark:text-slate-100">
-                      {specs.totalCapacityGb} GB ({specs.totalCapacityBytes.toLocaleString()} Bytes)
+                      {specs.totalCapacityGb !== null ? `${specs.totalCapacityGb} GB` : 'N/A'}{' '}
+                      ({specs.totalCapacityBytes !== null ? `${specs.totalCapacityBytes.toLocaleString()} Bytes` : 'Bytes N/A'})
                     </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">총 LBA 섹터 수 (Sectors)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{specs.totalLbaSectors.toLocaleString()} LBA</span>
+                    <span className="font-mono text-slate-900 dark:text-slate-100">
+                      {specs.totalLbaSectors !== null ? `${specs.totalLbaSectors.toLocaleString()} LBA` : 'N/A'}
+                    </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">물리 섹터 크기 (Physical Sector)</span>
@@ -407,11 +486,11 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                           </span>
                         </div>
                         <div className="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                          <div 
+                          <div
                             className={`h-full rounded-full transition-all ${
                               part.usedPercentage > 90 ? 'bg-red-500' : part.usedPercentage > 75 ? 'bg-amber-500' : 'bg-indigo-500'
                             }`}
-                            style={{ width: `${part.usedPercentage}%` }}
+                            style={{ width: `${Math.min(100, part.usedPercentage)}%` }}
                           />
                         </div>
                       </div>
@@ -419,7 +498,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                 ) : (
                   <div className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-                    파티션 1: [{drive.mountPoint || 'C:'}] {drive.name.replace(/^[^\w가-힣]+/, '').trim() || 'PRIMARY_VOLUME'} ({drive.fileSystem || 'NTFS'}, {drive.capacityGb} GB)
+                    매핑된 논리 볼륨 파티션 정보가 없습니다. ({drive.mountPoint || 'N/A'})
                   </div>
                 )}
               </div>
@@ -433,29 +512,37 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-3.5 border border-slate-200 dark:border-slate-800 text-xs">
                   <div className="text-[10px] uppercase font-bold text-slate-400">총 기록량 (TBW)</div>
                   <div className="text-xl font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
-                    {specs.hostWritesTb.toFixed(1)} TBW
+                    {specs.hostWritesTb !== null ? `${specs.hostWritesTb.toFixed(1)} TBW` : 'N/A'}
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-1">총 판독량: {specs.hostReadsTb.toFixed(1)} TB</div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    총 판독량: {specs.hostReadsTb !== null ? `${specs.hostReadsTb.toFixed(1)} TB` : 'N/A'}
+                  </div>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-3.5 border border-slate-200 dark:border-slate-800 text-xs">
                   <div className="text-[10px] uppercase font-bold text-slate-400">NAND 수명 소모율</div>
                   <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                    {specs.percentageUsed}% 소모 (잔여 {Math.max(0, 100 - specs.percentageUsed)}%)
+                    {specs.percentageUsed !== null
+                      ? `${specs.percentageUsed}% 소모 (잔여 ${Math.max(0, 100 - specs.percentageUsed)}%)`
+                      : 'N/A'}
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-1">가용 예비 블록: {specs.availableSparePercent}%</div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    가용 예비 블록: {specs.availableSparePercent !== null ? `${specs.availableSparePercent}%` : 'N/A'}
+                  </div>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-3.5 border border-slate-200 dark:border-slate-800 text-xs">
                   <div className="text-[10px] uppercase font-bold text-slate-400">가동 시간 / 전원 인가</div>
                   <div className="text-xl font-bold font-mono text-slate-800 dark:text-slate-200 mt-1">
-                    {specs.powerOnHours.toLocaleString()} 시간
+                    {specs.powerOnHours !== null ? `${specs.powerOnHours.toLocaleString()} 시간` : 'N/A'}
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-1">{specs.powerCycles}회 전원 사이클 / 비정상 종료 {specs.unsafeShutdowns}회</div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    {specs.powerCycles !== null ? `${specs.powerCycles}회 전원 사이클` : '전원 사이클 N/A'} /{' '}
+                    {specs.unsafeShutdowns !== null ? `비정상 종료 ${specs.unsafeShutdowns}회` : 'N/A'}
+                  </div>
                 </div>
               </div>
 
-              {/* S.M.A.R.T. Raw Table */}
               <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
@@ -463,22 +550,38 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                     <span>실시간 S.M.A.R.T. & NVMe 텔레메트리 센서 로그</span>
                   </span>
                   <span className="text-[10px] font-mono text-slate-400 font-normal">
-                    최고 {specs.maxTempRecordedC}°C / 임계 {specs.warningTempThresholdC}°C
+                    최고 {specs.maxTempRecordedC !== null ? `${specs.maxTempRecordedC}°C` : 'N/A'} / 임계{' '}
+                    {specs.warningTempThresholdC !== null ? `${specs.warningTempThresholdC}°C` : 'N/A'}
                   </span>
                 </h3>
-                <div className="space-y-1.5 text-xs">
-                  {drive.smartAttributes.map(attr => (
-                    <div key={attr.id} className="flex items-center justify-between py-1.5 px-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                        <span className="font-mono text-slate-400 text-[11px] w-6">0x{attr.id.toString(16).padStart(2, '0').toUpperCase()}</span>
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">{attr.name}</span>
-                        <span className="text-[10px] text-slate-400 hidden sm:inline">{attr.description}</span>
-                      </div>
-                      <span className="font-mono font-bold text-slate-900 dark:text-slate-100">{attr.raw}</span>
+
+                {drive.smartAttributes.length === 0 ? (
+                  <div className="p-4 rounded-lg bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 text-center text-xs text-slate-500 space-y-1">
+                    <div className="flex items-center justify-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
+                      <Info className="w-4 h-4 text-indigo-500" />
+                      <span>S.M.A.R.T. 및 NVMe Log 02h 텔레메트리가 감지되지 않았습니다 (N/A)</span>
                     </div>
-                  ))}
-                </div>
+                    <p className="text-[11px] text-slate-400">
+                      실제 낸드 마모율, TBW, 전원 인가 횟수는 Windows 관리자 권한의 Tauri 데스크톱 IOCTL 환경에서만 조회할 수 있습니다.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 text-xs">
+                    {drive.smartAttributes.map(attr => (
+                      <div key={attr.id} className="flex items-center justify-between py-1.5 px-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${
+                            attr.status === 'critical' ? 'bg-red-500' : attr.status === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'
+                          }`} />
+                          <span className="font-mono text-slate-400 text-[11px] w-6">0x{attr.id.toString(16).padStart(2, '0').toUpperCase()}</span>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">{attr.name}</span>
+                          <span className="text-[10px] text-slate-400 hidden sm:inline">{attr.description}</span>
+                        </div>
+                        <span className="font-mono font-bold text-slate-900 dark:text-slate-100">{attr.raw}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -488,44 +591,81 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800">
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                    <Activity className="w-4 h-4 text-indigo-500" />
-                    <span>실시간 직접 버퍼 / 커널 I/O 실측 대역폭</span>
-                  </h3>
-                  {onRescanHardware && (
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                      <Activity className="w-4 h-4 text-indigo-500" />
+                      <span>실시간 OPFS / Direct File I/O 실측 대역폭</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      실제 512KB W3C OPFS 디스크 쓰기·플러시·읽기 검증 및 4KB 랜덤 슬라이스 레이턴시를 직접 계측한 결과입니다.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
                     <button
-                      onClick={handleRescanClick}
-                      disabled={isRescanning}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                      onClick={handleRunLiveBenchmark}
+                      disabled={isBenchmarking || isRescanning}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                      title="실제 OPFS 디스크 I/O 실측 벤치마크 즉시 수행"
                     >
-                      <RefreshCw className={`w-3 h-3 ${isRescanning ? 'animate-spin' : ''}`} />
-                      <span>{isRescanning ? '실측 벤치마크 실행 중...' : '실시간 I/O 재측정'}</span>
+                      <Play className={`w-3.5 h-3.5 ${isBenchmarking ? 'animate-spin' : 'fill-current'}`} />
+                      <span>{isBenchmarking ? '실시간 계측 중...' : '실측 벤치마크 즉시 실행'}</span>
                     </button>
-                  )}
+                    {onRescanHardware && (
+                      <button
+                        onClick={handleRescanClick}
+                        disabled={isRescanning || isBenchmarking}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                        title="장치 하드웨어 프로브 및 S.M.A.R.T. 전체 갱신"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
+                        <span>{isRescanning ? '재탐색 중...' : '하드웨어 재탐색'}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
                     <div className="text-[10px] text-slate-400 uppercase font-semibold">실측 순차 판독 전송률</div>
                     <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                      {specs.measuredSequentialReadMbSec} <span className="text-xs font-sans text-slate-500">MB/s</span>
+                      {specs.measuredSequentialReadMbSec !== null ? (
+                        <>
+                          {specs.measuredSequentialReadMbSec} <span className="text-xs font-sans text-slate-500">MB/s</span>
+                        </>
+                      ) : (
+                        <span className="text-slate-400">N/A</span>
+                      )}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">1MB Direct TypedArray Memory I/O</div>
+                    <div className="text-[10px] text-slate-400 mt-1">512KB Real Storage Read</div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
                     <div className="text-[10px] text-slate-400 uppercase font-semibold">실측 순차 쓰기 전송률</div>
                     <div className="text-2xl font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
-                      {specs.measuredSequentialWriteMbSec} <span className="text-xs font-sans text-slate-500">MB/s</span>
+                      {specs.measuredSequentialWriteMbSec !== null ? (
+                        <>
+                          {specs.measuredSequentialWriteMbSec} <span className="text-xs font-sans text-slate-500">MB/s</span>
+                        </>
+                      ) : (
+                        <span className="text-slate-400">N/A</span>
+                      )}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">Direct Kernel Buffer Throughput</div>
+                    <div className="text-[10px] text-slate-400 mt-1">OPFS Writable Flush Stream</div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
                     <div className="text-[10px] text-slate-400 uppercase font-semibold">4KB 랜덤 블록 레이턴시</div>
                     <div className="text-2xl font-bold font-mono text-sky-600 dark:text-sky-400 mt-1">
-                      {specs.measuredKernelLatencyUs} <span className="text-xs font-sans text-slate-500">µs (마이크로초)</span>
+                      {specs.measuredKernelLatencyUs !== null ? (
+                        <>
+                          {specs.measuredKernelLatencyUs} <span className="text-xs font-sans text-slate-500">µs</span>
+                        </>
+                      ) : (
+                        <span className="text-slate-400">N/A</span>
+                      )}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">추정 {specs.measuredRandom4kReadIops.toLocaleString()} IOPS</div>
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      {specs.measuredRandom4kReadIops !== null ? `추정 ${specs.measuredRandom4kReadIops.toLocaleString()} IOPS` : 'IOPS N/A'}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -553,7 +693,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
         {/* Modal Footer */}
         <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 flex items-center justify-between text-xs">
           <span className="text-slate-500 dark:text-slate-400">
-            엔진: DiskSentinel Pro v4.5.0 Native Hardware Probe Engine
+            엔진: DiskSentinel Pro v4.6.0 Hardware Probe Engine
           </span>
           <button
             onClick={onClose}

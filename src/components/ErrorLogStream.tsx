@@ -58,9 +58,14 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
       const statusMap = {
         bad: 'Bad Sector (배드섹터)',
         slow: 'Warning (지연)',
-        critical: 'Critical Warning (임계 지연)'
+        critical: 'Critical Warning (임계 지연)',
+        repaired: 'Repaired (수복 완료)'
       };
-      
+      const resolvedStatusLabel =
+        log.errorCode === 'DEGRADATION_WARNING'
+          ? 'Degradation Warning (연속 물리 열화 전조)'
+          : statusMap[log.status] || log.status;
+
       const escape = (val: any) => {
         if (val === undefined || val === null) return '""';
         const str = String(val).replace(/"/g, '""');
@@ -69,7 +74,7 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
 
       return [
         escape(log.timestamp),
-        escape(statusMap[log.status] || log.status),
+        escape(resolvedStatusLabel),
         log.lba,
         log.blockIndex,
         log.latencyMs > 0 ? log.latencyMs : 'TIMEOUT',
@@ -206,24 +211,39 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
         ) : (
           filteredLogs.map((log) => {
             const isBad = log.status === 'bad';
+            const isDegradationWarning = log.errorCode === 'DEGRADATION_WARNING';
             const isCritical = log.status === 'critical';
+            const isRepaired = log.status === 'repaired';
 
             return (
               <div
                 key={log.id}
                 onClick={() => onSelectLogLba && onSelectLogLba(log.lba)}
+                data-testid={isDegradationWarning ? 'degradation-warning-log' : undefined}
                 className={`flex items-start sm:items-center justify-between gap-2 px-2 py-0.5 rounded cursor-pointer transition-colors ${
                   isBad
                     ? 'text-red-400 hover:bg-red-950/40'
+                    : isDegradationWarning
+                    ? 'bg-orange-950/45 border-l-2 border-orange-500 text-orange-300 hover:bg-orange-950/65'
                     : isCritical
                     ? 'text-orange-400 hover:bg-orange-950/40'
+                    : isRepaired
+                    ? 'text-emerald-400 hover:bg-emerald-950/40'
                     : 'text-amber-400 hover:bg-amber-950/40'
                 }`}
               >
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
                   <span className="font-semibold shrink-0">
-                    {isBad ? 'CRITICAL:' : isCritical ? 'ALERT:' : 'WARNING:'}
+                    {isBad
+                      ? 'CRITICAL:'
+                      : isDegradationWarning
+                      ? 'DEGRADATION WARNING:'
+                      : isCritical
+                      ? 'ALERT:'
+                      : isRepaired
+                      ? 'REPAIRED:'
+                      : 'WARNING:'}
                   </span>
                   <span>{log.description}</span>
                   <span className="text-slate-500 font-mono text-[10px]">LBA #{log.lba.toLocaleString()}</span>

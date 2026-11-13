@@ -1,7 +1,7 @@
 # DiskSentinel Pro - Project Implementation Roadmap (ROADMAP.md)
 
 - **Application**: DiskSentinel Pro (디스크 배드섹터 정밀 검사기)
-- **Current Version**: v4.4.1
+- **Current Version**: v4.6.0
 - **Author**: AhBiYout (GitHub: [AhBiYout-all](https://github.com/AhBiYout-all))
 - **Affiliation**: CISNet (http://www.cisnet.co.kr)
 - **Official Blog**: https://ahbiyoutvibe.blogspot.com/
@@ -259,6 +259,48 @@
   - `npm run build`: PASS (0 errors)
 - **Current Status**: `VERIFIED`
 - **Remaining Blockers**: None
+
+---
+
+### [TASK-IOCTL-09] 32-Drive Windows IOCTL/WMI Discovery & Full-Stack Zero-Dummy Audit
+- **Description**: Windows 커널 `PhysicalDrive0`~`31` 전수 탐색·볼륨 매핑을 통해 실제 SSD/HDD/USB 인식률을 극대화하고, C++/Rust/Tauri/TypeScript 전 계층의 잔존 더미 폴백을 제거하여 실측 API(IOCTL/OPFS/File/Storage) 및 미지원 `N/A` 표기로 통일.
+- **Priority**: P0
+- **Dependencies**: Win32 DeviceIoControl, WMI, OPFS / Web Storage API
+- **Target Files**:
+  - `src/native/DiskSentinelEngine.cpp`
+  - `src/native/rust/src/lib.rs`
+  - `src-tauri/src/main.rs`
+  - `src/utils/nativeDriveEngine.ts`
+  - `src/utils/hardwareTelemetry.ts`
+  - `src/components/HealthSummaryDashboard.tsx`
+- **Acceptance Criteria**:
+  - 32개 물리 드라이브 열거 및 볼륨 문자 매핑, SMART 제조사 임계치 초과 시각 경고 정상 작동.
+  - 미지원 하드웨어 센서 임의 생성 0건 (`N/A` 정직 표기).
+- **Validation**:
+  - `npm run lint`: PASS (0 errors)
+  - `npm run build`: PASS (0 errors)
+- **Current Status**: `VERIFIED`
+- **Remaining Blockers**: None
+
+---
+
+### [TASK-HIST-10] D3.js Real-time I/O Latency Histogram, Scan-Mode Precision & ≥100ms Warning Highlight
+- **Description**: 실시간 섹터 검사 I/O 레이턴시 및 읽기 속도 분포를 D3 히스토그램으로 시각화하고, `Quick` vs `Full` 검사 방식 연동 통계 정밀도 조정, `>= 100ms` 구간 고대비 오렌지/레드 하이라이트 및 차트 상단 실시간 `Slow/Critical` 카운터 구현.
+- **Priority**: P1
+- **Dependencies**: `d3`, `@types/d3`
+- **Target Files**:
+  - `src/components/LatencyHistogramDashboard.tsx`
+  - `src/components/HealthSummaryDashboard.tsx`
+  - `src/App.tsx`
+- **Acceptance Criteria**:
+  - `Quick` (8-Bin / 0.1ms / ±오차) vs `Full` (20-Bin / 0.01ms) 정밀도 동적 전환 및 수동 오버라이드 지원.
+  - `>= 100ms` 막대 오렌지/레드 그라데이션 하이라이트 및 차트 상단 실시간 `Slow/Critical` 총 개수 카운터 표시.
+- **Validation**:
+  - `npm run lint`: PASS (0 errors)
+  - `npm run build`: PASS (0 errors)
+- **Current Status**: `VERIFIED`
+- **Remaining Blockers**: None
+
 
 
 

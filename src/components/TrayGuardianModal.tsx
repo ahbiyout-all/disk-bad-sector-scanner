@@ -1,32 +1,31 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  ShieldCheck, 
-  Bell, 
-  Clock, 
-  Thermometer, 
-  Cpu, 
-  Activity, 
-  CheckCircle2, 
-  AlertTriangle, 
-  Volume2, 
-  Layers, 
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  X,
+  ShieldCheck,
+  Clock,
+  Thermometer,
+  Activity,
+  CheckCircle2,
+  AlertTriangle,
+  Layers,
   Settings2,
   Play,
   Pause
 } from 'lucide-react';
 import { DiskDrive } from '../types';
-import { 
-  DS_RunTrayGuardianCheck, 
-  DS_ConfigureTrayGuardian, 
-  DSTrayGuardianStatus 
+import {
+  DS_RunTrayGuardianCheck,
+  DS_RunNativeTrayGuardianPoll,
+  DS_ConfigureTrayGuardian,
+  DSTrayGuardianStatus
 } from '../utils/nativeDllBridge';
+import { soundManager } from '../utils/audio';
 
 interface TrayGuardianModalProps {
   isOpen: boolean;
   onClose: () => void;
   drives: DiskDrive[];
-  highestTemp?: number;
+  highestTemp?: number | null;
   hasBadSector?: boolean;
   onTriggerNotification?: (title: string, body: string) => void;
 }
@@ -35,7 +34,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
   isOpen,
   onClose,
   drives,
-  highestTemp = 41,
+  highestTemp = null,
   hasBadSector = false,
   onTriggerNotification,
 }) => {
@@ -44,11 +43,20 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
   const [alertPending, setAlertPending] = useState<boolean>(true);
   const [isDaemonActive, setIsDaemonActive] = useState<boolean>(true);
   const [soundAlert, setSoundAlert] = useState<boolean>(true);
-  const highestDrive = drives.length > 0 
-    ? drives.reduce((prev, curr) => (curr.temperatureC > prev.temperatureC ? curr : prev), drives[0])
-    : undefined;
-  const effectiveHighestTemp = highestTemp || highestDrive?.temperatureC || 36;
-  const effectiveDriveName = highestDrive?.name || highestDrive?.model || '로컬 디스크';
+
+  // Extract genuine observed highest temperature across mounted drives (or null if none available)
+  const validDriveTemps = drives
+    .map(d => d.temperatureC)
+    .filter((t): t is number => typeof t === 'number' && t > 0);
+  const maxDriveTemp = validDriveTemps.length > 0 ? Math.max(...validDriveTemps) : null;
+  const highestDrive = maxDriveTemp !== null
+    ? drives.find(d => d.temperatureC === maxDriveTemp)
+    : drives[0];
+
+  const effectiveHighestTemp: number | null = maxDriveTemp !== null
+    ? maxDriveTemp
+    : (typeof highestTemp === 'number' && highestTemp > 0 ? highestTemp : null);
+  const effectiveDriveName = highestDrive?.name || highestDrive?.model || '로컬 스토리지';
 
   const [status, setStatus] = useState<DSTrayGuardianStatus>(() =>
     DS_RunTrayGuardianCheck(effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName)
@@ -56,19 +64,44 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
   const [lastCheckTime, setLastCheckTime] = useState<string>(() =>
     new Date().toLocaleTimeString('ko-KR')
   );
+  const prevAlertMessageRef = useRef<string>('');
+
+  useEffect(() => {
+    DS_ConfigureTrayGuardian(pollInterval, tempThreshold, alertPending);
+    if (!isDaemonActive) {
+      setStatus({
+        ...DS_RunTrayGuardianCheck(effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName),
+        isMonitoringActive: false
+      });
+    }
+  }, [pollInterval, tempThreshold, alertPending, isDaemonActive, effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName]);
 
   useEffect(() => {
     if (!isOpen || !isDaemonActive) return;
 
+    let mounted = true;
     DS_ConfigureTrayGuardian(pollInterval, tempThreshold, alertPending);
-    const intervalId = setInterval(() => {
-      const res = DS_RunTrayGuardianCheck(effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName);
-      setStatus(res);
-      setLastCheckTime(new Date().toLocaleTimeString('ko-KR'));
-    }, pollInterval * 1000);
 
-    return () => clearInterval(intervalId);
-  }, [isOpen, isDaemonActive, pollInterval, tempThreshold, alertPending, effectiveHighestTemp, hasBadSector, drives.length, effectiveDriveName]);
+    const runPoll = async () => {
+      const res = await DS_RunNativeTrayGuardianPoll(drives, hasBadSector);
+      if (mounted) {
+        setStatus(res);
+        setLastCheckTime(new Date().toLocaleTimeString('ko-KR'));
+        if (res.criticalAlertTriggered && soundAlert && res.lastAlertMessage !== prevAlertMessageRef.current) {
+          soundManager.playWarningTone();
+        }
+        prevAlertMessageRef.current = res.lastAlertMessage;
+      }
+    };
+
+    runPoll();
+    const intervalId = setInterval(runPoll, pollInterval * 1000);
+
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+    };
+  }, [isOpen, isDaemonActive, pollInterval, tempThreshold, alertPending, soundAlert, hasBadSector, drives]);
 
   if (!isOpen) return null;
 
@@ -78,7 +111,11 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
 
   const handleTestTrayAlert = () => {
     const title = '🛡️ DiskSentinel Pro 가디언 트레이 경보';
-    const body = `[정기 진단 완료] 전체 ${drives.length}대 드라이브 S.M.A.R.T. 정상 (${effectiveDriveName}, 최고 온도: ${effectiveHighestTemp}°C, 백그라운드 상주 중)`;
+    const tempDisplay = status.highestTempCelsius !== null ? `${status.highestTempCelsius}°C` : '센서 N/A';
+    const body = `[정기 진단 완료] 전체 ${drives.length}대 드라이브 점검 (${effectiveDriveName}, 최고 온도: ${tempDisplay})`;
+    if (soundAlert) {
+      soundManager.playWarningTone();
+    }
     if (onTriggerNotification) {
       onTriggerNotification(title, body);
     }
@@ -86,13 +123,15 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
 
   const realMemoryUsageMb = typeof window !== 'undefined' && (performance as any)?.memory?.usedJSHeapSize
     ? ((performance as any).memory.usedJSHeapSize / (1024 * 1024)).toFixed(1)
-    : '4.8';
-  const realCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+    : null;
+  const realCores = typeof navigator !== 'undefined' && typeof navigator.hardwareConcurrency === 'number'
+    ? navigator.hardwareConcurrency
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
       <div className="relative w-full max-w-2xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
-        
+
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2.5">
@@ -105,7 +144,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                   시스템 트레이 경량 가디언 데몬
                 </h2>
                 <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border ${
-                  isDaemonActive 
+                  isDaemonActive
                     ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
                     : 'bg-slate-200 dark:bg-slate-800 text-slate-500 border-slate-400/30'
                 }`}>
@@ -113,14 +152,14 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                초경량 백그라운드 스레드로 시스템 자원 점유 없이 디스크 건전성 항시 감시
+                실제 드라이브 텔레메트리 및 Win32 S.M.A.R.T. 임계치 감시 데몬
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
+            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -128,7 +167,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
 
         {/* Content */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs">
-          
+
           {/* Status Metric Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="p-3 rounded-lg border bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800">
@@ -141,7 +180,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 {isDaemonActive ? '정상 작동' : '일시 정지'}
               </div>
               <div className="text-[9px] text-slate-400 mt-1 font-mono">
-                {realCores} 스레드 | 힙 {realMemoryUsageMb}MB
+                {realCores !== null ? `${realCores} 스레드` : '스레드 N/A'} | {realMemoryUsageMb !== null ? `힙 ${realMemoryUsageMb}MB` : '힙 N/A'}
               </div>
             </div>
 
@@ -151,7 +190,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 모니터링 최고온도
               </div>
               <div className="text-sm font-bold text-slate-900 dark:text-slate-100 font-mono">
-                {status.highestTempCelsius}°C
+                {status.highestTempCelsius !== null ? `${status.highestTempCelsius}°C` : 'N/A'}
               </div>
               <div className="text-[9px] text-slate-400 mt-1">
                 임계치: {tempThreshold}°C
@@ -180,7 +219,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 {drives.length}대 대상
               </div>
               <div className="text-[9px] text-slate-400 mt-1">
-                S.M.A.R.T. 전체 추적
+                연결된 장치 추적
               </div>
             </div>
           </div>
@@ -282,25 +321,25 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
               {drives.map((d, idx) => (
                 <div
                   key={d.id}
-                  className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 flex items-center justify-between"
+                  className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 flex items-center justify-between gap-2"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    <div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <div className="truncate">
                       <span className="font-semibold text-slate-900 dark:text-slate-100">
-                        PhysicalDrive{idx}: {d.name || d.model}
+                        {d.hardwareSpecs?.devicePhysicalPath || `Drive #${idx}`}: {d.name || d.model}
                       </span>
                       <span className="text-[10px] text-slate-400 ml-2">
-                        {d.capacityGb}GB | {d.interface}
+                        {d.capacityGb !== null ? `${d.capacityGb}GB` : '용량 N/A'} | {d.interface}
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 text-right">
+                  <div className="flex items-center gap-2 text-right shrink-0">
                     <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                      {d.temperatureC}°C
+                      {d.temperatureC !== null ? `${d.temperatureC}°C` : '온도 N/A'}
                     </span>
                     <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400">
-                      건강도 {d.healthScore}%
+                      {d.healthScore !== null ? `건강도 ${d.healthScore}%` : '건강도 N/A'}
                     </span>
                   </div>
                 </div>

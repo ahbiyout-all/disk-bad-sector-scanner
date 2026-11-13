@@ -1,14 +1,17 @@
 /**
  * @file nativeDllBridge.ts
- * @brief TypeScript Bridge & Emulation Layer for Pure Creative DLL: DiskSentinelNativeCore.dll
- * @author AhBiYout (CISNet)
+ * @brief TypeScript Bridge for DiskSentinelNativeCore Engine (Win32 IOCTL / Tauri IPC / Real File & OPFS)
  * @license Apache-2.0
- * 
- * Provides 100% binary-layout parity (8-byte alignment, C ABI structs) and 
- * algorithmic fidelity with the native C++ engine (src/native/DiskSentinelEngine.cpp).
  */
 
 import { DiskDrive } from '../types';
+import {
+  isTauriDesktopRuntime,
+  queryTauriBitCarving,
+  queryTauriParallelScan,
+  queryTauriRawSector,
+  queryTauriTrayGuardianCheck
+} from './nativeDriveEngine';
 
 export enum DSSectorStatus {
   DS_STATUS_GOOD     = 0, // < 10ms
@@ -45,32 +48,26 @@ export interface DSDriveHealthReport {
   reallocatedSectors: number;     // 0x05
   pendingSectors: number;         // 0xC5
   uncorrectableErrors: number;    // 0xBB / 0xC6
-  temperatureCelsius: number;
+  temperatureCelsius: number | null;
   overallGrade: 'EXCELLENT' | 'GOOD' | 'WARNING' | 'CRITICAL';
 }
 
 export interface DSNvmeHealthLog {
   criticalWarning: number;
-  temperatureCelsius: number;
-  availableSpare: number;
-  availableSpareThreshold: number;
-  percentageUsed: number;
-  dataUnitsReadTb: number;
-  dataUnitsWrittenTb: number;
-  hostReadCommands: bigint;
-  hostWriteCommands: bigint;
-  controllerBusyTimeMinutes: bigint;
-  powerCycles: bigint;
-  powerOnHours: bigint;
-  unsafeShutdowns: bigint;
-  mediaErrors: bigint;
-  numErrLogEntries: bigint;
-  warningTempTimeMin: number;
-  criticalTempTimeMin: number;
+  temperatureCelsius: number | null;
+  availableSpare: number | null;
+  availableSpareThreshold: number | null;
+  percentageUsed: number | null;
+  dataUnitsReadTb: number | null;
+  dataUnitsWrittenTb: number | null;
+  powerCycles: bigint | null;
+  powerOnHours: bigint | null;
+  unsafeShutdowns: bigint | null;
+  mediaErrors: bigint | null;
 }
 
 /**
- * Pure Creative Algorithm 1: Fast Hardware CRC32 & 64-bit Galois XOR Parity Generator
+ * Hardware CRC32 & 64-bit Galois XOR Parity Generator
  */
 export function DS_CalculateParityChecksum(buffer: Uint8Array): { crc32: number; eccParity: bigint } {
   let crc = 0xFFFFFFFF;
@@ -94,7 +91,7 @@ export function DS_CalculateParityChecksum(buffer: Uint8Array): { crc32: number;
 }
 
 /**
- * Pure Creative Algorithm 2: Weighted Drive Reliability & Remaining Life Evaluator
+ * Weighted Drive Reliability Evaluator based purely on parsed S.M.A.R.T. entries
  */
 export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHealthReport {
   let score = 100.0;
@@ -102,7 +99,7 @@ export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHea
   let pendingSectors = 0;
   let uncorrectableErrors = 0;
   let totalPowerOnHours = 0;
-  let temperatureCelsius = 35;
+  let temperatureCelsius: number | null = null;
 
   for (const e of entries) {
     const rawNum = Number(e.rawValue);
@@ -110,16 +107,14 @@ export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHea
       case 0x05: // Reallocated Sectors
         reallocatedSectors = rawNum;
         if (rawNum > 0) {
-          const penalty = Math.min(45, rawNum * 5.0);
-          score -= penalty;
+          score -= Math.min(45, rawNum * 5.0);
         }
         break;
 
       case 0xC5: // Current Pending Sectors
         pendingSectors = rawNum;
         if (rawNum > 0) {
-          const penalty = Math.min(50, rawNum * 10.0);
-          score -= penalty;
+          score -= Math.min(50, rawNum * 10.0);
         }
         break;
 
@@ -127,8 +122,7 @@ export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHea
       case 0xC6: // Offline Uncorrectable
         uncorrectableErrors += rawNum;
         if (rawNum > 0) {
-          const penalty = Math.min(40, rawNum * 8.0);
-          score -= penalty;
+          score -= Math.min(40, rawNum * 8.0);
         }
         break;
 
@@ -137,12 +131,16 @@ export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHea
         break;
 
       case 0xC2: // Temperature
-      case 0xBE:
-        temperatureCelsius = Number(e.rawValue & 0xFFn) || 35;
-        if (temperatureCelsius > 55) {
-          score -= (temperatureCelsius - 55) * 2.0;
+      case 0xBE: {
+        const parsedTemp = Number(e.rawValue & 0xFFn);
+        if (parsedTemp > 0 && parsedTemp < 150) {
+          temperatureCelsius = parsedTemp;
+          if (parsedTemp > 55) {
+            score -= (parsedTemp - 55) * 2.0;
+          }
         }
         break;
+      }
     }
   }
 
@@ -178,8 +176,7 @@ export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHea
 }
 
 /**
- * Pure Creative Algorithm 3: Adaptive Burst & Micro-LBA Seeker
- * Executes multi-sector burst reads, sub-dividing automatically when degradation is met.
+ * Adaptive Burst & Micro-LBA Seeker
  */
 export async function DS_AdaptiveScanChunk(
   chunkStartLba: bigint,
@@ -197,13 +194,11 @@ export async function DS_AdaptiveScanChunk(
 
     const burstResult = await scanLbaBlockFn(currentLba, sectorsToTest);
 
-    // Fast path: Healthy burst block
     if (burstResult.statusCode <= DSSectorStatus.DS_STATUS_NORMAL) {
       currentLba += BigInt(sectorsToTest);
       continue;
     }
 
-    // Degradation or Bad block: Micro-binary decomposition to 1 sector
     const subEnd = currentLba + BigInt(sectorsToTest);
     for (let subLba = currentLba; subLba < subEnd; subLba += 1n) {
       const singleResult = await scanLbaBlockFn(subLba, 1);
@@ -222,54 +217,32 @@ export async function DS_AdaptiveScanChunk(
 }
 
 /**
- * Pure Creative Algorithm 4: NVMe Health Log (Page 02h) Direct Telemetry
+ * NVMe Health Log (Page 02h) Telemetry
+ * Returns strictly verified real NVMe IOCTL telemetry if available, or null when kernel Log 02h is absent.
  */
-export function DS_GetNvmeDeepTelemetry(driveModel?: string, drive?: DiskDrive, currentBlockIndex: number = 0): DSNvmeHealthLog {
-  const isNvme = drive ? drive.type === 'NVMe' : (!driveModel || driveModel.toUpperCase().includes('NVME') || driveModel.toUpperCase().includes('EVO') || driveModel.toUpperCase().includes('PRO') || driveModel.toUpperCase().includes('PLUS'));
-
-  // Calculate real values dynamically from active drive
-  const usedPct = drive?.usedPercentage !== undefined ? drive.usedPercentage : (isNvme ? 4 : 1);
-  const spare = Math.max(0, 100 - usedPct);
-
-  let writtenTb = 0;
-  if (drive?.usedBytes) {
-    writtenTb = Number((drive.usedBytes / (1024 * 1024 * 1024 * 1024)).toFixed(3));
-  } else if (drive?.capacityGb) {
-    writtenTb = Number(((drive.capacityGb * (usedPct / 100)) / 1024).toFixed(3));
-  } else {
-    writtenTb = 0.52;
+export function DS_GetNvmeDeepTelemetry(drive?: DiskDrive): DSNvmeHealthLog | null {
+  const specs = drive?.hardwareSpecs;
+  if (!drive || !specs || !specs.nvmeLogAvailable) {
+    return null;
   }
-
-  // Real data units read based on scanned blocks and benchmarks
-  const scannedBytes = currentBlockIndex * 64 * 1024 * 1024;
-  const readTb = Number((writtenTb * 1.1 + (scannedBytes / (1024 * 1024 * 1024 * 1024))).toFixed(3));
-
-  const totalCommands = BigInt(Math.max(120, currentBlockIndex * 128));
-  const temp = drive?.temperatureC || (isNvme ? 40 : 36);
 
   return {
     criticalWarning: 0,
-    temperatureCelsius: temp,
-    availableSpare: spare,
+    temperatureCelsius: specs.currentTempC ?? drive.temperatureC ?? null,
+    availableSpare: specs.availableSparePercent ?? null,
     availableSpareThreshold: 10,
-    percentageUsed: usedPct,
-    dataUnitsReadTb: Math.max(0.01, readTb),
-    dataUnitsWrittenTb: Math.max(0.01, writtenTb),
-    hostReadCommands: totalCommands * 2n,
-    hostWriteCommands: totalCommands,
-    controllerBusyTimeMinutes: BigInt(Math.round(usedPct * 30)),
-    powerCycles: BigInt(drive?.powerOnHours ? Math.round(drive.powerOnHours / 24) : 120),
-    powerOnHours: BigInt(drive?.powerOnHours || 500),
-    unsafeShutdowns: 0n,
-    mediaErrors: 0n,
-    numErrLogEntries: 0n,
-    warningTempTimeMin: 0,
-    criticalTempTimeMin: 0
+    percentageUsed: specs.percentageUsed ?? null,
+    dataUnitsReadTb: specs.hostReadsTb ?? null,
+    dataUnitsWrittenTb: specs.hostWritesTb ?? null,
+    powerCycles: specs.powerCycles !== null && specs.powerCycles !== undefined ? BigInt(specs.powerCycles) : null,
+    powerOnHours: specs.powerOnHours !== null && specs.powerOnHours !== undefined ? BigInt(specs.powerOnHours) : null,
+    unsafeShutdowns: specs.unsafeShutdowns !== null && specs.unsafeShutdowns !== undefined ? BigInt(specs.unsafeShutdowns) : null,
+    mediaErrors: specs.mediaErrors !== null && specs.mediaErrors !== undefined ? BigInt(specs.mediaErrors) : null
   };
 }
 
 /**
- * Pure Creative Algorithm 5: SIMD AVX2 Accelerated Zero-Check & Parity Checksum
+ * Checksum & Zero-Check
  */
 export function DS_CalculateAvx2ChecksumAndZeroCheck(buffer: Uint8Array): {
   isAllZeros: boolean;
@@ -280,7 +253,6 @@ export function DS_CalculateAvx2ChecksumAndZeroCheck(buffer: Uint8Array): {
   let crc = 0xFFFFFFFF;
   let avxParity = 0n;
 
-  // Process in 32-byte chunks (simulating AVX2 256-bit SIMD registers)
   const len = buffer.length;
   const chunk32Count = Math.floor(len / 32);
 
@@ -298,7 +270,6 @@ export function DS_CalculateAvx2ChecksumAndZeroCheck(buffer: Uint8Array): {
     }
   }
 
-  // Remainder tail
   for (let i = chunk32Count * 32; i < len; i++) {
     const b = buffer[i];
     if (b !== 0) isAllZeros = false;
@@ -317,7 +288,6 @@ export function DS_CalculateAvx2ChecksumAndZeroCheck(buffer: Uint8Array): {
   };
 }
 
-// Multi-Drive Parallel Scan Target
 export interface DSMultiDriveScanTarget {
   driveIndex: number;
   driveId: string;
@@ -327,7 +297,6 @@ export interface DSMultiDriveScanTarget {
   burstStep: number;
 }
 
-// Multi-Drive Parallel Scan Summary
 export interface DSMultiDriveScanSummary {
   driveIndex: number;
   driveId: string;
@@ -337,103 +306,226 @@ export interface DSMultiDriveScanSummary {
   slowSectorsFound: number;
   elapsedMs: number;
   avgLatencyMs: number;
-  throughputMbSec?: number;
+  throughputMbSec: number | null;
   isCompleted: boolean;
   statusCode: number;
+  unsupportedReason?: string;
 }
 
 /**
- * Pure Creative Algorithm 6: Rayon Concurrency Emulation for Multi-Drive Parallel Scan
+ * Multi-Drive Parallel Scan:
+ * - Physical Tauri drives: invokes Win32/Rust rayon parallel worker threads
+ * - Mounted File/Folder drives: executes concurrent real File.slice() I/O verification
+ * - Host OPFS drive: executes real OPFS storage reads
+ * - WebUSB/Descriptor-only drives: marks unsupported honestly without synthetic loops
  */
 export async function DS_ScanMultipleDrivesParallel(
   targets: DSMultiDriveScanTarget[],
   onProgressUpdate?: (driveId: string, progress: number, badFound: number) => void,
   drives?: DiskDrive[]
 ): Promise<DSMultiDriveScanSummary[]> {
-  // Execute all drive scans in true concurrent Promise.all threads
-  const promises = targets.map(async (target) => {
-    const startTime = performance.now();
-    let badCount = 0;
-    let slowCount = 0;
-    const total = Number(target.sectorCount);
-    const steps = Math.min(25, total);
-    const matchedDrive = drives?.find(d => d.id === target.driveId);
+  const isTauri = isTauriDesktopRuntime();
+  const tauriTargets = isTauri ? targets.filter(t => t.driveId.startsWith('drive-tauri-physical-')) : [];
+  const nonTauriTargets = isTauri ? targets.filter(t => !t.driveId.startsWith('drive-tauri-physical-')) : targets;
 
-    // Initial check for known bad sectors or defects
-    const driveKnownBad = matchedDrive?.seededBadSectors ? matchedDrive.seededBadSectors.length : 0;
-    const driveKnownSlow = matchedDrive?.seededSlowSectors ? matchedDrive.seededSlowSectors.length : 0;
+  const summaries: DSMultiDriveScanSummary[] = [];
 
-    const testBuf = new Uint8Array(64 * 1024);
-    let totalProbeMs = 0;
-    let totalBytesProcessed = 0;
+  if (tauriTargets.length > 0) {
+    const payload = tauriTargets.map(t => ({
+      driveIndex: t.driveIndex,
+      startLba: Number(t.startLba),
+      sectorCount: Number(t.sectorCount),
+      burstStep: t.burstStep
+    }));
 
-    for (let step = 1; step <= steps; step++) {
-      const t0 = performance.now();
-
-      // If drive has a real attached file, actually slice real bytes from it!
-      if (matchedDrive?.attachedFile) {
-        try {
-          const fileSize = matchedDrive.attachedFile.size;
-          const chunkSize = 64 * 1024;
-          const offset = Math.min(Math.max(0, fileSize - chunkSize), (step * chunkSize) % Math.max(1, fileSize));
-          const slice = matchedDrive.attachedFile.slice(offset, offset + chunkSize);
-          const buf = await slice.arrayBuffer();
-          totalBytesProcessed += buf.byteLength;
-        } catch {
-          badCount++;
+    const results = await queryTauriParallelScan(payload);
+    if (results) {
+      for (const r of results) {
+        const target = tauriTargets.find(t => t.driveIndex === r.driveIndex);
+        const matchedDrive = drives?.find(d => d.id === target?.driveId);
+        const secBytes = matchedDrive?.hardwareSpecs?.logicalSectorSize || 512;
+        if (onProgressUpdate && target) {
+          onProgressUpdate(target.driveId, 100, Number(r.badSectorsFound || 0));
         }
-      } else {
-        // Real memory buffer test on host system
-        for (let i = 0; i < testBuf.length; i += 64) {
-          testBuf[i] = (step ^ i) & 0xff;
-        }
-        totalBytesProcessed += testBuf.length;
-      }
-
-      const t1 = performance.now();
-      const probeLatency = Math.max(0.01, t1 - t0);
-      totalProbeMs += probeLatency;
-
-      if (probeLatency > 15) {
-        slowCount++;
-      }
-
-      // Check if step encounters known bad sectors
-      if (driveKnownBad > 0 && (step % Math.max(1, Math.floor(steps / driveKnownBad)) === 0)) {
-        badCount = Math.min(driveKnownBad, badCount + 1);
-      }
-      if (driveKnownSlow > 0 && (step % Math.max(1, Math.floor(steps / driveKnownSlow)) === 0)) {
-        slowCount = Math.min(driveKnownSlow, slowCount + 1);
-      }
-
-      await new Promise((r) => setTimeout(r, 16)); // Yield to prevent UI freeze
-      const progress = Math.min(100, Math.round((step / steps) * 100));
-
-      if (onProgressUpdate) {
-        onProgressUpdate(target.driveId, progress, badCount);
+        summaries.push({
+          driveIndex: r.driveIndex,
+          driveId: target?.driveId || `drive-tauri-physical-${r.driveIndex}`,
+          driveName: target?.driveName || `PhysicalDrive${r.driveIndex}`,
+          totalSectorsScanned: BigInt(r.totalSectorsScanned || 0),
+          badSectorsFound: Number(r.badSectorsFound || 0),
+          slowSectorsFound: 0,
+          elapsedMs: Number(r.elapsedMs || 0),
+          avgLatencyMs: Number(r.avgLatencyMs || 0),
+          throughputMbSec: Number(r.elapsedMs) > 0
+            ? Number((((Number(r.totalSectorsScanned || 0) * secBytes) / (1024 * 1024)) / (Number(r.elapsedMs) / 1000)).toFixed(1))
+            : null,
+          isCompleted: Boolean(r.isCompleted),
+          statusCode: Number(r.statusCode || 0)
+        });
       }
     }
 
-    const elapsed = performance.now() - startTime;
-    const realAvgLatency = Number((totalProbeMs / steps).toFixed(3));
-    const realThroughputMbSec = elapsed > 0 ? Number(((totalBytesProcessed / (1024 * 1024)) / (elapsed / 1000)).toFixed(1)) : 120;
+    for (const target of tauriTargets) {
+      if (!summaries.some(s => s.driveId === target.driveId)) {
+        if (onProgressUpdate) {
+          onProgressUpdate(target.driveId, 100, 0);
+        }
+        summaries.push({
+          driveIndex: target.driveIndex,
+          driveId: target.driveId,
+          driveName: target.driveName,
+          totalSectorsScanned: 0n,
+          badSectorsFound: 0,
+          slowSectorsFound: 0,
+          elapsedMs: 0,
+          avgLatencyMs: 0,
+          throughputMbSec: null,
+          isCompleted: false,
+          statusCode: DSSectorStatus.DS_STATUS_ABORTED,
+          unsupportedReason: 'Tauri 병렬 스캔 IPC 응답 실패 (관리자 권한 또는 커널 핸들 확인 필요)'
+        });
+      }
+    }
+  }
 
+  const nonTauriPromises = nonTauriTargets.map(async (target): Promise<DSMultiDriveScanSummary> => {
+    const startTime = performance.now();
+    const matchedDrive = drives?.find(d => d.id === target.driveId);
+    const attachedFile = matchedDrive?.attachedFile;
+
+    // Host OPFS File probe
+    if (!attachedFile && matchedDrive?.id === 'drive-native-host-real' && typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const fh = await root.getFileHandle('__disksentinel_io_probe__.bin', { create: true });
+        let opfsFile = await fh.getFile();
+        if (opfsFile.size < 128 * 1024) {
+          const w = await fh.createWritable();
+          await w.write(new Uint8Array(128 * 1024));
+          await w.close();
+          opfsFile = await fh.getFile();
+        }
+
+        const steps = 16;
+        let totalProbeMs = 0;
+        let totalBytesProcessed = 0;
+        let slowCount = 0;
+        let badCount = 0;
+
+        for (let step = 1; step <= steps; step++) {
+          const t0 = performance.now();
+          try {
+            const chunk = 64 * 1024;
+            const offset = ((step * 4096) % Math.max(1, opfsFile.size - chunk));
+            const buf = await opfsFile.slice(offset, offset + chunk).arrayBuffer();
+            totalBytesProcessed += buf.byteLength;
+          } catch {
+            badCount++;
+          }
+          const dt = Math.max(0.02, performance.now() - t0);
+          totalProbeMs += dt;
+          if (dt > 100) slowCount++;
+          if (onProgressUpdate) onProgressUpdate(target.driveId, Math.round((step / steps) * 100), badCount);
+        }
+
+        const elapsed = Math.max(0.1, performance.now() - startTime);
+        return {
+          driveIndex: target.driveIndex,
+          driveId: target.driveId,
+          driveName: target.driveName,
+          totalSectorsScanned: BigInt(Math.floor(totalBytesProcessed / 512)),
+          badSectorsFound: badCount,
+          slowSectorsFound: slowCount,
+          elapsedMs: elapsed,
+          avgLatencyMs: Number((totalProbeMs / steps).toFixed(3)),
+          throughputMbSec: Number(((totalBytesProcessed / (1024 * 1024)) / (totalProbeMs / 1000)).toFixed(1)),
+          isCompleted: true,
+          statusCode: badCount > 0 ? 4 : 0
+        };
+      } catch (err: any) {
+        if (onProgressUpdate) onProgressUpdate(target.driveId, 100, 0);
+        return {
+          driveIndex: target.driveIndex,
+          driveId: target.driveId,
+          driveName: target.driveName,
+          totalSectorsScanned: 0n,
+          badSectorsFound: 0,
+          slowSectorsFound: 0,
+          elapsedMs: performance.now() - startTime,
+          avgLatencyMs: 0,
+          throughputMbSec: null,
+          isCompleted: false,
+          statusCode: DSSectorStatus.DS_STATUS_ABORTED,
+          unsupportedReason: err?.message || 'OPFS 접근 불가'
+        };
+      }
+    }
+
+    if (!attachedFile) {
+      if (onProgressUpdate) onProgressUpdate(target.driveId, 100, 0);
+      return {
+        driveIndex: target.driveIndex,
+        driveId: target.driveId,
+        driveName: target.driveName,
+        totalSectorsScanned: 0n,
+        badSectorsFound: 0,
+        slowSectorsFound: 0,
+        elapsedMs: 0,
+        avgLatencyMs: 0,
+        throughputMbSec: null,
+        isCompleted: false,
+        statusCode: DSSectorStatus.DS_STATUS_ABORTED,
+        unsupportedReason: '브라우저에서 Raw LBA 블록 핸들에 직접 접근할 수 없습니다 (로컬 파일 마운트 또는 Tauri 앱 필요)'
+      };
+    }
+
+    // Real Concurrent File.slice() Verification
+    const steps = 20;
+    const chunkSize = Math.min(256 * 1024, Math.max(512, Math.floor(attachedFile.size / steps) || attachedFile.size));
+    let totalProbeMs = 0;
+    let totalBytesProcessed = 0;
+    let badCount = 0;
+    let slowCount = 0;
+
+    for (let step = 1; step <= steps; step++) {
+      const t0 = performance.now();
+      try {
+        const offset = Math.min(
+          Math.max(0, attachedFile.size - chunkSize),
+          Math.floor(((step - 1) / steps) * attachedFile.size)
+        );
+        const slice = attachedFile.slice(offset, Math.min(attachedFile.size, offset + chunkSize));
+        const buf = await slice.arrayBuffer();
+        totalBytesProcessed += buf.byteLength;
+      } catch {
+        badCount++;
+      }
+      const probeLatency = Math.max(0.01, performance.now() - t0);
+      totalProbeMs += probeLatency;
+      if (probeLatency > 100) slowCount++;
+      if (onProgressUpdate) {
+        onProgressUpdate(target.driveId, Math.min(100, Math.round((step / steps) * 100)), badCount);
+      }
+    }
+
+    const elapsed = Math.max(0.1, performance.now() - startTime);
     return {
       driveIndex: target.driveIndex,
       driveId: target.driveId,
       driveName: target.driveName,
-      totalSectorsScanned: target.sectorCount,
+      totalSectorsScanned: BigInt(Math.max(1, Math.floor(totalBytesProcessed / 512))),
       badSectorsFound: badCount,
       slowSectorsFound: slowCount,
       elapsedMs: elapsed,
-      avgLatencyMs: realAvgLatency,
-      throughputMbSec: realThroughputMbSec,
+      avgLatencyMs: Number((totalProbeMs / steps).toFixed(3)),
+      throughputMbSec: Number(((totalBytesProcessed / (1024 * 1024)) / (totalProbeMs / 1000)).toFixed(1)),
       isCompleted: true,
       statusCode: badCount > 0 ? 4 : 0
     };
   });
 
-  return Promise.all(promises);
+  const nonTauriResults = await Promise.all(nonTauriPromises);
+  return [...summaries, ...nonTauriResults];
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +536,7 @@ export interface DSTrayGuardianStatus {
   isMonitoringActive: boolean;
   pollIntervalSec: number;
   monitoredDriveCount: number;
-  highestTempCelsius: number;
+  highestTempCelsius: number | null;
   criticalAlertTriggered: boolean;
   warningDriveIndex: number;
   lastAlertCode: number;
@@ -453,25 +545,23 @@ export interface DSTrayGuardianStatus {
 
 export interface DSCarvedSectorResult {
   sourceLba: number;
-  signatureType: number; // 1: JPEG, 2: PNG, 3: PDF, 4: ZIP/Office, 5: MP4, 6: Text/Log, 0: Unknown
+  signatureType: number; // 1: JPEG, 2: PNG, 3: PDF, 4: ZIP/Office, 5: MP4, 6: Text/Boot/Log, 0: Unknown/Raw
   signatureName: string;
   carvedSizeBytes: number;
   eccRecoveredBits: number;
   isSalvaged: boolean;
   hexPreview: string;
   rawAsciiPreview: string;
+  errorReason?: string;
 }
 
 let guardianConfig = {
   pollIntervalSec: 10,
   tempThresholdC: 55,
   alertOnPendingSector: true,
-  isActive: true,
+  isActive: true
 };
 
-/**
- * Pure Creative Algorithm 7: Configure Lightweight System Tray Guardian Daemon
- */
 export function DS_ConfigureTrayGuardian(
   pollIntervalSec: number,
   tempThresholdC: number,
@@ -481,54 +571,147 @@ export function DS_ConfigureTrayGuardian(
     pollIntervalSec: Math.max(1, pollIntervalSec),
     tempThresholdC: Math.max(30, tempThresholdC),
     alertOnPendingSector,
-    isActive: true,
+    isActive: true
   };
   return true;
 }
 
 /**
- * Pure Creative Algorithm 8: Run Lightweight System Tray Guardian Check
+ * Computes Guardian alert state purely from real observed drive telemetry (nullable temperature)
  */
 export function DS_RunTrayGuardianCheck(
-  currentHighestTemp?: number, 
-  hasBadSector?: boolean,
-  monitoredDriveCount: number = 1,
+  currentHighestTemp: number | null | undefined,
+  hasBadSector: boolean | undefined,
+  monitoredDriveCount: number = 0,
   activeDriveName?: string
 ): DSTrayGuardianStatus {
-  const temp = currentHighestTemp ?? 36;
-  const isHighTemp = temp >= guardianConfig.tempThresholdC;
-  const isCriticalTemp = temp >= 60;
-  const hasPending = !!hasBadSector && guardianConfig.alertOnPendingSector;
-  const driveLabel = activeDriveName || '로컬 시스템 드라이브';
+  const temp = typeof currentHighestTemp === 'number' && currentHighestTemp > 0 ? currentHighestTemp : null;
+  const isHighTemp = temp !== null && temp >= guardianConfig.tempThresholdC;
+  const isCriticalTemp = temp !== null && temp >= 60;
+  const hasPending = Boolean(hasBadSector) && guardianConfig.alertOnPendingSector;
+  const driveLabel = activeDriveName || '시스템 스토리지';
 
   let alertCode = 0;
-  let message = `전체 ${monitoredDriveCount}대 모니터링 드라이브 정상 작동 중 (S.M.A.R.T. Clean)`;
+  let message = temp !== null
+    ? `전체 ${monitoredDriveCount}대 모니터링 드라이브 정상 작동 중 (최고 온도 ${Math.round(temp)}°C)`
+    : `모니터링 드라이브 ${monitoredDriveCount}대 연결됨 (하드웨어 온도 센서 N/A — 브라우저 샌드박스 또는 센서 미지원)`;
 
-  if (isCriticalTemp) {
+  if (isCriticalTemp && temp !== null) {
     alertCode = 2;
     message = `🔥 치명적 과열 경고: [${driveLabel}] 작동 온도 ${temp.toFixed(1)}°C (임계치 ${guardianConfig.tempThresholdC}°C 초과)`;
-  } else if (isHighTemp) {
+  } else if (isHighTemp && temp !== null) {
     alertCode = 1;
-    message = `⚠️ 고온 주의: [${driveLabel}] 온도 ${temp.toFixed(1)}°C 감지 (쿨링 권장)`;
+    message = `⚠️ 고온 주의: [${driveLabel}] 온도 ${temp.toFixed(1)}°C 감지 (쿨링 점검 권장)`;
   } else if (hasPending) {
     alertCode = 4;
-    message = `⚡ 긴급 복구 요망: [${driveLabel}] 치명적 배드섹터 / 재할당 대기 섹터 감지!`;
+    message = `⚡ 주의 요망: [${driveLabel}] 스캔 중 불량/보류 섹터가 감지되었습니다.`;
   }
 
   return {
     isMonitoringActive: guardianConfig.isActive,
     pollIntervalSec: guardianConfig.pollIntervalSec,
     monitoredDriveCount,
-    highestTempCelsius: Math.round(temp),
+    highestTempCelsius: temp !== null ? Math.round(temp) : null,
     criticalAlertTriggered: isCriticalTemp || hasPending,
     warningDriveIndex: 0,
     lastAlertCode: alertCode,
-    lastAlertMessage: message,
+    lastAlertMessage: message
   };
 }
 
 /**
- * Pure Creative Algorithm 9: Heuristic Bit Carving & ECC Parity Recovery Engine
+ * Native Desktop-aware Tray Guardian Poll
+ */
+export async function DS_RunNativeTrayGuardianPoll(
+  drives: DiskDrive[],
+  hasBadSector: boolean
+): Promise<DSTrayGuardianStatus> {
+  if (isTauriDesktopRuntime()) {
+    const res = await queryTauriTrayGuardianCheck(
+      guardianConfig.pollIntervalSec,
+      guardianConfig.tempThresholdC,
+      guardianConfig.alertOnPendingSector
+    );
+    if (res) {
+      return {
+        isMonitoringActive: Boolean(res.isMonitoringActive),
+        pollIntervalSec: Number(res.pollIntervalSec || guardianConfig.pollIntervalSec),
+        monitoredDriveCount: Number(res.monitoredDriveCount || 0),
+        highestTempCelsius: typeof res.highestTempCelsius === 'number' ? res.highestTempCelsius : null,
+        criticalAlertTriggered: Boolean(res.criticalAlertTriggered),
+        warningDriveIndex: Number(res.warningDriveIndex || 0),
+        lastAlertCode: Number(res.lastAlertCode || 0),
+        lastAlertMessage: String(res.lastAlertMessage || 'Native Tray Guardian Poll Active')
+      };
+    }
+  }
+
+  const validTemps = drives
+    .map(d => d.temperatureC)
+    .filter((t): t is number => typeof t === 'number' && t > 0);
+  const highestTemp = validTemps.length > 0 ? Math.max(...validTemps) : null;
+  const hotDrive = validTemps.length > 0
+    ? drives.find(d => d.temperatureC === highestTemp)
+    : drives[0];
+
+  return DS_RunTrayGuardianCheck(
+    highestTemp,
+    hasBadSector,
+    drives.length,
+    hotDrive?.model || hotDrive?.name
+  );
+}
+
+function classifySignatureFromBytes(rawBytes: Uint8Array, sourceLabel: string): { sigType: number; sigName: string } {
+  if (rawBytes.length >= 3 && rawBytes[0] === 0xFF && rawBytes[1] === 0xD8 && rawBytes[2] === 0xFF) {
+    return { sigType: 1, sigName: `JPEG Image (${sourceLabel})` };
+  }
+  if (rawBytes.length >= 4 && rawBytes[0] === 0x89 && rawBytes[1] === 0x50 && rawBytes[2] === 0x4E && rawBytes[3] === 0x47) {
+    return { sigType: 2, sigName: `PNG Image (${sourceLabel})` };
+  }
+  if (rawBytes.length >= 4 && rawBytes[0] === 0x25 && rawBytes[1] === 0x50 && rawBytes[2] === 0x44 && rawBytes[3] === 0x46) {
+    return { sigType: 3, sigName: `PDF Document (${sourceLabel})` };
+  }
+  if (rawBytes.length >= 2 && rawBytes[0] === 0x50 && rawBytes[1] === 0x4B) {
+    return { sigType: 4, sigName: `ZIP / Archive (${sourceLabel})` };
+  }
+  if (rawBytes.length >= 8 && rawBytes[4] === 0x66 && rawBytes[5] === 0x74 && rawBytes[6] === 0x79 && rawBytes[7] === 0x70) {
+    return { sigType: 5, sigName: `MP4 Media (${sourceLabel})` };
+  }
+  if (rawBytes.length >= 3 && rawBytes[0] === 0xEB && rawBytes[1] === 0x52 && rawBytes[2] === 0x90) {
+    return { sigType: 6, sigName: `NTFS / exFAT Boot Sector (${sourceLabel})` };
+  }
+
+  let printableCount = 0;
+  const sampleLen = Math.min(32, rawBytes.length);
+  for (let i = 0; i < sampleLen; i++) {
+    const b = rawBytes[i];
+    if ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9) {
+      printableCount++;
+    }
+  }
+  if (sampleLen > 0 && printableCount / sampleLen >= 0.85) {
+    return { sigType: 6, sigName: `ASCII/UTF-8 Text (${sourceLabel})` };
+  }
+  return { sigType: 0, sigName: `Raw Binary Sector (${sourceLabel})` };
+}
+
+function formatHexAndAscii(bytes: Uint8Array): { hexPreview: string; rawAsciiPreview: string } {
+  const len = Math.min(64, bytes.length);
+  let hexStr = '';
+  let asciiStr = '';
+  for (let i = 0; i < len; i++) {
+    const byte = bytes[i];
+    hexStr += byte.toString(16).padStart(2, '0').toUpperCase() + (i % 16 === 15 ? '\n' : ' ');
+    asciiStr += byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.';
+  }
+  return { hexPreview: hexStr.trim(), rawAsciiPreview: asciiStr };
+}
+
+/**
+ * Heuristic Bit Carving & Raw Sector Reader:
+ * Reads ONLY genuine bytes from Attached File, Tauri Win32 PhysicalDrive, or OPFS file.
+ * Returns isSalvaged: false when raw handle access is unavailable (zero synthetic hex).
  */
 export async function DS_ExecuteBitCarvingRecovery(
   targetLba: number,
@@ -537,88 +720,118 @@ export async function DS_ExecuteBitCarvingRecovery(
   drive?: DiskDrive
 ): Promise<DSCarvedSectorResult> {
   const span = Math.min(64, Math.max(1, clusterSpan));
-  const rawBytes = new Uint8Array(64);
-  let sigType = 1;
-  let sigName = 'RAW Binary Sector Stream';
-  let carvedBytes = span * 512;
-  let recoveredBits = 0;
-
   const targetFile = attachedFile || drive?.attachedFile;
 
+  // 1. Real File Slice Read
   if (targetFile) {
     try {
       const fileSize = targetFile.size;
-      const offset = fileSize > 64 ? (targetLba * 512) % (fileSize - 64) : 0;
-      const slice = targetFile.slice(offset, offset + 64);
-      const buf = await slice.arrayBuffer();
-      const u8 = new Uint8Array(buf);
-      rawBytes.set(u8.subarray(0, 64));
-      carvedBytes = Math.min(fileSize - offset, span * 512);
-
-      // Check real magic byte signatures from the real file
-      if (rawBytes[0] === 0xFF && rawBytes[1] === 0xD8 && rawBytes[2] === 0xFF) {
-        sigType = 1;
-        sigName = 'JPEG Image (Real File Stream)';
-      } else if (rawBytes[0] === 0x89 && rawBytes[1] === 0x50 && rawBytes[2] === 0x4E && rawBytes[3] === 0x47) {
-        sigType = 2;
-        sigName = 'PNG Image (Real File Stream)';
-      } else if (rawBytes[0] === 0x25 && rawBytes[1] === 0x50 && rawBytes[2] === 0x44 && rawBytes[3] === 0x46) {
-        sigType = 3;
-        sigName = 'PDF Document (Real File Stream)';
-      } else if (rawBytes[0] === 0x50 && rawBytes[1] === 0x4B) {
-        sigType = 4;
-        sigName = 'ZIP / Container Archive (Real File Stream)';
-      } else if (rawBytes[4] === 0x66 && rawBytes[5] === 0x74 && rawBytes[6] === 0x79 && rawBytes[7] === 0x70) {
-        sigType = 5;
-        sigName = 'MP4 Video Stream (Real File Stream)';
-      } else {
-        // Evaluate real ASCII text or raw binary
-        let isPrintable = true;
-        for (let i = 0; i < Math.min(16, rawBytes.length); i++) {
-          if (rawBytes[i] < 32 && rawBytes[i] !== 10 && rawBytes[i] !== 13 && rawBytes[i] !== 9) {
-            isPrintable = false;
-            break;
-          }
-        }
-        sigType = isPrintable ? 6 : 0;
-        sigName = isPrintable ? `Text Stream (${targetFile.name})` : `Raw Sector Stream (${targetFile.name})`;
+      if (fileSize === 0) {
+        return {
+          sourceLba: targetLba,
+          signatureType: 0,
+          signatureName: `빈 파일 (${targetFile.name})`,
+          carvedSizeBytes: 0,
+          eccRecoveredBits: 0,
+          isSalvaged: false,
+          hexPreview: '',
+          rawAsciiPreview: '',
+          errorReason: '선택된 파일의 크기가 0바이트입니다.'
+        };
       }
-    } catch {
-      // Fallback
-    }
-  } else {
-    // Real hardware sector buffer allocation with Galois ECC parity calculation
-    const blockEntropySeed = (targetLba * 1103515245 + 12345) & 0x7FFFFFFF;
-    for (let i = 0; i < 64; i++) {
-      rawBytes[i] = ((blockEntropySeed >> (i % 24)) ^ (i * 37)) & 0xff;
-    }
-    carvedBytes = span * 512;
-    recoveredBits = (targetLba % 3) === 0 ? 1 : 0;
+      const secSize = drive?.hardwareSpecs?.logicalSectorSize || 512;
+      const offset = fileSize > secSize ? (targetLba * secSize) % Math.max(1, fileSize - secSize) : 0;
+      const readLen = Math.min(fileSize - offset, 512);
+      const buf = await targetFile.slice(offset, offset + readLen).arrayBuffer();
+      const rawBytes = new Uint8Array(buf);
+      const { sigType, sigName } = classifySignatureFromBytes(rawBytes, targetFile.name);
+      const { hexPreview, rawAsciiPreview } = formatHexAndAscii(rawBytes);
 
-    // Detect if buffer has specific signature
-    const driveName = drive?.model || drive?.name || '로컬 디스크';
-    sigType = 0;
-    sigName = `Raw LBA Block (#${targetLba.toLocaleString()} / ${driveName})`;
+      return {
+        sourceLba: targetLba,
+        signatureType: sigType,
+        signatureName: sigName,
+        carvedSizeBytes: Math.min(fileSize - offset, span * secSize),
+        eccRecoveredBits: 0,
+        isSalvaged: true,
+        hexPreview,
+        rawAsciiPreview
+      };
+    } catch (err: any) {
+      return {
+        sourceLba: targetLba,
+        signatureType: 0,
+        signatureName: '파일 읽기 오류',
+        carvedSizeBytes: 0,
+        eccRecoveredBits: 0,
+        isSalvaged: false,
+        hexPreview: '',
+        rawAsciiPreview: '',
+        errorReason: err?.message || '파일 슬라이스 판독 실패'
+      };
+    }
   }
 
-  // Format real hex string & ascii preview
-  let hexStr = '';
-  let asciiStr = '';
-  for (let i = 0; i < 64; i++) {
-    const byte = rawBytes[i];
-    hexStr += byte.toString(16).padStart(2, '0').toUpperCase() + (i % 16 === 15 ? '\n' : ' ');
-    asciiStr += (byte >= 32 && byte <= 126) ? String.fromCharCode(byte) : '.';
+  // 2. Native Tauri Win32 Physical Drive Bit Carving / Raw Sector Read
+  if (drive?.id.startsWith('drive-tauri-physical-') && isTauriDesktopRuntime()) {
+    const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+    const tauriCarved = await queryTauriBitCarving(driveIndex, targetLba, span);
+    if (tauriCarved && Array.isArray(tauriCarved.hexPreview)) {
+      const rawBytes = new Uint8Array(tauriCarved.hexPreview);
+      const { hexPreview, rawAsciiPreview } = formatHexAndAscii(rawBytes);
+      return {
+        sourceLba: Number(tauriCarved.sourceLba ?? targetLba),
+        signatureType: Number(tauriCarved.signatureType ?? 0),
+        signatureName: String(tauriCarved.signatureName || 'Physical Sector'),
+        carvedSizeBytes: Number(tauriCarved.carvedSizeBytes ?? 0),
+        eccRecoveredBits: Number(tauriCarved.eccRecoveredBits ?? 0),
+        isSalvaged: Boolean(tauriCarved.isSalvaged),
+        hexPreview,
+        rawAsciiPreview
+      };
+    }
+
+    const rawReadBytes = Math.max(512, drive?.hardwareSpecs?.logicalSectorSize || 512);
+    const physicalBytes = await queryTauriRawSector(driveIndex, targetLba, rawReadBytes);
+    if (physicalBytes && physicalBytes.length > 0) {
+      const { sigType, sigName } = classifySignatureFromBytes(physicalBytes, `PhysicalDrive${driveIndex}`);
+      const { hexPreview, rawAsciiPreview } = formatHexAndAscii(physicalBytes);
+      return {
+        sourceLba: targetLba,
+        signatureType: sigType,
+        signatureName: sigName,
+        carvedSizeBytes: physicalBytes.length,
+        eccRecoveredBits: 0,
+        isSalvaged: true,
+        hexPreview,
+        rawAsciiPreview
+      };
+    }
+
+    return {
+      sourceLba: targetLba,
+      signatureType: 0,
+      signatureName: 'Win32 물리 섹터 읽기 실패',
+      carvedSizeBytes: 0,
+      eccRecoveredBits: 0,
+      isSalvaged: false,
+      hexPreview: '',
+      rawAsciiPreview: '',
+      errorReason: `PhysicalDrive${driveIndex} LBA #${targetLba} 원시 섹터 읽기 권한이 없거나 I/O 오류가 발생했습니다 (관리자 권한 실행 필요).`
+    };
   }
 
+  // 3. No accessible raw handle
   return {
     sourceLba: targetLba,
-    signatureType: sigType,
-    signatureName: sigName,
-    carvedSizeBytes: carvedBytes,
-    eccRecoveredBits: recoveredBits,
-    isSalvaged: true,
-    hexPreview: hexStr.trim(),
-    rawAsciiPreview: asciiStr
+    signatureType: 0,
+    signatureName: '판독 불가 (실제 디스크/파일 핸들 필요)',
+    carvedSizeBytes: 0,
+    eccRecoveredBits: 0,
+    isSalvaged: false,
+    hexPreview: '',
+    rawAsciiPreview: '',
+    errorReason: '웹 브라우저 샌드박스에서는 OS 커널의 Raw LBA 섹터 바이트를 직접 읽을 수 없습니다. 복구 대상 파일(.img/.bin 등)을 직접 첨부하거나 Tauri 데스크톱 관리자 권한으로 실행하세요.'
   };
 }
 
@@ -629,59 +842,40 @@ export interface DSPhysicalDriveDetail {
   serialNumber: string;
   firmwareRev: string;
   busType: string;
-  totalCapacityBytes: bigint;
+  totalCapacityBytes: bigint | null;
   sectorSize: number;
   physicalSectorSize: number;
   isSsd: boolean;
-  isTrimSupported: boolean;
-  isWriteCacheEnabled: boolean;
-  temperatureCelsius: number;
-  healthScore: number;
+  isTrimSupported: boolean | null;
+  isWriteCacheEnabled: boolean | null;
+  temperatureCelsius: number | null;
+  healthScore: number | null;
 }
 
 /**
- * TypeScript Emulation of DS_EnumeratePhysicalDrives using real active drive data
+ * Physical Drive Enumeration View over active Drive objects (zero synthetic fallback device)
  */
-export function DS_EnumeratePhysicalDrives(activeDrive?: DiskDrive): DSPhysicalDriveDetail[] {
-  if (activeDrive) {
-    const capBytes = BigInt(activeDrive.capacityGb) * 1024n * 1024n * 1024n;
-    return [
-      {
-        driveIndex: 0,
-        devicePath: activeDrive.hardwareSpecs?.devicePhysicalPath || (activeDrive.isExternal ? 'USB://PhysicalDrive1' : '\\\\.\\PhysicalDrive0'),
-        model: activeDrive.model,
-        serialNumber: activeDrive.serialNumber || 'SN-REAL-HW',
-        firmwareRev: activeDrive.firmware || 'VER-1.0',
-        busType: activeDrive.hardwareSpecs?.busType || (activeDrive.type === 'NVMe' ? 'NVMe' : activeDrive.isExternal ? 'USB' : 'SATA'),
-        totalCapacityBytes: capBytes,
-        sectorSize: activeDrive.hardwareSpecs?.logicalSectorSize || 512,
-        physicalSectorSize: activeDrive.hardwareSpecs?.physicalSectorSize || 4096,
-        isSsd: activeDrive.type !== 'HDD' && activeDrive.type !== 'EXTERNAL_HDD',
-        isTrimSupported: activeDrive.hardwareSpecs?.trimSupported ?? true,
-        isWriteCacheEnabled: activeDrive.hardwareSpecs?.volatileWriteCache ?? true,
-        temperatureCelsius: activeDrive.temperatureC || 36,
-        healthScore: activeDrive.healthScore || 100
-      }
-    ];
-  }
-  return [
-    {
-      driveIndex: 0,
-      devicePath: '\\\\.\\PhysicalDrive0',
-      model: 'Host Primary Storage Device',
-      serialNumber: 'HOST-PHYSICAL-0',
-      firmwareRev: 'SYS-FIRMWARE',
-      busType: 'NVMe',
-      totalCapacityBytes: 1000204886016n,
-      sectorSize: 512,
-      physicalSectorSize: 4096,
-      isSsd: true,
-      isTrimSupported: true,
-      isWriteCacheEnabled: true,
-      temperatureCelsius: 36,
-      healthScore: 99
-    }
-  ];
+export function DS_EnumeratePhysicalDrives(activeDrive?: DiskDrive | DiskDrive[]): DSPhysicalDriveDetail[] {
+  const list = Array.isArray(activeDrive) ? activeDrive : activeDrive ? [activeDrive] : [];
+  return list.map((drive, idx) => {
+    const capBytes = drive.capacityGb !== null ? BigInt(Math.round(drive.capacityGb * 1024 * 1024 * 1024)) : null;
+    const parsedIdx = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+    const driveIdx = Number.isNaN(parsedIdx) ? idx : parsedIdx;
+    return {
+      driveIndex: driveIdx,
+      devicePath: drive.hardwareSpecs?.devicePhysicalPath || drive.mountPoint || `Device://${driveIdx}`,
+      model: drive.model,
+      serialNumber: drive.serialNumber,
+      firmwareRev: drive.firmware,
+      busType: drive.hardwareSpecs?.busType || (drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'Unknown'),
+      totalCapacityBytes: capBytes,
+      sectorSize: drive.hardwareSpecs?.logicalSectorSize || 512,
+      physicalSectorSize: drive.hardwareSpecs?.physicalSectorSize || 4096,
+      isSsd: drive.type !== 'HDD' && drive.type !== 'EXTERNAL_HDD',
+      isTrimSupported: drive.hardwareSpecs?.trimSupported ?? null,
+      isWriteCacheEnabled: drive.hardwareSpecs?.volatileWriteCache ?? null,
+      temperatureCelsius: drive.temperatureC,
+      healthScore: drive.healthScore
+    };
+  });
 }
-
-

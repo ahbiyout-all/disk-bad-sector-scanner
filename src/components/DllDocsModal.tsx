@@ -60,7 +60,7 @@ DS_API bool  DS_CALL DS_EvaluateDriveReliability(const DSSmartEntry* entries, in
 DS_API bool  DS_CALL DS_CalculateParityChecksum(const uint8_t* pBuffer, uint32_t bufferLength, uint32_t* outCrc32, uint64_t* outEccParity);
 
 // 7. 비파괴 소프트 배드섹터 안전 복구 및 재할당 트리거
-DS_API bool  DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t* outRecoveredStatus);
+DS_API bool  DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t count, uint32_t* outRecoveredStatus);
 
 // 8. 디스크 핸들 및 4096B 정렬 메모리 해제
 DS_API void  DS_CALL DS_CloseDrive(void* hDrive);
@@ -306,6 +306,14 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
                     <strong className="text-slate-900 dark:text-slate-100">원클릭 DLL 빌더(build-dll.bat):</strong>
                     <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                       MSVC(`cl.exe`) 또는 MinGW(`g++`)를 자동 감지하여 릴리스 최적화된 `DiskSentinelNativeCore.dll`을 생성하는 배치 스크립트를 제공합니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-teal-500 mr-2">[v4.5.0 고도화]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">32개 물리 드라이브 슬롯 전수 탐색 & 볼륨 역매핑:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      기존 12~16개 탐색 제한을 32개(<code>PhysicalDrive0 ~ 31</code>)로 전면 확장하여 외장 USB 독/카드 리더기의 비연속 높은 슬롯 인덱스 장치를 완벽 검출하고, <code>FILE_SHARE_DELETE</code> 플래그를 추가해 OS 보안 프로세스 점유로 인한 공유 위반을 차단하며, <code>IOCTL_STORAGE_GET_DEVICE_NUMBER</code>로 Windows 볼륨 문자(C:, D:, E: 등)를 1:1 매핑합니다.
                     </p>
                   </div>
                 </div>

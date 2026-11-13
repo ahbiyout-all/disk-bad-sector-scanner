@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file. This projec
 
 ---
 
+## [v4.6.0] - 2026-11-13
+### Added
+- **D3.js 실시간 섹터별 읽기 속도 및 I/O 레이턴시 분포 히스토그램 (`LatencyHistogramDashboard.tsx`)**:
+  - 실시간 표면 검사 I/O 레이턴시(ms) 및 읽기 속도(MB/s) 분포를 D3 기반 SVG 히스토그램(로그 티어 / D3 균등 분포, Y축 로그/선형 전환)으로 시각화하여 배드섹터 전조 증상(이중 봉우리·긴 꼬리 왜도)을 즉시 판별.
+  - **검사 방식(`Quick` vs `Full`) 연동 통계 정밀도 동적 조정**: `Quick` 모드 선택 시 8-Bin 고속 샘플링 정밀도(0.1ms 단위, 표본 오차한계 `±ms` 산출), `Full` 모드 선택 시 20-Bin 초정밀 전수 분석(0.01ms 단위)을 자동 적용하며 수동 전환 셀렉터 지원.
+  - **100ms 이상 `Slow/Critical` 섹터 오렌지/레드 하이라이트 및 차트 상단 실시간 요약 카운터**:
+    - 100ms 경계를 D3 빈(Bin) 분할 경계로 고정하여 정상 구간과 지연 구간이 혼재되지 않도록 분리.
+    - 지연 `>= 100ms` 구간 막대를 고대비 경고 오렌지-레드 그라데이션(`#EF4444` ↔ `#F97316`), 대각선 해치 오버레이, `#C2410C` 테두리 및 음영 배경으로 별도 강조하고 위험(`>500ms`)/오류 구간은 레드(`#DC2626`)로 구분.
+    - 차트 상단 헤더에 실시간 `Slow/Critical (≥100ms)` 총 개수 및 비율 카운터(`총 N개 (X.X%)`) 탑재.
+  - **구간별 LBA 드릴다운 인스펙터**: 히스토그램 막대 클릭 시 해당 지연 구간의 상세 LBA 목록과 개별 섹터 블록 선택 연동.
+- **S.M.A.R.T. 임계치 초과 시각 경고 및 툴팁 (`HealthSummaryDashboard.tsx`)**:
+  - 핵심 S.M.A.R.T. 속성이 제조사 한계 임계값(Threshold)을 초과하거나 근접 시 경고 배지, 행 하이라이트, 상세 툴팁으로 즉각 알림.
+- **Windows IOCTL/WMI 네이티브 32-드라이브 다중 탐색 및 장치 인식률 강화**:
+  - `\\.\PhysicalDrive0` ~ `PhysicalDrive31` 전수 조사 및 논리 드라이브 문자/볼륨 매핑을 C++, Rust, Tauri IPC 전 계층에 구현하여 SSD/HDD/NVMe/외장 USB 장치 인식률 극대화.
+
+### Changed & Fixed
+- **전 계층 더미/모의 코드 완전 제거 및 실측 API 전면 교체 (Zero-Dummy Refactoring)**:
+  - C++, Rust, Tauri, TypeScript 전 계층에 잔존하던 하드코딩 폴백과 난수 시뮬레이션을 제거하고 커널 Direct I/O, IOCTL 및 브라우저 실측 API(OPFS / File System Access / StorageManager)로 전면 교체(미지원 하드웨어 센서는 `N/A` 정직 표기).
+- **심층 코드 감사(Self-Reflection Audit) 및 결함 수정**:
+  - `@types/d3` 엄격 타입 추론(`d3.max<Datum, number>`), TypeScript 리터럴 유니온 내로잉, 비동기 스캔 상태 정합성 보완.
+- **통합 버전 동기화 (`v4.6.0`)**:
+  - `package.json`, `package-lock.json`, `setup.iss`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/src/main.rs`, `src/native/rust/`, `DiskSentinelLauncher.cpp/.cs`, `projectInfo.ts`, `reportGenerator.ts`, `docs/` 일괄 동기화.
+
+---
+
 ## [v4.5.0] - 2026-10-15
 ### Added & Refactored
 - **기존 앱 설치 감지 및 덮어쓰기/삭제 여부 선택 체크 로직 구현**:

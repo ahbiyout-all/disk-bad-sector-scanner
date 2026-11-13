@@ -25,8 +25,15 @@ export function createScanRecordFromSession(
   const avgLatency = latencies.length > 0 ? Number((latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(1)) : 0;
   const maxLatency = latencies.length > 0 ? Math.max(...latencies) : 0;
 
+  const speeds = scannedBlocks
+    .filter(b => typeof b.throughputMbSec === 'number' && b.throughputMbSec > 0)
+    .map(b => b.throughputMbSec as number);
+  const avgSpeedMbSec = speeds.length > 0
+    ? Number((speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1))
+    : undefined;
+
   // Calculate dynamic health score based on scan findings and base drive health
-  let calculatedHealth = drive.healthScore;
+  let calculatedHealth = drive.healthScore ?? 100;
   if (badCount > 0) {
     calculatedHealth = Math.max(10, calculatedHealth - (badCount * 12));
   }
@@ -64,7 +71,7 @@ export function createScanRecordFromSession(
     driveId: drive.id,
     driveModel: drive.model,
     driveSerial: drive.serialNumber,
-    driveCapacityGb: drive.capacityGb,
+    driveCapacityGb: drive.capacityGb ?? 0,
     date: dateStr,
     timestamp: now.getTime(),
     scanMode,
@@ -81,6 +88,7 @@ export function createScanRecordFromSession(
     durationSeconds,
     avgLatencyMs: avgLatency,
     maxLatencyMs: maxLatency,
+    avgSpeedMbSec,
     smartSnapshot: [...drive.smartAttributes],
     recommendation,
     mediaSpecificDiagnosis: mediaDiagnosis
@@ -212,7 +220,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
 
   ctx.fillStyle = '#94A3B8';
   ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText('엔진: DiskSentinel Pro v4.4.0 Native Core | CISNet (AhBiYout)', 50, 115);
+  ctx.fillText('엔진: DiskSentinel Pro v4.6.0 Native Core | CISNet (AhBiYout)', 50, 115);
 
   // Certificate ID badge in header
   ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
@@ -354,7 +362,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
 
   ctx.fillStyle = recBoxBg;
   ctx.beginPath();
-  ctx.roundRect(50, currentY, 1140, 95, 8);
+  ctx.roundRect(50, currentY, 1140, 108, 8);
   ctx.fill();
   ctx.strokeStyle = recBoxBorder;
   ctx.lineWidth = 1.5;
@@ -362,16 +370,21 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
 
   ctx.fillStyle = recBoxText;
   ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif';
-  ctx.fillText('【엔진 공식 진단 소견】', 70, currentY + 30);
+  ctx.fillText('【엔진 공식 진단 소견】', 70, currentY + 28);
 
   ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif';
-  ctx.fillText(record.recommendation, 70, currentY + 56);
+  const recLine1 = record.recommendation.length > 68 ? record.recommendation.slice(0, 68) : record.recommendation;
+  const recLine2 = record.recommendation.length > 68 ? record.recommendation.slice(68) : '';
+  ctx.fillText(recLine1, 70, currentY + 52, 1100);
+  if (recLine2) {
+    ctx.fillText(recLine2, 70, currentY + 72, 1100);
+  }
 
   ctx.fillStyle = '#64748B';
   ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif';
-  ctx.fillText(`검사 일시: ${record.date} | 총 소요 시간: ${Math.floor(record.durationSeconds / 60)}분 ${Math.floor(record.durationSeconds % 60)}초 | 평균 지연: ${record.avgLatencyMs}ms | 최대 지연: ${record.maxLatencyMs}ms`, 70, currentY + 80);
+  ctx.fillText(`검사 일시: ${record.date} | 총 소요 시간: ${Math.floor(record.durationSeconds / 60)}분 ${Math.floor(record.durationSeconds % 60)}초 | 평균 지연: ${record.avgLatencyMs}ms | 최대 지연: ${record.maxLatencyMs}ms`, 70, currentY + 95, 1100);
 
-  currentY += 95 + 35;
+  currentY += 108 + 28;
 
   // --- Section 4: Defective Sectors Table ---
   ctx.fillStyle = '#1E293B';
@@ -453,11 +466,11 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
   const smartGridW = 216;
   const smartGridH = 65;
   const smartItems = [
-    { name: '재할당 섹터 (0x05)', val: record.smartSnapshot?.find(s => s.id === 5 || s.id === 0x05)?.raw || 0 },
-    { name: '보류 중 섹터 (0xC5)', val: record.smartSnapshot?.find(s => s.id === 197 || s.id === 0xC5)?.raw || 0 },
-    { name: '복구 불가 오류 (0xBB)', val: record.smartSnapshot?.find(s => s.id === 187 || s.id === 0xBB)?.raw || 0 },
-    { name: '총 사용 시간 (POH)', val: `${record.smartSnapshot?.find(s => s.id === 9 || s.id === 0x09)?.raw || 0} hrs` },
-    { name: '드라이브 온도 (0xC2)', val: `${record.smartSnapshot?.find(s => s.id === 194 || s.id === 0xC2)?.raw || 32} °C` },
+    { name: '재할당 섹터 (0x05)', val: record.smartSnapshot?.find(s => s.id === 5 || s.id === 0x05)?.raw ?? 'N/A' },
+    { name: '보류 중 섹터 (0xC5)', val: record.smartSnapshot?.find(s => s.id === 197 || s.id === 0xC5)?.raw ?? 'N/A' },
+    { name: '복구 불가 오류 (0xBB)', val: record.smartSnapshot?.find(s => s.id === 187 || s.id === 0xBB)?.raw ?? 'N/A' },
+    { name: '총 사용 시간 (POH)', val: record.smartSnapshot?.find(s => s.id === 9 || s.id === 0x09)?.raw ?? 'N/A' },
+    { name: '드라이브 온도 (0xC2)', val: record.smartSnapshot?.find(s => s.id === 194 || s.id === 0xC2 || s.id === 2)?.raw ?? 'N/A' },
   ];
 
   smartItems.forEach((it, i) => {
@@ -574,7 +587,7 @@ export function exportOtelMetricsReport(record: SavedScanRecord) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.setAttribute('download', `OTel_Prometheus_Metrics_${record.driveSerial}_${Date.now()}.prom`);
+  link.setAttribute('download', `OTel_Prometheus_Metrics_${sanitize(record.driveSerial)}_${Date.now()}.prom`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

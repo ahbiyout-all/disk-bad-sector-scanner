@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SavedScanRecord } from '../types';
 import { History, GitCompare, Trash2, ArrowUpRight, ArrowDownRight, Minus, FileText, CheckCircle2, AlertTriangle, ShieldAlert, Share2 } from 'lucide-react';
 
@@ -19,6 +19,21 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
 }) => {
   const [selectedScanAId, setSelectedScanAId] = useState<string>(records[1]?.id || records[0]?.id || '');
   const [selectedScanBId, setSelectedScanBId] = useState<string>(records[0]?.id || '');
+
+  useEffect(() => {
+    const validIds = new Set(records.map(r => r.id));
+    if (records.length === 0) {
+      setSelectedScanAId('');
+      setSelectedScanBId('');
+      return;
+    }
+    if (!validIds.has(selectedScanBId)) {
+      setSelectedScanBId(records[0].id);
+    }
+    if (!validIds.has(selectedScanAId) || (records.length >= 2 && selectedScanAId === selectedScanBId)) {
+      setSelectedScanAId(records[1]?.id || records[0].id);
+    }
+  }, [records, selectedScanAId, selectedScanBId]);
 
   const scanA = records.find(r => r.id === selectedScanAId);
   const scanB = records.find(r => r.id === selectedScanBId);
@@ -96,7 +111,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                 </div>
                 <div>
                   <div className="font-bold text-slate-800 dark:text-slate-200">
-                    1차 실제 검사 기록 보관 중: {records[0].driveName}
+                    1차 실제 검사 기록 보관 중: {records[0].driveModel}
                   </div>
                   <div className="text-[10px] text-slate-400 font-mono">
                     검사 일시: {records[0].date} · 건강도: {records[0].healthScore}% · 배드섹터: {records[0].badCount}개
@@ -121,10 +136,10 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
               {/* Bad Sector Delta */}
               <div className={`p-3 rounded-lg border ${
                 badDelta > 0
-                  ? 'bg-red-950/20 border-red-500/30 text-red-300'
+                  ? 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-300'
                   : badDelta < 0
-                  ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
-                  : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-200'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
               }`}>
                 <div className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 mb-0.5">Bad Sector Delta</div>
                 <div className="flex items-center gap-2">
@@ -132,17 +147,17 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                     {badDelta > 0 ? `+${badDelta}` : badDelta}
                   </span>
                   {badDelta > 0 ? (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-red-900/50 text-red-300 border border-red-700/50">
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-700/50">
                       <ArrowUpRight className="w-3 h-3" />
                       악화 (배드 증가)
                     </span>
                   ) : badDelta < 0 ? (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-emerald-900/50 text-emerald-300 border border-emerald-700/50">
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700/50">
                       <ArrowDownRight className="w-3 h-3" />
                       재할당/정리됨
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
                       <Minus className="w-3 h-3" />
                       변동 없음
                     </span>
@@ -156,8 +171,8 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
               {/* Health Score Delta */}
               <div className={`p-3 rounded-lg border ${
                 healthDelta < 0
-                  ? 'bg-amber-950/20 border-amber-500/30 text-amber-300'
-                  : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-200'
+                  ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-500/30 text-amber-700 dark:text-amber-300'
+                  : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
               }`}>
                 <div className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 mb-0.5">Health Score Delta</div>
                 <div className="flex items-center gap-2">
@@ -165,17 +180,17 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                     {healthDelta > 0 ? `+${healthDelta}` : healthDelta}%
                   </span>
                   {healthDelta < 0 ? (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-900/50 text-amber-300 border border-amber-700/50">
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700/50">
                       <ArrowDownRight className="w-3 h-3" />
                       하락
                     </span>
                   ) : healthDelta > 0 ? (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-emerald-900/50 text-emerald-300 border border-emerald-700/50">
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700/50">
                       <ArrowUpRight className="w-3 h-3" />
                       상승
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
                       <Minus className="w-3 h-3" />
                       유지됨
                     </span>

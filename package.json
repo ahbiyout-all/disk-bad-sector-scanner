@@ -1,6 +1,6 @@
 {
   "name": "disk-bad-sector-scanner",
-  "version": "4.5.0",
+  "version": "4.6.0",
   "description": "Real-time Disk Bad Sector Surface Scanner & Telemetry Dashboard",
   "author": "AhBiYout (https://github.com/AhBiYout-all)",
   "homepage": "https://github.com/AhBiYout-all/disk-bad-sector-scanner",
@@ -19,7 +19,9 @@
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
+    "@types/d3": "^7.4.3",
     "@vitejs/plugin-react": "^5.0.4",
+    "d3": "^7.9.2",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "jspdf": "^4.2.1",

@@ -1,24 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DiskDrive } from '../types';
-import { 
-  DSMultiDriveScanTarget, 
-  DSMultiDriveScanSummary, 
-  DS_ScanMultipleDrivesParallel 
+import {
+  DSMultiDriveScanTarget,
+  DSMultiDriveScanSummary,
+  DS_ScanMultipleDrivesParallel
 } from '../utils/nativeDllBridge';
-import { 
-  X, 
-  Layers, 
-  Play, 
-  Square, 
-  CheckCircle2, 
-  AlertTriangle, 
-  Cpu, 
-  Zap, 
-  HardDrive, 
-  Gauge, 
-  Clock, 
-  Check, 
-  ShieldCheck 
+import {
+  X,
+  Layers,
+  Play,
+  Square,
+  CheckCircle2,
+  AlertTriangle,
+  Cpu,
+  Zap,
+  HardDrive,
+  ShieldCheck
 } from 'lucide-react';
 
 interface ParallelDriveScanModalProps {
@@ -32,7 +29,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   onClose,
   drives,
 }) => {
-  const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>(() => 
+  const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>(() =>
     drives.map(d => d.id)
   );
   const [concurrencyThreads, setConcurrencyThreads] = useState<number>(() => {
@@ -47,12 +44,25 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   const [driveBadCount, setDriveBadCount] = useState<Record<string, number>>({});
   const [summaries, setSummaries] = useState<DSMultiDriveScanSummary[] | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const abortedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (isScanning) return;
+    const validIds = new Set(drives.map(d => d.id));
+    setSelectedDriveIds(prev => {
+      const kept = prev.filter(id => validIds.has(id));
+      if (kept.length === 0 && drives.length > 0 && isOpen) {
+        return drives.map(d => d.id);
+      }
+      return kept;
+    });
+  }, [drives, isOpen, isScanning]);
 
   if (!isOpen) return null;
 
   const toggleSelectDrive = (id: string) => {
     if (isScanning) return;
-    setSelectedDriveIds(prev => 
+    setSelectedDriveIds(prev =>
       prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
     );
   };
@@ -70,6 +80,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   const handleStartParallelScan = async () => {
     if (selectedDriveIds.length === 0) return;
 
+    abortedRef.current = false;
     setIsScanning(true);
     setSummaries(null);
     setElapsedSeconds(0);
@@ -89,26 +100,33 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
 
     const targets: DSMultiDriveScanTarget[] = selectedDriveIds.map((id, idx) => {
       const drive = drives.find(d => d.id === id);
+      const capLabel = drive?.capacityGb !== null && drive?.capacityGb !== undefined ? `${drive.capacityGb}GB` : '용량 N/A';
+      const parsedIdx = parseInt(id.replace('drive-tauri-physical-', ''), 10);
+      const driveIndex = Number.isNaN(parsedIdx) ? idx : parsedIdx;
+      const clampedSectors = BigInt(Math.min(10000, Math.max(1, drive?.totalSectors || 10000)));
       return {
-        driveIndex: idx,
+        driveIndex,
         driveId: id,
-        driveName: drive ? `${drive.model} (${drive.capacityGb}GB)` : `Drive ${idx}`,
+        driveName: drive ? `${drive.model} (${capLabel})` : `Drive ${idx}`,
         startLba: 0n,
-        sectorCount: 10000n, // Fast concurrent chunk
+        sectorCount: clampedSectors,
         burstStep
       };
     });
 
     try {
       const results = await DS_ScanMultipleDrivesParallel(
-        targets, 
+        targets,
         (driveId, progress, badFound) => {
+          if (abortedRef.current) return;
           setDriveProgress(prev => ({ ...prev, [driveId]: progress }));
           setDriveBadCount(prev => ({ ...prev, [driveId]: badFound }));
         },
         drives
       );
-      setSummaries(results);
+      if (!abortedRef.current) {
+        setSummaries(results);
+      }
     } catch (e) {
       console.error('Parallel scan error:', e);
     } finally {
@@ -118,13 +136,17 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   };
 
   const handleAbort = () => {
+    abortedRef.current = true;
     setIsScanning(false);
   };
+
+  const completedSummaries = summaries ? summaries.filter(s => s.isCompleted) : [];
+  const hasAnyUnsupported = summaries ? summaries.some(s => !s.isCompleted) : false;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
       <div className="relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
-        
+
         {/* Top Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2.5">
@@ -137,18 +159,18 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                   Rayon 다중 디스크 동시 병렬 스캐너
                 </h2>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-400 border border-orange-500/30">
-                  Rust Concurrency Engine
+                  Concurrent Real I/O
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Data Race 없는 고성능 멀티스레드 병렬 I/O로 시스템 내 복수 드라이브를 동시 정밀 검사
+                실제 Win32 스레드 풀 / 병렬 File.slice &amp; OPFS 검증으로 연결된 다중 드라이브를 동시 검사합니다
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -156,7 +178,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
 
         {/* Content Body */}
         <div className="p-5 overflow-y-auto space-y-4">
-          
+
           {/* Controls Bar */}
           <div className="p-3.5 rounded-lg border bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-wrap">
@@ -166,20 +188,19 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
               <button
                 onClick={selectAll}
                 disabled={isScanning}
-                className="px-2 py-1 text-[11px] font-semibold bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded transition-colors disabled:opacity-50"
+                className="px-2 py-1 text-[11px] font-semibold bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded transition-colors disabled:opacity-50 cursor-pointer"
               >
                 전체 선택
               </button>
               <button
                 onClick={deselectAll}
                 disabled={isScanning}
-                className="px-2 py-1 text-[11px] font-semibold bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded transition-colors disabled:opacity-50"
+                className="px-2 py-1 text-[11px] font-semibold bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded transition-colors disabled:opacity-50 cursor-pointer"
               >
                 선택 해제
               </button>
             </div>
 
-            {/* Thread Concurrency & Burst selector */}
             <div className="flex items-center gap-3 text-xs">
               <div className="flex items-center gap-1.5">
                 <Cpu className="w-3.5 h-3.5 text-indigo-500" />
@@ -237,7 +258,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={() => {}} // Handled by parent click
+                        onChange={() => {}}
                         disabled={isScanning}
                         className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
                       />
@@ -246,7 +267,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                         <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>{drive.model}</span>
                           <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                            {drive.capacityGb} GB
+                            {drive.capacityGb !== null ? `${drive.capacityGb} GB` : '용량 N/A'}
                           </span>
                           <span className="text-[10px] uppercase font-bold text-indigo-500">
                             {drive.interface}
@@ -258,12 +279,11 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Progress Info */}
                     <div className="flex items-center gap-3 text-xs font-mono">
                       {badCount > 0 && (
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400 border border-red-500/30 flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3" />
-                          배드섹터 {badCount}개 발견
+                          오류 {badCount}건 발견
                         </span>
                       )}
                       <span className="font-bold text-slate-800 dark:text-slate-200">
@@ -272,7 +292,6 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Progress Bar */}
                   <div className="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full transition-all duration-300 ${
@@ -290,35 +309,44 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
             })}
           </div>
 
-          {/* Results Summary when Completed */}
+          {/* Results Summary */}
           {summaries && (
-            <div className="p-4 rounded-xl border bg-emerald-50/80 dark:bg-emerald-950/20 border-emerald-500/30 animate-in fade-in duration-200">
+            <div className={`p-4 rounded-xl border animate-in fade-in duration-200 ${
+              hasAnyUnsupported && completedSummaries.length === 0
+                ? 'bg-amber-50/80 dark:bg-amber-950/20 border-amber-500/30'
+                : 'bg-emerald-50/80 dark:bg-emerald-950/20 border-emerald-500/30'
+            }`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                  <h4 className="text-sm font-bold text-emerald-900 dark:text-emerald-300">
-                    다중 드라이브 병렬 검사 완료! (소요 시간: {elapsedSeconds}초)
+                  {completedSummaries.length > 0 ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                  ) : (
+                    <AlertTriangle className="w-5 h-5 text-amber-500" />
+                  )}
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    다중 드라이브 병렬 I/O 검사 완료 ({elapsedSeconds}초 소요)
                   </h4>
                 </div>
-                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 font-mono">
-                  동시 가속 배율: {(selectedDriveIds.length * 0.9).toFixed(1)}x 고속
+                <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 font-mono">
+                  실측 성공 {completedSummaries.length} / {summaries.length}대
                 </span>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 text-xs">
-                <div className="p-2.5 rounded bg-white/60 dark:bg-slate-900/60 border border-emerald-500/20">
-                  <span className="text-slate-500 dark:text-slate-400 block text-[10px]">총 검사 드라이브</span>
+                <div className="p-2.5 rounded bg-white/60 dark:bg-slate-900/60 border border-slate-200/40 dark:border-slate-700/40">
+                  <span className="text-slate-500 dark:text-slate-400 block text-[10px]">실측 완료 드라이브</span>
                   <span className="text-base font-bold font-mono text-slate-900 dark:text-white">
-                    {summaries.length}대 드라이브
+                    {completedSummaries.length} / {summaries.length}대
                   </span>
                 </div>
-                <div className="p-2.5 rounded bg-white/60 dark:bg-slate-900/60 border border-emerald-500/20">
-                  <span className="text-slate-500 dark:text-slate-400 block text-[10px]">총 검사 섹터</span>
+                <div className="p-2.5 rounded bg-white/60 dark:bg-slate-900/60 border border-slate-200/40 dark:border-slate-700/40">
+                  <span className="text-slate-500 dark:text-slate-400 block text-[10px]">총 판독 섹터</span>
                   <span className="text-base font-bold font-mono text-slate-900 dark:text-white">
                     {summaries.reduce((acc, s) => acc + Number(s.totalSectorsScanned), 0).toLocaleString()} Sectors
                   </span>
                 </div>
-                <div className="p-2.5 rounded bg-white/60 dark:bg-slate-900/60 border border-emerald-500/20">
-                  <span className="text-slate-500 dark:text-slate-400 block text-[10px]">총 배드섹터 검출</span>
+                <div className="p-2.5 rounded bg-white/60 dark:bg-slate-900/60 border border-slate-200/40 dark:border-slate-700/40">
+                  <span className="text-slate-500 dark:text-slate-400 block text-[10px]">오류 블록 검출</span>
                   <span className={`text-base font-bold font-mono ${
                     summaries.some(s => s.badSectorsFound > 0) ? 'text-red-500' : 'text-emerald-500'
                   }`}>
@@ -327,50 +355,63 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                 </div>
               </div>
 
-              {/* Individual Drive Scan Results Table */}
-              <div className="mt-3 pt-3 border-t border-emerald-500/20 overflow-x-auto">
+              <div className="mt-3 pt-3 border-t border-slate-200/40 dark:border-slate-800 overflow-x-auto">
                 <table className="w-full text-left text-[11px] font-mono">
                   <thead>
-                    <tr className="text-slate-500 dark:text-slate-400 border-b border-emerald-500/20">
+                    <tr className="text-slate-500 dark:text-slate-400 border-b border-slate-200/40 dark:border-slate-800">
                       <th className="py-1 px-2 font-semibold">드라이브</th>
-                      <th className="py-1 px-2 font-semibold text-center">전송 대역폭</th>
+                      <th className="py-1 px-2 font-semibold text-center">실측 대역폭</th>
                       <th className="py-1 px-2 font-semibold text-center">평균 지연율</th>
                       <th className="py-1 px-2 font-semibold text-center">지연 섹터</th>
-                      <th className="py-1 px-2 font-semibold text-center">배드섹터</th>
-                      <th className="py-1 px-2 font-semibold text-right">상태</th>
+                      <th className="py-1 px-2 font-semibold text-center">오류 섹터</th>
+                      <th className="py-1 px-2 font-semibold text-right">상태 / 비고</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-emerald-500/10">
+                  <tbody className="divide-y divide-slate-200/30 dark:divide-slate-800/60">
                     {summaries.map(s => (
-                      <tr key={s.driveId} className="hover:bg-emerald-500/5">
+                      <tr key={s.driveId} className="hover:bg-slate-500/5">
                         <td className="py-1.5 px-2 font-bold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">
                           {s.driveName}
                         </td>
                         <td className="py-1.5 px-2 text-center text-indigo-600 dark:text-indigo-400 font-semibold">
-                          {s.throughputMbSec || 120} MB/s
+                          {s.throughputMbSec !== null ? `${s.throughputMbSec} MB/s` : 'N/A'}
                         </td>
                         <td className="py-1.5 px-2 text-center text-slate-700 dark:text-slate-300">
-                          {s.avgLatencyMs} ms
+                          {s.isCompleted ? `${s.avgLatencyMs} ms` : 'N/A'}
                         </td>
                         <td className="py-1.5 px-2 text-center text-amber-600 dark:text-amber-400">
-                          {s.slowSectorsFound}개
+                          {s.isCompleted ? `${s.slowSectorsFound}개` : '-'}
                         </td>
                         <td className={`py-1.5 px-2 text-center font-bold ${s.badSectorsFound > 0 ? 'text-red-500 animate-pulse' : 'text-emerald-500'}`}>
-                          {s.badSectorsFound}개
+                          {s.isCompleted ? `${s.badSectorsFound}개` : '-'}
                         </td>
                         <td className="py-1.5 px-2 text-right">
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            s.badSectorsFound > 0 
-                              ? 'bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400' 
-                              : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
-                          }`}>
-                            {s.badSectorsFound > 0 ? '손상 발견' : '정상 (OK)'}
-                          </span>
+                          {!s.isCompleted ? (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 cursor-help"
+                              title={s.unsupportedReason}
+                            >
+                              미지원 (핸들 필요)
+                            </span>
+                          ) : (
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              s.badSectorsFound > 0
+                                ? 'bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400'
+                                : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                            }`}>
+                              {s.badSectorsFound > 0 ? '손상 발견' : '정상 (OK)'}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                {hasAnyUnsupported && (
+                  <p className="mt-2 text-[10px] font-sans text-amber-700 dark:text-amber-400">
+                    * 일부 장치는 브라우저 샌드박스에서 RAW LBA 직접 핸들에 접근할 수 없어 제외되었습니다 (파일 마운트 또는 Tauri 관리자 실행 시 전체 검사 가능).
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -380,14 +421,14 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
         <div className="flex items-center justify-between px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-1.5 text-xs text-slate-500 font-mono">
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>Rayon Thread Safety • Lock-Free Zero Contention</span>
+            <span>Genuine Multi-Drive Real I/O Engine</span>
           </div>
 
           <div className="flex items-center gap-2">
             {isScanning ? (
               <button
                 onClick={handleAbort}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs"
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
               >
                 <Square className="w-3.5 h-3.5 fill-current" />
                 병렬 검사 중단
@@ -396,7 +437,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
               <button
                 onClick={handleStartParallelScan}
                 disabled={selectedDriveIds.length === 0}
-                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50"
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
               >
                 <Play className="w-3.5 h-3.5 fill-current" />
                 {selectedDriveIds.length}대 드라이브 일괄 동시 검사 시작
@@ -405,7 +446,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
             <button
               onClick={onClose}
               disabled={isScanning}
-              className="px-3.5 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+              className="px-3.5 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
             >
               닫기
             </button>

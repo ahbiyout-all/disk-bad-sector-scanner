@@ -11,6 +11,13 @@ class SoundManager {
     if (savedMute !== null) {
       this.isMuted = savedMute === 'true';
     }
+    const savedVolume = safeStorage.getItem('disk_scanner_volume');
+    if (savedVolume !== null) {
+      const parsedVol = Number(savedVolume);
+      if (!Number.isNaN(parsedVol)) {
+        this.volume = Math.max(0, Math.min(1, parsedVol));
+      }
+    }
   }
 
   private initCtx() {
@@ -36,6 +43,7 @@ class SoundManager {
 
   public setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol));
+    safeStorage.setItem('disk_scanner_volume', String(this.volume));
   }
 
   public getVolume(): number {

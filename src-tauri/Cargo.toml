@@ -1,6 +1,6 @@
 [package]
 name = "disksentinel-pro-app"
-version = "4.4.0"
+version = "4.6.0"
 description = "DiskSentinel Pro Desktop Native Application"
 authors = ["AhBiYout <https://github.com/AhBiYout-all>"]
 license = "Apache-2.0"

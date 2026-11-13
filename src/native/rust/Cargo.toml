@@ -1,6 +1,6 @@
 [package]
 name = "disksentinel-core"
-version = "4.5.0"
+version = "4.6.0"
 edition = "2021"
 authors = ["AhBiYout <https://github.com/AhBiYout-all>"]
 description = "High-Performance Pure Native Rust Core Engine for DiskSentinel Pro (Direct Win32 I/O, S.M.A.R.T. Telemetry, Bad Sector Healing)"

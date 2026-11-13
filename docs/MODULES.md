@@ -5,7 +5,7 @@
 - **소속**: [CISNet](https://www.cisnet.co.kr)
 - **공식 기술 블로그**: [ahbiyoutvibe.blogspot.com](https://ahbiyoutvibe.blogspot.com/)
 - **라이선스**: Apache-2.0
-- **버전**: v4.5.0
+- **버전**: v4.6.0
 
 ---
 
@@ -68,6 +68,15 @@ DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로,
 
 ### 3.4 네이티브 기술 백서 뷰어 (`src/components/DllDocsModal.tsx`)
 - C ABI 구조체, C#/Python/Rust 예제 코드, 컴파일러 지침 및 클립보드 복사 인터페이스 제공.
+
+### 3.5 D3 실시간 레이턴시 분포 히스토그램 (`src/components/LatencyHistogramDashboard.tsx`)
+- 실시간 섹터 검사 레이턴시(`ms`) 및 읽기 속도(`MB/s`) 분포를 D3 빈(Bin)·로그/선형 스케일로 시각화.
+- 선택된 검사 방식(`Quick` 8-Bin/0.1ms vs `Full` 20-Bin/0.01ms) 연동 통계 정밀도 동적 제어 및 표본 오차한계(`±ms`) 산출.
+- `>= 100ms` 지연 섹터 오렌지/레드 그라데이션 하이라이트, 차트 상단 실시간 `Slow/Critical` 카운터, 클릭 시 LBA 상세 드릴다운 인스펙터 지원.
+
+### 3.6 S.M.A.R.T. 건강 요약 및 임계치 경고 (`src/components/HealthSummaryDashboard.tsx`)
+- 제조사 임계치(Threshold) 초과·위험 근접 속성 감지 시 행 하이라이트, 경고 배지 및 상세 진단 툴팁 제공.
+- `TemperatureLineChart` 및 `LatencyHistogramDashboard` 통합 렌더링.
 
 ---
 

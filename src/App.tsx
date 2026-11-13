@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { DiskDrive, SectorBlock, ScanTelemetry, ErrorLogItem, SavedScanRecord, SpecializedScanMethodId, MainAppTab } from './types';
-import { INITIAL_DRIVES, generateBlocksForDrive, TOTAL_SCAN_BLOCKS } from './utils/drivePresets';
+import { generateBlocksForDrive, TOTAL_SCAN_BLOCKS } from './utils/drivePresets';
 import { soundManager } from './utils/audio';
 import { createScanRecordFromSession } from './utils/reportGenerator';
 import { Navbar } from './components/Navbar';
@@ -26,19 +26,24 @@ import { ScanCompletionSummaryModal } from './components/ScanCompletionSummaryMo
 import { OptionsModal } from './components/OptionsModal';
 import { HelpGuideModal } from './components/HelpGuideModal';
 import { ScanMethodSelector } from './components/ScanMethodSelector';
+import { SmartRemapModal } from './components/SmartRemapModal';
+import { LatencyHistogramDashboard } from './components/LatencyHistogramDashboard';
 import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
-import { SCAN_METHOD_DEFINITIONS, getDefaultMethodForDrive, inspectSectorBlock } from './utils/scanProfiles';
+import { SCAN_METHOD_DEFINITIONS, getDefaultMethodForDrive } from './utils/scanProfiles';
 import { 
   createNativeHostDrive, 
   createNativeDriveFromFile, 
   createNativeDriveFromDirectoryHandle,
   createNativeDriveFromFolderFiles,
   executeRealPhysicalSectorProbe,
+  executeRealZeroFillRepairBlock,
   rescanAllDrives
 } from './utils/nativeDriveEngine';
 import { calculateHardwareVitals } from './utils/hardwareTelemetry';
 import { safeStorage } from './utils/safeStorage';
+import { DiskSentinelMigrationBundle, mergeScanRecords } from './utils/dataMigration';
+import { ContiguousDegradationZone, PredictiveFailureReport, analyzePredictiveFailure } from './utils/predictiveFailureAnalysis';
 import { 
   Github, 
   BookOpen, 
@@ -92,12 +97,26 @@ export default function App() {
     return 'default';
   });
 
+  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
+    const saved = safeStorage.getItem('disk_scanner_notifications_enabled');
+    if (saved !== null) return saved === 'true';
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission === 'granted';
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    safeStorage.setItem('disk_scanner_notifications_enabled', String(notificationsEnabled));
+  }, [notificationsEnabled]);
+
   const handleRequestNotification = async () => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       try {
         const perm = await Notification.requestPermission();
         setNotificationPermission(perm);
         if (perm === 'granted') {
+          setNotificationsEnabled(true);
           new Notification('디스크 배드섹터 검사기 알림 활성화', {
             body: '배드섹터 및 심각한 디스크 오류 검출 시 즉각 알림이 전송됩니다.',
             icon: '/favicon.ico'
@@ -109,8 +128,21 @@ export default function App() {
     }
   };
 
+  const handleToggleNotificationsEnabled = useCallback(() => {
+    if (notificationPermission !== 'granted') {
+      void handleRequestNotification();
+      return;
+    }
+    setNotificationsEnabled(prev => !prev);
+  }, [notificationPermission]);
+
   const dispatchNotification = useCallback((title: string, body: string) => {
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+    if (
+      notificationsEnabled &&
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'granted'
+    ) {
       try {
         new Notification(title, {
           body,
@@ -120,35 +152,30 @@ export default function App() {
         // Ignore fallback
       }
     }
-  }, []);
+  }, [notificationsEnabled]);
 
-const INITIAL_HOST_DRIVE: DiskDrive = {
+const INITIAL_PROBING_DRIVE: DiskDrive = {
   id: 'drive-native-host-real',
-  name: '🖥️ [C:] 로컬 OS 메인 드라이브 (512GB)',
-  model: 'Host Primary Storage Device',
-  serialNumber: 'HOST-SYS-PROBING',
-  firmware: 'NATIVE-1.0.0',
-  type: 'NVMe',
+  name: '스토리지 장치 탐색 중...',
+  model: 'Probing Host Storage Hardware...',
+  serialNumber: 'PROBING',
+  firmware: 'N/A',
+  type: 'SSD',
   isExternal: false,
   connectionType: 'internal',
-  capacityGb: 512,
-  totalSectors: 1073741824,
-  interface: 'PCIe Direct Host Memory Controller',
-  healthScore: 100,
-  temperatureC: 36,
-  powerOnHours: 120,
-  mountPoint: 'C:',
-  fileSystem: 'NTFS',
-  defaultBadSectorProbability: 0,
-  smartAttributes: [],
-  seededBadSectors: [],
-  seededSlowSectors: [],
-  isDemoPreset: false
+  capacityGb: null,
+  totalSectors: 0,
+  interface: 'OPFS / Win32 IOCTL Probing',
+  healthScore: null,
+  temperatureC: null,
+  powerOnHours: null,
+  mountPoint: '...',
+  fileSystem: 'Unknown',
+  smartAttributes: []
 };
 
   // Drive Selection & Management
-  const [showDemoPresets, setShowDemoPresets] = useState<boolean>(false);
-  const [drives, setDrives] = useState<DiskDrive[]>([INITIAL_HOST_DRIVE]);
+  const [drives, setDrives] = useState<DiskDrive[]>([INITIAL_PROBING_DRIVE]);
   const [selectedDriveId, setSelectedDriveId] = useState<string>('drive-native-host-real');
   const [isExternalModalOpen, setIsExternalModalOpen] = useState<boolean>(false);
   const activeDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
@@ -156,44 +183,31 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  // Probe Real Native OS Hardware Storage on Mount
+  // Probe Real Native OS Hardware Storage on Mount (All 32 PhysicalDrive channels)
   useEffect(() => {
     let mounted = true;
-    createNativeHostDrive().then(nativeDrive => {
-      if (mounted) {
-        setDrives(prev => {
-          const nonHostDrives = prev.filter(d => d.id !== 'drive-native-host-real' && d.id !== nativeDrive.id);
-          return [nativeDrive, ...nonHostDrives];
-        });
-        setSelectedDriveId(nativeDrive.id);
-        setSelectedMethodId(getDefaultMethodForDrive(nativeDrive));
+    rescanAllDrives([]).then(allDrives => {
+      if (mounted && allDrives.length > 0) {
+        setDrives(allDrives);
+        setSelectedDriveId(allDrives[0].id);
+        setSelectedMethodId(getDefaultMethodForDrive(allDrives[0]));
       }
-    }).catch(() => {});
+    }).catch(() => {
+      createNativeHostDrive().then(nativeDrive => {
+        if (mounted) {
+          setDrives(prev => {
+            const nonHostDrives = prev.filter(d => d.id !== 'drive-native-host-real' && d.id !== nativeDrive.id);
+            return [nativeDrive, ...nonHostDrives];
+          });
+          setSelectedDriveId(nativeDrive.id);
+          setSelectedMethodId(getDefaultMethodForDrive(nativeDrive));
+        }
+      }).catch(() => {});
+    });
     return () => {
       mounted = false;
     };
   }, []);
-
-  const handleToggleDemoPresets = useCallback(() => {
-    setShowDemoPresets(prev => {
-      const nextState = !prev;
-      setDrives(currentDrives => {
-        if (nextState) {
-          const demoDrivesToAdd = INITIAL_DRIVES.map(d => ({ ...d, isDemoPreset: true }));
-          const existingIds = new Set(currentDrives.map(d => d.id));
-          const newDrives = demoDrivesToAdd.filter(d => !existingIds.has(d.id));
-          return [...currentDrives, ...newDrives];
-        } else {
-          const realDrivesOnly = currentDrives.filter(d => !d.isDemoPreset);
-          if (realDrivesOnly.length > 0 && currentDrives.find(d => d.id === selectedDriveId)?.isDemoPreset) {
-            setSelectedDriveId(realDrivesOnly[0].id);
-          }
-          return realDrivesOnly;
-        }
-      });
-      return nextState;
-    });
-  }, [selectedDriveId]);
 
   const handlePickDirectoryVolume = async () => {
     // Check if running inside cross-origin iframe (e.g. AI Studio preview)
@@ -321,28 +335,26 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const [activeTab, setActiveTab] = useState<MainAppTab>('scan');
 
   // Storage Media Tailored Inspection Method State
-  const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_HOST_DRIVE));
+  const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_PROBING_DRIVE));
 
   // Blocks State
   const [blocks, setBlocks] = useState<SectorBlock[]>([]);
-  const [badSet, setBadSet] = useState<Set<number>>(new Set());
-  const [slowSet, setSlowSet] = useState<Set<number>>(new Set());
+  const blocksRef = useRef<SectorBlock[]>(blocks);
+  blocksRef.current = blocks;
   const [activeBlockIndex, setActiveBlockIndex] = useState<number>(-1);
   const [selectedBlock, setSelectedBlock] = useState<SectorBlock | null>(null);
+  const lastMeasuredSpeedRef = useRef<number>(0);
+  const lastInitializedDriveRef = useRef<{ id: string; totalSectors: number } | null>(null);
 
   // Initialize blocks when drive changes
   const initDriveBlocks = useCallback((drive: DiskDrive) => {
-    const { blocks: initialBlocks, badSet: bs, slowSet: ss } = generateBlocksForDrive(drive, TOTAL_SCAN_BLOCKS);
+    const { blocks: initialBlocks } = generateBlocksForDrive(drive, TOTAL_SCAN_BLOCKS);
+    lastInitializedDriveRef.current = { id: drive.id, totalSectors: drive.totalSectors };
     setBlocks(initialBlocks);
-    setBadSet(bs);
-    setSlowSet(ss);
     setActiveBlockIndex(-1);
     setSelectedBlock(null);
+    lastMeasuredSpeedRef.current = 0;
   }, []);
-
-  useEffect(() => {
-    initDriveBlocks(activeDrive);
-  }, [activeDrive, initDriveBlocks]);
 
   // S.M.A.R.T Sector Remapping & Zero-Fill Repair Handler
   const handleRepairSectors = useCallback((driveId: string, repairedBlockIds: number[]) => {
@@ -358,18 +370,6 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
       return b;
     }));
 
-    setBadSet(prev => {
-      const next = new Set(prev);
-      repairedBlockIds.forEach(id => next.delete(id));
-      return next;
-    });
-
-    setSlowSet(prev => {
-      const next = new Set(prev);
-      repairedBlockIds.forEach(id => next.delete(id));
-      return next;
-    });
-
     setDrives(prev => prev.map(d => {
       if (d.id === driveId) {
         const repairedCount = repairedBlockIds.length;
@@ -383,14 +383,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
               status: 'warning' as const
             };
           }
-          if (attr.id === 197) {
-            return {
-              ...attr,
-              raw: '0 (0x00)',
-              status: 'good' as const
-            };
-          }
-          if (attr.id === 198) {
+          if (attr.id === 197 || attr.id === 198) {
             return {
               ...attr,
               raw: '0 (0x00)',
@@ -400,25 +393,26 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           return attr;
         });
 
-        const newHealth = Math.min(100, Math.max(80, d.healthScore + 12));
+        const newHealth = d.healthScore !== null
+          ? Math.min(100, Math.max(80, d.healthScore + 12))
+          : null;
 
         return {
           ...d,
           healthScore: newHealth,
-          smartAttributes: updatedSmart,
-          seededBadSectors: (d.seededBadSectors || []).filter(idx => !repairedBlockIds.includes(idx))
+          smartAttributes: updatedSmart
         };
       }
       return d;
     }));
 
-    const firstRepairedBlock = blocks.find(b => repairedBlockIds.includes(b.id));
+    const firstRepairedBlock = blocksRef.current.find(b => repairedBlockIds.includes(b.id));
     const newLog: ErrorLogItem = {
       id: `repair-log-${Date.now()}`,
       timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
       blockIndex: repairedBlockIds[0] || 0,
       lba: firstRepairedBlock ? firstRepairedBlock.lba : (repairedBlockIds[0] || 0) * 1000000,
-      status: 'good' as any,
+      status: 'repaired',
       latencyMs: 0.8,
       errorCode: 'REPAIRED_ZEROFILL',
       description: `S.M.A.R.T. 제로필 수복 완료: ${repairedBlockIds.length}개 섹터 ATA Write DMA 강제 초기화 및 예비 트랙 치환(05h) 성공`,
@@ -427,23 +421,73 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
 
     setErrorLogs(prev => [newLog, ...prev]);
     soundManager.playSuccess();
-  }, [blocks]);
+  }, []);
 
   // Telemetry & Scan Settings
   const [scanMode, setScanMode] = useState<'quick' | 'full'>('full');
-  const [scanSpeedMultiplier, setScanSpeedMultiplier] = useState<number>(2); // 2x default
+  const [scanSpeedMultiplier, setScanSpeedMultiplier] = useState<number>(() => {
+    const saved = Number(safeStorage.getItem('disk_scanner_speed_multiplier'));
+    return [1, 2, 5, 10].includes(saved) ? saved : 2;
+  });
+  useEffect(() => {
+    safeStorage.setItem('disk_scanner_speed_multiplier', String(scanSpeedMultiplier));
+  }, [scanSpeedMultiplier]);
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'paused' | 'completed' | 'aborted'>('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
-  // Live Error Log Stream
+  // Live Error Log Stream & Preemptive Degradation Warning Deduplication
   const [errorLogs, setErrorLogs] = useState<ErrorLogItem[]>([]);
+  const emittedDegradationKeysRef = useRef<Set<string>>(new Set());
+
+  const handleDegradationWarning = useCallback(
+    (zone: ContiguousDegradationZone, report: PredictiveFailureReport) => {
+      const currentDrive = activeDriveRef.current;
+      const scopedKey = `${currentDrive.id}:${zone.warningKey}`;
+      if (emittedDegradationKeysRef.current.has(scopedKey)) {
+        return;
+      }
+      emittedDegradationKeysRef.current.add(scopedKey);
+
+      soundManager.playWarningTone();
+      const newLog: ErrorLogItem = {
+        id: `degradation-${Date.now()}-${zone.startBlockId}`,
+        timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+        blockIndex: zone.startBlockId,
+        lba: zone.startLba,
+        status: 'critical',
+        latencyMs: Number(zone.meanLatencyMs.toFixed(1)),
+        errorCode: 'DEGRADATION_WARNING',
+        description: `Degradation Warning: 연속 물리 구간 LBA #${zone.startLba.toLocaleString()}~#${zone.endLba.toLocaleString()} (${zone.blockCount}개 섹터 연속 ≥100ms, 평균 ${zone.meanLatencyMs.toFixed(1)}ms, 최대 Z=${zone.maxZScore.toFixed(2)}σ, 위험도 ${report.degradationRiskScore}/100)`,
+        methodContext: 'Predictive Failure Analysis (Z-Score)'
+      };
+      setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
+
+      dispatchNotification(
+        '⚠️ 선제적 물리 열화 경고 (Degradation Warning)',
+        `LBA #${zone.startLba.toLocaleString()}~#${zone.endLba.toLocaleString()} 연속 ${zone.blockCount}개 섹터가 100ms 임계치를 초과했습니다 (최대 Z=${zone.maxZScore.toFixed(2)}σ).`
+      );
+    },
+    [dispatchNotification]
+  );
+
+  // Maintain preemptive Degradation Warning monitoring when user switches away from the Scan tab mid-scan
+  useEffect(() => {
+    if (scanStatus !== 'scanning' || activeTab === 'scan') return;
+    const report = analyzePredictiveFailure(blocks, {
+      latencyThresholdMs: 100,
+      minContiguousCount: 3,
+      scanMode
+    });
+    for (const zone of report.contiguousZones) {
+      handleDegradationWarning(zone, report);
+    }
+  }, [activeTab, blocks, scanMode, scanStatus, handleDegradationWarning]);
 
   // Alert Banner State
   const [alertBannerVisible, setAlertBannerVisible] = useState<boolean>(false);
   const [latestBadLba, setLatestBadLba] = useState<number | undefined>(undefined);
 
-  // Thermal Stress Simulation State & Overheat Banner Dismissal State
-  const [isThermalStress, setIsThermalStress] = useState<boolean>(false);
+  // Overheat Banner Dismissal State
   const [isOverheatDismissed, setIsOverheatDismissed] = useState<boolean>(false);
 
   // Auto-Repair Mode State (Persisted in safeStorage)
@@ -482,15 +526,45 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     safeStorage.setItem('disk_scan_records', JSON.stringify(scanRecords));
   }, [scanRecords]);
 
+  const handleImportMigration = useCallback(
+    (bundle: DiskSentinelMigrationBundle, strategy: 'merge' | 'replace') => {
+      setIsDarkMode(bundle.settings.isDarkMode);
+      setIsMuted(bundle.settings.isMuted);
+      soundManager.setMuted(bundle.settings.isMuted);
+      soundManager.setVolume(bundle.settings.volumePercent / 100);
+      setScanSpeedMultiplier(bundle.settings.scanSpeedMultiplier);
+      setIsAutoRepairMode(bundle.settings.isAutoRepairMode);
+
+      if (bundle.settings.notificationsAllowed) {
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+          void Notification.requestPermission().then(perm => {
+            setNotificationPermission(perm);
+            setNotificationsEnabled(perm === 'granted');
+          });
+        } else {
+          setNotificationsEnabled(
+            typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
+          );
+        }
+      } else {
+        setNotificationsEnabled(false);
+      }
+
+      setScanRecords(prev => mergeScanRecords(prev, bundle.scanRecords, strategy));
+    },
+    []
+  );
+
   // Active Report Modal
   const [activeReportRecord, setActiveReportRecord] = useState<SavedScanRecord | null>(null);
   const [exportTargetRecord, setExportTargetRecord] = useState<SavedScanRecord | null>(null);
   const [completedSummaryRecord, setCompletedSummaryRecord] = useState<SavedScanRecord | null>(null);
 
   // GitHub Real-time Update System State
-  const [updateRelease, setUpdateRelease] = useState<ReleaseInfo>(PROJECT_INFO.sampleLatestRelease);
-  const [hasUpdate, setHasUpdate] = useState<boolean>(false); // Only true when real GitHub newer version detected
-  const [updateSource, setUpdateSource] = useState<'github-live' | 'fallback'>('fallback');
+  const [updateRelease, setUpdateRelease] = useState<ReleaseInfo | null>(null);
+  const [hasUpdate, setHasUpdate] = useState<boolean>(false);
+  const [updateSource, setUpdateSource] = useState<'github-live' | 'error'>('error');
+  const [updateErrorMessage, setUpdateErrorMessage] = useState<string | undefined>(undefined);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
   const [isAboutModalOpen, setIsAboutModalOpen] = useState<boolean>(false);
   const [isDllDocsOpen, setIsDllDocsOpen] = useState<boolean>(false);
@@ -499,9 +573,10 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const [isParallelScanOpen, setIsParallelScanOpen] = useState<boolean>(false);
   const [isTrayGuardianOpen, setIsTrayGuardianOpen] = useState<boolean>(false);
   const [isBitCarvingOpen, setIsBitCarvingOpen] = useState<boolean>(false);
-  const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(1048576);
+  const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(0);
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState<boolean>(false);
   const [isHelpGuideModalOpen, setIsHelpGuideModalOpen] = useState<boolean>(false);
+  const [isSmartRemapOpen, setIsSmartRemapOpen] = useState<boolean>(false);
 
   // Real-time Update Checker
   const checkUpdates = useCallback(async (manual = false) => {
@@ -510,10 +585,13 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
       setUpdateRelease(result.release);
       setHasUpdate(result.hasUpdate);
       setUpdateSource(result.source);
+      setUpdateErrorMessage(result.errorMessage);
       if (manual || result.hasUpdate) {
         setIsUpdateModalOpen(true);
       }
     } catch {
+      setUpdateSource('error');
+      setUpdateErrorMessage('업데이트 서버 연결 중 오류가 발생했습니다.');
       if (manual) {
         setIsUpdateModalOpen(true);
       }
@@ -529,11 +607,23 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     return () => clearTimeout(timer);
   }, [checkUpdates]);
 
-  // Refs for scanning loop
+  // Refs for scanning loop (kept synchronized so the scan interval never tears down on tick updates)
   const scanLoopRef = useRef<NodeJS.Timeout | null>(null);
   const timerLoopRef = useRef<NodeJS.Timeout | null>(null);
   const currentIndexRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
+  const activeDriveRef = useRef<DiskDrive>(activeDrive);
+  activeDriveRef.current = activeDrive;
+  const drivesRef = useRef<DiskDrive[]>(drives);
+  drivesRef.current = drives;
+  const selectedMethodIdRef = useRef<SpecializedScanMethodId>(selectedMethodId);
+  selectedMethodIdRef.current = selectedMethodId;
+  const scanModeRef = useRef<'quick' | 'full'>(scanMode);
+  scanModeRef.current = scanMode;
+  const elapsedSecondsRef = useRef<number>(elapsedSeconds);
+  elapsedSecondsRef.current = elapsedSeconds;
+  const scanStatusRef = useRef(scanStatus);
+  scanStatusRef.current = scanStatus;
 
   // Derived counts
   const goodCount = blocks.filter(b => b.status === 'good').length;
@@ -541,20 +631,32 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   const slowCount = blocks.filter(b => b.status === 'slow').length;
   const criticalCount = blocks.filter(b => b.status === 'critical').length;
   const badCount = blocks.filter(b => b.status === 'bad').length;
+  const badCountRef = useRef<number>(badCount);
+  badCountRef.current = badCount;
 
-  // Real-time speed calculation
+  // Initialize or re-sync grid blocks ONLY on drive change or initial hardware probe (never wipe on telemetry/rescan updates)
+  useEffect(() => {
+    const last = lastInitializedDriveRef.current;
+    const driveChanged = !last || last.id !== activeDrive.id;
+    const capacityUpdatedWhileIdle =
+      scanStatus === 'idle' &&
+      activeBlockIndex === -1 &&
+      last?.totalSectors !== activeDrive.totalSectors;
+
+    if (driveChanged || capacityUpdatedWhileIdle) {
+      initDriveBlocks(activeDrive);
+    }
+  }, [activeDrive, scanStatus, activeBlockIndex, initDriveBlocks]);
+
+  // Real-time speed calculation from actual sector probe measurements
   const totalScanned = goodCount + normalCount + slowCount + criticalCount + badCount;
   const scannedPercentage = blocks.length > 0 ? (totalScanned / blocks.length) * 100 : 0;
-  const currentLba = blocks[activeBlockIndex]?.lba || (activeBlockIndex >= 0 ? activeBlockIndex * Math.floor(activeDrive.totalSectors / TOTAL_SCAN_BLOCKS) : 0);
+  const currentLba = blocks[activeBlockIndex]?.lba || (activeBlockIndex >= 0 ? activeBlockIndex * Math.floor((activeDrive.totalSectors || 0) / TOTAL_SCAN_BLOCKS) : 0);
 
-  // Calculate estimated remaining seconds
   const blocksPerSecond = elapsedSeconds > 0 ? totalScanned / elapsedSeconds : 0;
   const remainingBlocks = Math.max(0, blocks.length - totalScanned);
   const remainingSeconds = blocksPerSecond > 0 ? Math.ceil(remainingBlocks / blocksPerSecond) : 0;
-
-  // Approximate transfer speed in MB/s (assume 1 block is proportional to disk capacity)
-  const mbPerBlock = (activeDrive.capacityGb * 1024) / TOTAL_SCAN_BLOCKS;
-  const scanSpeedMbPerSec = blocksPerSecond > 0 ? Number((blocksPerSecond * (mbPerBlock / 10)).toFixed(1)) : 0;
+  const scanSpeedMbPerSec = scanStatus === 'scanning' ? lastMeasuredSpeedRef.current : 0;
 
   const telemetry: ScanTelemetry = {
     currentBlockIndex: activeBlockIndex >= 0 ? activeBlockIndex : 0,
@@ -575,22 +677,19 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     activeMethodName: SCAN_METHOD_DEFINITIONS[selectedMethodId]?.nameKo || SCAN_METHOD_DEFINITIONS[selectedMethodId]?.name
   };
 
-  // Real-time Hardware Vitals
-  const vitals = calculateHardwareVitals(activeDrive, telemetry, scanSpeedMultiplier, isThermalStress);
+  // Real-time Hardware Vitals (strictly nullable when sensors unavailable)
+  const vitals = calculateHardwareVitals(activeDrive, telemetry, scanSpeedMultiplier);
   const currentTemp = vitals.temperatureC;
 
   const notifiedOverheatRef = useRef<boolean>(false);
 
-  // Real-time Overheat Warning Monitor (Threshold: 60°C)
+  // Real-time Overheat Warning Monitor (Threshold: 60°C, active only with real temp sensor)
   useEffect(() => {
-    if (currentTemp > 60) {
+    if (currentTemp !== null && currentTemp > 60) {
       if (!notifiedOverheatRef.current) {
         notifiedOverheatRef.current = true;
-        
-        // 1. Play Warning Sound
         soundManager.playWarningTone();
-        
-        // 2. Add System Log
+
         const newLog: ErrorLogItem = {
           id: `overheat-log-${Date.now()}`,
           timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
@@ -604,30 +703,29 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         };
         setErrorLogs(prev => [newLog, ...prev]);
 
-        // 3. Dispatch Browser Notification
         dispatchNotification(
           '🔥 디스크 과열 위험 경고!',
           `현재 드라이브 온도가 안전 한계치인 60°C를 초과한 ${currentTemp.toFixed(1)}°C입니다. 즉각적인 조치 또는 쿨링을 권장합니다.`
         );
       }
     } else {
-      // Reset notification flag when temperature cools down
       notifiedOverheatRef.current = false;
     }
   }, [currentTemp, activeBlockIndex, currentLba, dispatchNotification]);
 
-  // Reset Overheat Banner Dismissal state when temperature cools down
   useEffect(() => {
-    if (currentTemp <= 60) {
+    if (currentTemp === null || currentTemp <= 60) {
       setIsOverheatDismissed(false);
     }
   }, [currentTemp]);
 
-  // Dynamic health score calculation
-  const calculatedHealth = Math.max(
-    10,
-    Math.round(activeDrive.healthScore - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4))
-  );
+  // Dynamic health score calculation (null until hardware health or scan samples exist)
+  const calculatedHealth: number | null =
+    activeDrive.healthScore !== null
+      ? Math.max(10, Math.round(activeDrive.healthScore - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
+      : totalScanned > 0
+      ? Math.max(10, Math.round(100 - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
+      : null;
 
   // Elapsed timer loop
   useEffect(() => {
@@ -646,7 +744,10 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
   // Main Scanning Loop Execution with Storage Tailored Inspection Profiles
   useEffect(() => {
     if (scanStatus !== 'scanning') {
-      if (scanLoopRef.current) clearInterval(scanLoopRef.current);
+      if (scanLoopRef.current) {
+        clearInterval(scanLoopRef.current);
+        scanLoopRef.current = null;
+      }
       return;
     }
 
@@ -656,48 +757,70 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     const stepIncrement = scanMode === 'quick' ? 4 : 1; // Quick scan samples every 4th block
 
     let isProcessingTick = false;
+    let isCancelled = false;
 
     scanLoopRef.current = setInterval(async () => {
-      if (isProcessingTick) return;
+      if (isProcessingTick || isCancelled || scanStatusRef.current !== 'scanning') return;
       isProcessingTick = true;
 
       try {
-        let idx = currentIndexRef.current;
-        if (idx >= blocks.length) {
-          // Complete Scan!
+        const latestBlocks = blocksRef.current;
+        const currentDrive = activeDriveRef.current;
+        const methodId = selectedMethodIdRef.current;
+        const idx = currentIndexRef.current;
+
+        if (idx >= latestBlocks.length) {
+          // Stop interval immediately before awaiting post-scan rescan
+          if (scanLoopRef.current) {
+            clearInterval(scanLoopRef.current);
+            scanLoopRef.current = null;
+          }
+          scanStatusRef.current = 'completed';
           setScanStatus('completed');
           soundManager.playCompletionChime();
+          const finalBadCount = badCountRef.current;
           dispatchNotification(
             '디스크 맞춤 표면 검사 완료',
-            `검사가 완료되었습니다. ${badCount > 0 ? `⚠️ 배드섹터 ${badCount}개 발견!` : '배드섹터 없음 (정상)'}`
+            `검사가 완료되었습니다. ${finalBadCount > 0 ? `⚠️ 배드섹터 ${finalBadCount}개 발견!` : '배드섹터 없음 (정상)'}`
           );
 
-          // Auto-save scan report with tailored method
-          const newRecord = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
+          // Force-refresh hardware telemetry one last time to capture the final post-scan S.M.A.R.T. state
+          const finalDrives = await rescanAllDrives(drivesRef.current);
+          if (isCancelled) return;
+          setDrives(finalDrives);
+          const finalActiveDrive = finalDrives.find(d => d.id === currentDrive.id) || currentDrive;
+
+          // Auto-save scan report with tailored method and latest real hardware snapshot
+          const newRecord = createScanRecordFromSession(
+            finalActiveDrive,
+            scanModeRef.current,
+            blocksRef.current,
+            elapsedSecondsRef.current,
+            methodId
+          );
           setScanRecords(prev => [newRecord, ...prev]);
           setCompletedSummaryRecord(newRecord);
           return;
         }
 
-        // Check current block characteristics using real physical inspection probe
-        const isBad = badSet.has(idx);
-        const isSlow = slowSet.has(idx);
-
         const inspectionResult = await executeRealPhysicalSectorProbe(
-          activeDrive,
-          selectedMethodId,
+          currentDrive,
+          methodId,
           idx,
-          blocks.length,
-          isBad,
-          isSlow
+          latestBlocks.length
         );
 
-        const { status, latencyMs, throughputMbSec, checksum, errorCode, zoneTag } = inspectionResult;
+        if (isCancelled || scanStatusRef.current !== 'scanning') return;
 
-        // Update block in state
-        const targetBlockLba = blocks[idx].lba;
+        const { status, latencyMs, throughputMbSec, checksum, errorCode, zoneTag } = inspectionResult;
+        if (throughputMbSec > 0) {
+          lastMeasuredSpeedRef.current = throughputMbSec;
+        }
+
+        const targetBlockLba = latestBlocks[idx].lba;
 
         setBlocks(prev => {
+          if (idx >= prev.length) return prev;
           const next = [...prev];
           next[idx] = {
             ...next[idx],
@@ -714,67 +837,74 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
 
         setActiveBlockIndex(idx);
 
-      // Handle Event Log, Alerts & Audio
-      const currentMethodMeta = SCAN_METHOD_DEFINITIONS[selectedMethodId];
-      if (status === 'bad') {
-        if (isAutoRepairModeRef.current) {
-          // Auto-Repair Mode active: automatically reassign sector via S.M.A.R.T. Zero-Fill (05h)
-          handleRepairSectors(activeDrive.id, [idx]);
-          dispatchNotification(
-            '🔧 논리 배드섹터 자동 수복 완료',
-            `블록 #${idx} (LBA #${targetBlockLba.toLocaleString()})의 배드섹터가 자동 Zero-Fill 05h 예비 트랙으로 수복되었습니다.`
-          );
-        } else {
-          soundManager.playBadSectorAlert();
-          setAlertBannerVisible(true);
-          setLatestBadLba(targetBlockLba);
+        const currentMethodMeta = SCAN_METHOD_DEFINITIONS[methodId];
+        if (status === 'bad') {
+          let repairedAuto = false;
+          if (isAutoRepairModeRef.current) {
+            const repairRes = await executeRealZeroFillRepairBlock(idx, targetBlockLba, currentDrive);
+            if (isCancelled || scanStatusRef.current !== 'scanning') return;
+            if (repairRes.success) {
+              repairedAuto = true;
+              handleRepairSectors(currentDrive.id, [idx]);
+              dispatchNotification(
+                '🔧 논리 배드섹터 자동 수복 완료',
+                `블록 #${idx} (LBA #${targetBlockLba.toLocaleString()})의 섹터가 Zero-Fill로 수복되었습니다.`
+              );
+            }
+          }
+          if (!repairedAuto) {
+            soundManager.playBadSectorAlert();
+            setAlertBannerVisible(true);
+            setLatestBadLba(targetBlockLba);
 
+            const newLog: ErrorLogItem = {
+              id: `log-${Date.now()}-${idx}`,
+              timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+              blockIndex: idx,
+              lba: targetBlockLba,
+              status: 'bad',
+              latencyMs: -1,
+              errorCode: errorCode || 'UNC',
+              description: `섹터 판독 오류: ${errorCode || '데이터 판독 불가'} (LBA #${targetBlockLba.toLocaleString()})`,
+              methodContext: currentMethodMeta?.nameKo
+            };
+            setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
+
+            dispatchNotification(
+              '🚨 디스크 I/O 오류 검출!',
+              `블록 #${idx} (LBA: #${targetBlockLba.toLocaleString()})에서 읽기 오류가 감지되었습니다.`
+            );
+          }
+        } else if (status === 'critical' || status === 'slow') {
+          soundManager.playWarningTone();
           const newLog: ErrorLogItem = {
             id: `log-${Date.now()}-${idx}`,
             timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
             blockIndex: idx,
             lba: targetBlockLba,
-            status: 'bad',
-            latencyMs: -1,
-            errorCode: errorCode || 'UNC',
-            description: `손상된 배드섹터 검출! 데이터 판독 불가 (LBA #${targetBlockLba.toLocaleString()})`,
+            status,
+            latencyMs: latencyMs,
+            errorCode: errorCode || 'LATENCY',
+            description: `응답 지연 감지 (${latencyMs}ms) - [${currentMethodMeta?.nameKo || '맞춤 검사'}]`,
             methodContext: currentMethodMeta?.nameKo
           };
           setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
-
-          // Dispatch browser notification
-          dispatchNotification(
-            '🚨 배드섹터 검출 경고!',
-            `블록 #${idx} (LBA: #${targetBlockLba.toLocaleString()})에서 읽기 손상 섹터가 감지되었습니다!`
-          );
         }
-      } else if (status === 'critical' || status === 'slow') {
-        soundManager.playWarningTone();
-        const newLog: ErrorLogItem = {
-          id: `log-${Date.now()}-${idx}`,
-          timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-          blockIndex: idx,
-          lba: targetBlockLba,
-          status,
-          latencyMs: latencyMs,
-          errorCode: errorCode || 'LATENCY',
-          description: `응답 지연 감지 (${latencyMs}ms) - [${currentMethodMeta?.nameKo || '맞춤 검사'}]`,
-          methodContext: currentMethodMeta?.nameKo
-        };
-        setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
-      }
 
-      // Increment index
-      currentIndexRef.current = idx + stepIncrement;
-    } finally {
-      isProcessingTick = false;
-    }
-  }, stepInterval);
+        currentIndexRef.current = idx + stepIncrement;
+      } finally {
+        isProcessingTick = false;
+      }
+    }, stepInterval);
 
     return () => {
-      if (scanLoopRef.current) clearInterval(scanLoopRef.current);
+      isCancelled = true;
+      if (scanLoopRef.current) {
+        clearInterval(scanLoopRef.current);
+        scanLoopRef.current = null;
+      }
     };
-  }, [scanStatus, scanSpeedMultiplier, scanMode, blocks, badSet, slowSet, activeDrive, elapsedSeconds, badCount, selectedMethodId, dispatchNotification]);
+  }, [scanStatus, scanSpeedMultiplier, scanMode, dispatchNotification, handleRepairSectors]);
 
   // Scan Controls
   const handleStartScan = () => {
@@ -800,6 +930,9 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     setScanStatus('idle');
     setElapsedSeconds(0);
     currentIndexRef.current = 0;
+    lastMeasuredSpeedRef.current = 0;
+    setLatestBadLba(undefined);
+    emittedDegradationKeysRef.current.clear();
     initDriveBlocks(activeDrive);
     setErrorLogs([]);
     setAlertBannerVisible(false);
@@ -813,6 +946,9 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     setScanStatus('idle');
     setElapsedSeconds(0);
     currentIndexRef.current = 0;
+    lastMeasuredSpeedRef.current = 0;
+    setLatestBadLba(undefined);
+    emittedDegradationKeysRef.current.clear();
     setSelectedDriveId(driveId);
 
     const nextDrive = drives.find(d => d.id === driveId) || drives[0];
@@ -944,11 +1080,13 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
         notificationPermission={notificationPermission}
+        notificationsEnabled={notificationsEnabled}
         onRequestNotification={handleRequestNotification}
+        onToggleNotificationsEnabled={handleToggleNotificationsEnabled}
         currentHealthScore={calculatedHealth}
         badCount={badCount}
         hasUpdate={hasUpdate}
-        latestVersion={updateRelease?.version || PROJECT_INFO.sampleLatestRelease.version}
+        latestVersion={updateRelease?.version}
         onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
         onOpenAboutModal={() => setIsAboutModalOpen(true)}
         onOpenDllDocs={() => setIsDllDocsOpen(true)}
@@ -958,12 +1096,10 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         onOpenParallelScanModal={() => setIsParallelScanOpen(true)}
         onOpenTrayGuardianModal={() => setIsTrayGuardianOpen(true)}
         onOpenBitCarvingModal={() => {
-          const badLba = latestBadLba || (blocks.find(b => b.status === 'bad')?.lba) || 1048576;
+          const badLba = latestBadLba ?? (blocks.find(b => b.status === 'bad')?.lba) ?? (blocks[0]?.lba ?? 0);
           setBitCarvingTargetLba(badLba);
           setIsBitCarvingOpen(true);
         }}
-        showDemoPresets={showDemoPresets}
-        onToggleDemoPresets={handleToggleDemoPresets}
         onPickDirectoryVolume={handlePickDirectoryVolume}
         onOpenRealFile={() => fileInputRef.current?.click()}
         onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
@@ -971,8 +1107,6 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         isRescanning={isRescanningDrives}
         onOpenOptionsModal={() => setIsOptionsModalOpen(true)}
         onOpenHelpGuideModal={() => setIsHelpGuideModalOpen(true)}
-        isThermalStress={isThermalStress}
-        onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
         onExportResults={() => handleOpenExportModal()}
         onResetScan={handleResetScan}
         onOpenReport={handleOpenCurrentReport}
@@ -982,51 +1116,6 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-4 py-2.5 sm:py-3">
-        {/* Real-time Overheat Warning Alert Banner */}
-        {currentTemp > 60 && !isOverheatDismissed && (
-          <div className="bg-red-50 dark:bg-red-950/40 border-2 border-red-500 rounded-lg p-2.5 sm:p-3.5 text-red-700 dark:text-red-300 shadow-md mb-3 animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-              <div className="flex items-start gap-2.5">
-                <div className="p-1.5 bg-red-600 text-white rounded shrink-0 mt-0.5 sm:mt-0 animate-pulse">
-                  <Thermometer className="w-4.5 h-4.5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-extrabold text-xs sm:text-sm text-red-600 dark:text-red-200">
-                      🔥 과열 경고: 하드웨어 모니터링 디스크 온도 초과!
-                    </span>
-                    <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-red-600 text-white font-bold animate-pulse">
-                      {currentTemp.toFixed(1)}°C / 60.0°C
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-red-600/80 dark:text-red-300/80 mt-0.5 leading-relaxed hidden sm:block">
-                    디스크 실시간 작동 온도가 위험 임계값인 <strong>60.0°C</strong>를 초과했습니다! 고온 유지 시 칩셋 스로틀링, 데이터 기록 무결성 손상 및 진행성 배드섹터가 급증할 수 있으므로 쿨링 장치 점검 및 부하 일시 일시중지를 강력히 권고합니다.
-                  </p>
-                  <p className="text-[11px] text-red-600/90 dark:text-red-300/90 mt-0.5 sm:hidden">
-                    위험 온도 60°C 초과. 쿨링 장치 점검 및 부하 해제를 권고합니다.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
-                <button
-                  onClick={() => setIsThermalStress(false)}
-                  className="px-2.5 py-1 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-200 dark:hover:bg-slate-100 dark:text-slate-900 rounded transition-colors shadow-xs cursor-pointer"
-                >
-                  과열 부하 해제
-                </button>
-                <button
-                  onClick={() => setIsOverheatDismissed(true)}
-                  className="p-1 text-red-400 hover:bg-red-500/10 dark:hover:bg-red-950/50 rounded transition-colors"
-                  title="경고 배너 닫기"
-                >
-                  <X className="w-4.5 h-4.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Real-time Alert Banner when Bad Sectors are detected */}
         <AlertBanner
           badCount={badCount}
@@ -1090,9 +1179,13 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
             <ShieldCheck className="w-4 h-4" />
             <span>건강 & 발열 추이</span>
             <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
-              calculatedHealth >= 80 ? 'bg-emerald-500/20 text-emerald-500' : 'bg-red-500/20 text-red-500'
+              calculatedHealth === null
+                ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                : calculatedHealth >= 80
+                ? 'bg-emerald-500/20 text-emerald-500'
+                : 'bg-red-500/20 text-red-500'
             }`}>
-              {calculatedHealth}%
+              {calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}
             </span>
           </button>
 
@@ -1140,6 +1233,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
               blocks={blocks}
               onRepairSectors={handleRepairSectors}
               onOpenFilePicker={() => fileInputRef.current?.click()}
+              onOpenRemapModal={() => setIsSmartRemapOpen(true)}
             />
 
             {/* Top Telemetry & Control Center */}
@@ -1157,8 +1251,6 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
               onReset={handleResetScan}
               onOpenReport={handleOpenCurrentReport}
               onExportResults={() => handleOpenExportModal()}
-              isThermalStress={isThermalStress}
-              onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
             />
 
             {/* Interactive Sector Grid Visualizer */}
@@ -1171,6 +1263,19 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
                 setBitCarvingTargetLba(lba);
                 setIsBitCarvingOpen(true);
               }}
+            />
+
+            {/* D3 Real-Time Read Speed & I/O Latency Histogram Dashboard */}
+            <LatencyHistogramDashboard
+              blocks={blocks}
+              drive={activeDrive}
+              activeMethodId={selectedMethodId}
+              scanMode={scanMode}
+              isScanning={scanStatus === 'scanning'}
+              onSelectBlock={(b) => setSelectedBlock(b)}
+              onStartScan={handleStartScan}
+              onOpenRemapModal={() => setIsSmartRemapOpen(true)}
+              onDegradationWarning={handleDegradationWarning}
             />
 
             {/* Quick Summary Strip & Link to Error Logs */}
@@ -1233,7 +1338,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
                     비트 카빙 수복
                   </button>
                   <button
-                    onClick={() => setIsVendorModalOpen(true)}
+                    onClick={() => setIsSmartRemapOpen(true)}
                     className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold transition-colors cursor-pointer"
                   >
                     S.M.A.R.T. 제로필 재할당
@@ -1250,12 +1355,23 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
             drive={activeDrive}
             telemetry={telemetry}
             calculatedHealth={calculatedHealth}
+            blocks={blocks}
+            activeMethodId={selectedMethodId}
+            scanMode={scanMode}
+            onSelectBlock={(b) => {
+              setSelectedBlock(b);
+              setActiveTab('scan');
+            }}
+            onStartScan={() => {
+              setActiveTab('scan');
+              handleStartScan();
+            }}
             onRefreshSmart={() => {
-              soundManager.playClick();
+              void handleRescanDrives();
             }}
             onOpenVendorModal={() => setIsVendorModalOpen(true)}
+            onOpenRemapModal={() => setIsSmartRemapOpen(true)}
             onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
-            isThermalStress={isThermalStress}
             viewMode="health_only"
           />
         )}
@@ -1268,11 +1384,11 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
               telemetry={telemetry}
               calculatedHealth={calculatedHealth}
               onRefreshSmart={() => {
-                soundManager.playClick();
+                void handleRescanDrives();
               }}
               onOpenVendorModal={() => setIsVendorModalOpen(true)}
+              onOpenRemapModal={() => setIsSmartRemapOpen(true)}
               onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
-              isThermalStress={isThermalStress}
               viewMode="smart_only"
             />
           </div>
@@ -1317,7 +1433,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
             setActiveReportRecord(rec);
           }}
           onOpenRepair={() => {
-            setIsVendorModalOpen(true);
+            setIsSmartRemapOpen(true);
           }}
         />
       )}
@@ -1339,6 +1455,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           release={updateRelease}
           currentVersion={PROJECT_INFO.version}
           source={updateSource}
+          errorMessage={updateErrorMessage}
           onClose={() => setIsUpdateModalOpen(false)}
           onCheckAgain={() => checkUpdates(true)}
         />
@@ -1374,6 +1491,7 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           onSelectDrive={handleDriveChange}
           onAddDrive={handleAddDrive}
           onEjectDrive={handleEjectDrive}
+          onRescanDrives={handleRescanDrives}
         />
       )}
 
@@ -1386,8 +1504,12 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           telemetry={telemetry}
           onOpenUsbModal={() => setIsExternalModalOpen(true)}
           onOpenCatalogModal={() => setIsCatalogModalOpen(true)}
+          onOpenRemapModal={() => {
+            setIsVendorModalOpen(false);
+            setIsSmartRemapOpen(true);
+          }}
           onRefreshSmart={() => {
-            soundManager.playClick();
+            void handleRescanDrives();
           }}
         />
       )}
@@ -1412,6 +1534,13 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           drives={drives}
         />
       )}
+
+      {/* Background Telemetry Refresh for Tray Guardian & Dashboard */}
+      <BackgroundTelemetryRefresher 
+        drives={drives} 
+        onUpdateDrives={setDrives} 
+        isActive={isTrayGuardianOpen || activeTab === 'health' || activeTab === 'smart'} 
+      />
 
       {/* System Tray Lightweight Guardian Daemon Modal */}
       {isTrayGuardianOpen && (
@@ -1446,6 +1575,15 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
         />
       )}
 
+      {/* S.M.A.R.T. Sector Remapping & Zero-Fill Repair Center Modal (Root level so accessible from all tabs) */}
+      <SmartRemapModal
+        isOpen={isSmartRemapOpen}
+        onClose={() => setIsSmartRemapOpen(false)}
+        activeDrive={activeDrive}
+        blocks={blocks}
+        onRepairSectors={handleRepairSectors}
+      />
+
       {/* Program Options & Preferences Modal */}
       {isOptionsModalOpen && (
         <OptionsModal
@@ -1456,15 +1594,15 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           isMuted={isMuted}
           onToggleMute={handleToggleMute}
           notificationPermission={notificationPermission}
+          notificationsEnabled={notificationsEnabled}
           onRequestNotification={handleRequestNotification}
-          showDemoPresets={showDemoPresets}
-          onToggleDemoPresets={handleToggleDemoPresets}
-          isThermalStress={isThermalStress}
-          onToggleThermalStress={() => setIsThermalStress(!isThermalStress)}
+          onToggleNotificationsEnabled={handleToggleNotificationsEnabled}
           scanSpeedMultiplier={scanSpeedMultiplier}
           onChangeSpeedMultiplier={setScanSpeedMultiplier}
           isAutoRepairMode={isAutoRepairMode}
           onToggleAutoRepairMode={handleToggleAutoRepairMode}
+          scanRecords={scanRecords}
+          onImportMigration={handleImportMigration}
         />
       )}
 
@@ -1605,20 +1743,20 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
           </div>
 
           <span className="text-slate-300 dark:text-slate-700">|</span>
-          <span className="truncate max-w-[220px]">
-            [{activeDrive.mountPoint || 'C:'}] {activeDrive.name} ({activeDrive.capacityGb} GB)
+          <span className="truncate max-w-[240px]">
+            [{activeDrive.mountPoint || 'Host'}] {activeDrive.name} ({activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : '용량 N/A'})
           </span>
 
           <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
-          <span className="hidden sm:inline">LBA: 0 ~ {(activeDrive.totalSectors || 1073741824).toLocaleString()}</span>
+          <span className="hidden sm:inline">LBA: 0 ~ {(activeDrive.totalSectors || 0).toLocaleString()}</span>
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
-          <span className="hidden md:inline">Direct I/O: <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">정상 (Direct Buffer)</strong></span>
+          <span className="hidden md:inline">I/O 채널: <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">{activeDrive.hardwareSpecs?.probeMethod || 'Direct I/O'}</strong></span>
           <span className="text-slate-300 dark:text-slate-700 hidden md:inline">|</span>
-          <span>건강: <strong className={calculatedHealth >= 80 ? 'text-emerald-500' : 'text-red-500'}>{calculatedHealth}%</strong></span>
+          <span>건강: <strong className={calculatedHealth === null ? 'text-slate-400' : calculatedHealth >= 80 ? 'text-emerald-500' : 'text-red-500'}>{calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}</strong></span>
           <span className="text-slate-300 dark:text-slate-700">|</span>
-          <span>온도: <strong>{currentTemp.toFixed(0)}°C</strong></span>
+          <span>온도: <strong>{currentTemp !== null ? `${currentTemp.toFixed(0)}°C` : 'N/A'}</strong></span>
           <span className="text-slate-300 dark:text-slate-700 hidden lg:inline">|</span>
           <span className="hidden lg:inline text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 font-bold">
             DESKTOP PC EDITION
@@ -1628,3 +1766,43 @@ const INITIAL_HOST_DRIVE: DiskDrive = {
     </div>
   );
 }
+
+/**
+ * Lightweight background component that periodically polls physical hardware 
+ * for fresh temperature and S.M.A.R.T. status.
+ */
+function BackgroundTelemetryRefresher({ 
+  drives, 
+  onUpdateDrives, 
+  isActive 
+}: { 
+  drives: DiskDrive[], 
+  onUpdateDrives: (d: DiskDrive[]) => void,
+  isActive: boolean 
+}) {
+  useEffect(() => {
+    if (!isActive) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const updated = await rescanAllDrives(drives);
+        // Only update if there's an actual change in temperature or health to avoid unnecessary re-renders
+        const hasChanged = updated.some((d, i) => 
+          d.temperatureC !== drives[i]?.temperatureC || 
+          d.healthScore !== drives[i]?.healthScore
+        );
+        
+        if (hasChanged) {
+          onUpdateDrives(updated);
+        }
+      } catch (err) {
+        // Silent background error
+      }
+    }, 10000); // 10s polling
+
+    return () => clearInterval(interval);
+  }, [isActive, drives, onUpdateDrives]);
+
+  return null;
+}
+

@@ -1,22 +1,20 @@
-import React, { useState } from 'react';
-import { 
-  X, 
-  FileSearch, 
-  Wrench, 
-  Download, 
-  CheckCircle2, 
-  AlertCircle, 
-  Cpu, 
-  ShieldCheck, 
-  Binary, 
-  FileText, 
+import React, { useState, useEffect } from 'react';
+import {
+  X,
+  Wrench,
+  Download,
+  CheckCircle2,
+  AlertCircle,
+  Binary,
+  FileText,
   Sparkles,
   RefreshCw
 } from 'lucide-react';
-import { 
-  DS_ExecuteBitCarvingRecovery, 
-  DSCarvedSectorResult 
+import {
+  DS_ExecuteBitCarvingRecovery,
+  DSCarvedSectorResult
 } from '../utils/nativeDllBridge';
+import { isTauriDesktopRuntime, queryTauriRawSector } from '../utils/nativeDriveEngine';
 import { DiskDrive } from '../types';
 
 interface BitCarvingRecoveryModalProps {
@@ -30,7 +28,7 @@ interface BitCarvingRecoveryModalProps {
 export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = ({
   isOpen,
   onClose,
-  initialLba = 1048576,
+  initialLba = 0,
   drive,
   driveModel,
 }) => {
@@ -40,8 +38,19 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   const [result, setResult] = useState<DSCarvedSectorResult | null>(null);
   const [customFile, setCustomFile] = useState<File | null>(drive?.attachedFile || null);
 
+  useEffect(() => {
+    if (isOpen) {
+      setTargetLba(initialLba);
+      setResult(null);
+      setCustomFile(drive?.attachedFile || null);
+    }
+  }, [isOpen, initialLba, drive?.id, drive?.attachedFile]);
+
   const activeTargetFile = customFile || drive?.attachedFile;
-  const effectiveDriveModel = activeTargetFile ? `[실제 파일] ${activeTargetFile.name} (${(activeTargetFile.size / (1024 * 1024)).toFixed(1)}MB)` : (drive?.model || drive?.name || driveModel || 'Local Storage Drive');
+  const secSize = drive?.hardwareSpecs?.logicalSectorSize || 512;
+  const effectiveDriveModel = activeTargetFile
+    ? `[실제 파일] ${activeTargetFile.name} (${(activeTargetFile.size / (1024 * 1024)).toFixed(1)}MB)`
+    : (drive?.model || drive?.name || driveModel || 'Local Storage Drive');
 
   if (!isOpen) return null;
 
@@ -49,17 +58,39 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     setIsProcessing(true);
     setResult(null);
 
-    // Brief yield for smooth UI animation
-    await new Promise(r => setTimeout(r, 200));
-
     const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, activeTargetFile, drive);
     setResult(carved);
     setIsProcessing(false);
   };
 
-  const handleExportCarvedData = () => {
-    if (!result) return;
-    const blob = new Blob([result.hexPreview], { type: 'application/octet-stream' });
+  const handleExportCarvedData = async () => {
+    if (!result || !result.isSalvaged) return;
+
+    let blobPayload: Uint8Array | null = null;
+    if (activeTargetFile && activeTargetFile.size > 0) {
+      const fileSize = activeTargetFile.size;
+      const offset = fileSize > secSize ? (targetLba * secSize) % Math.max(1, fileSize - secSize) : 0;
+      const sliceLen = Math.min(fileSize - offset, Math.max(secSize, result.carvedSizeBytes));
+      const ab = await activeTargetFile.slice(offset, offset + sliceLen).arrayBuffer();
+      blobPayload = new Uint8Array(ab);
+    } else if (drive?.id.startsWith('drive-tauri-physical-') && isTauriDesktopRuntime()) {
+      const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+      const exportBytes = Math.min(64 * 4096, Math.max(secSize, result.carvedSizeBytes));
+      const rawTauriBytes = await queryTauriRawSector(driveIndex, targetLba, exportBytes);
+      if (rawTauriBytes && rawTauriBytes.length > 0) {
+        blobPayload = rawTauriBytes;
+      }
+    }
+
+    if (!blobPayload) {
+      // Parse validated hex dump tokens into raw bytes
+      const hexTokens = result.hexPreview.trim().split(/\s+/).filter(Boolean);
+      blobPayload = new Uint8Array(hexTokens.map(h => parseInt(h, 16) || 0));
+    }
+
+    const safeCopy = new Uint8Array(blobPayload.byteLength);
+    safeCopy.set(blobPayload);
+    const blob = new Blob([safeCopy], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -78,7 +109,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
       <div className="relative w-full max-w-3xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
-        
+
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2.5">
@@ -88,21 +119,21 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                  비트 카빙 심층 복구 엔진 (Bit Carving & ECC Heuristics)
+                  비트 카빙 심층 복구 엔진 (Bit Carving &amp; Signature Scanner)
                 </h2>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30">
                   Raw LBA Salvager
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                파일 시스템 손상 및 배드섹터 영역에서 매직 바이트 시그니처와 패리티 비트 플립으로 파일 스트림 복구
+                실제 디스크 물리 섹터 또는 마운트된 파일 바이너리에서 매직 바이트 시그니처를 직접 판독하여 복구합니다
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
+            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -110,7 +141,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
 
         {/* Content */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs">
-          
+
           {/* Target LBA & Span Config */}
           <div className="p-3.5 rounded-lg border bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -129,6 +160,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                     if (f) {
                       setCustomFile(f);
                       setTargetLba(0);
+                      setResult(null);
                     }
                   }}
                 />
@@ -142,8 +174,8 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                   <span className="truncate">{activeTargetFile.name} ({(activeTargetFile.size / (1024 * 1024)).toFixed(2)} MB, {activeTargetFile.size.toLocaleString()} Bytes)</span>
                 </div>
                 <button
-                  onClick={() => setCustomFile(null)}
-                  className="text-slate-400 hover:text-red-500 shrink-0 ml-2"
+                  onClick={() => { setCustomFile(null); setResult(null); }}
+                  className="text-slate-400 hover:text-red-500 shrink-0 ml-2 cursor-pointer"
                   title="파일 연결 해제"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -154,12 +186,12 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="text-[11px] text-slate-600 dark:text-slate-400 block mb-1">
-                  대상 결함 LBA 번호
+                  대상 LBA 번호
                 </label>
                 <input
                   type="number"
                   value={targetLba}
-                  onChange={(e) => setTargetLba(Number(e.target.value) || 0)}
+                  onChange={(e) => setTargetLba(Math.max(0, Number(e.target.value) || 0))}
                   disabled={isProcessing}
                   className="w-full text-xs font-mono p-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
                 />
@@ -197,7 +229,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                   ) : (
                     <>
                       <Sparkles className="w-3.5 h-3.5" />
-                      비트 카빙 복구 실행
+                      비트 카빙 실행
                     </>
                   )}
                 </button>
@@ -205,75 +237,84 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
             </div>
 
             <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-              대상 장치: {effectiveDriveModel} | 오프셋: {(targetLba * 512).toLocaleString()} 바이트 위치
+              대상 장치: {effectiveDriveModel} | 오프셋: {(targetLba * secSize).toLocaleString()} 바이트 위치 ({secSize}B/섹터)
             </div>
           </div>
 
           {/* Recovery Results Section */}
           {result && (
             <div className="space-y-3 animate-in fade-in duration-200">
-              {/* Highlight Result Card */}
-              <div className={`p-3.5 rounded-lg border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
-                result.isSalvaged
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500/50 text-emerald-800 dark:text-emerald-200'
-                  : 'bg-amber-50 dark:bg-amber-950/40 border-amber-500/50 text-amber-800 dark:text-amber-200'
-              }`}>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span className="font-bold text-sm">
-                      {result.signatureName} 식별 및 수복 완료
-                    </span>
+              {result.isSalvaged ? (
+                <>
+                  <div className="p-3.5 rounded-lg border bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500/50 text-emerald-800 dark:text-emerald-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span className="font-bold text-sm">
+                          {result.signatureName} 식별 및 수복 완료
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center gap-3 flex-wrap">
+                        <span>판독 클러스터 크기: <b className="font-mono">{(result.carvedSizeBytes / 1024).toFixed(2)} KB</b></span>
+                        <span>ECC 교정 비트: <b className="font-mono text-indigo-600 dark:text-indigo-400">{result.eccRecoveredBits}비트</b></span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleExportCarvedData}
+                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shrink-0 shadow-sm transition-colors cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      복구 바이너리 저장
+                    </button>
                   </div>
-                  <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center gap-3 flex-wrap">
-                    <span>수복 클러스터 크기: <b className="font-mono">{(result.carvedSizeBytes / 1024).toFixed(1)} KB</b></span>
-                    <span>ECC 비트 전치 교정: <b className="font-mono text-indigo-600 dark:text-indigo-400">{result.eccRecoveredBits}비트 수복</b></span>
-                    <span>무결성 상태: <b className="text-emerald-600 dark:text-emerald-400">100% Valid Header</b></span>
+
+                  {result.hexPreview && (
+                    <div className="p-3 rounded-lg border bg-slate-900 border-slate-800 text-slate-100 font-mono text-[11px] space-y-1.5 overflow-hidden">
+                      <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center justify-between border-b border-slate-800 pb-1">
+                        <span>Raw Sector Binary Hex Dump (LBA {result.sourceLba})</span>
+                        <span className="text-emerald-400">Real Bytes Read</span>
+                      </div>
+
+                      <div className="overflow-x-auto py-1">
+                        <pre className="text-emerald-400 font-mono text-[11px] leading-relaxed">
+                          {result.hexPreview}
+                        </pre>
+                      </div>
+
+                      <div className="border-t border-slate-800 pt-1 text-[10px] text-slate-400 flex items-center justify-between">
+                        <span>ASCII 디코딩 미리보기:</span>
+                        <span className="text-slate-200 font-mono truncate max-w-[400px]">
+                          {result.rawAsciiPreview}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="p-4 rounded-lg border bg-amber-50 dark:bg-amber-950/30 border-amber-500/40 text-amber-900 dark:text-amber-200 space-y-2">
+                  <div className="flex items-center gap-2 font-bold text-sm">
+                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                    <span>{result.signatureName}</span>
                   </div>
+                  <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+                    {result.errorReason || '직접 섹터 핸들 권한이 없어 비트 카빙을 수행할 수 없습니다. 가짜 바이너리 덤프는 생성되지 않습니다.'}
+                  </p>
                 </div>
-
-                <button
-                  onClick={handleExportCarvedData}
-                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shrink-0 shadow-sm transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  수복 파일 다운로드
-                </button>
-              </div>
-
-              {/* Hex Dump & Raw Stream Preview */}
-              <div className="p-3 rounded-lg border bg-slate-900 border-slate-800 text-slate-100 font-mono text-[11px] space-y-1.5 overflow-hidden">
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center justify-between border-b border-slate-800 pb-1">
-                  <span>Raw Sector Binary Hex Dump (LBA {result.sourceLba})</span>
-                  <span className="text-emerald-400">Magic Header Validated</span>
-                </div>
-                
-                <div className="overflow-x-auto py-1">
-                  <pre className="text-emerald-400 font-mono text-[11px] leading-relaxed">
-                    {result.hexPreview}
-                  </pre>
-                </div>
-
-                <div className="border-t border-slate-800 pt-1 text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>ASCII 디코딩 미리보기:</span>
-                  <span className="text-slate-200 font-mono truncate max-w-[400px]">
-                    {result.rawAsciiPreview}
-                  </span>
-                </div>
-              </div>
+              )}
             </div>
           )}
 
           {/* Informational Guidelines */}
           <div className="p-3 rounded-lg border bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-[11px] space-y-1">
             <div className="font-semibold text-slate-700 dark:text-slate-300">
-              💡 비트 카빙(Bit Carving) 복구 원리 안내
+              💡 비트 카빙(Bit Carving) 동작 기준 안내
             </div>
             <p>
-              1. <strong>휴리스틱 시그니처 스캐닝</strong>: FAT32/NTFS/ext4 메타데이터가 파괴된 배드섹터에서도 JPEG, PNG, PDF, ZIP/Office, MP4 등의 바이너리 매직 바이트를 독립 탐색합니다.
+              1. <strong>실제 바이트 스트림 기반 스캐닝</strong>: 상단에서 실제 로컬 이미지/덤프 파일(.img, .bin 등)을 선택하거나 Windows 데스크톱(Tauri) 관리자 권한으로 물리 디스크에 연결하면 해당 LBA 오프셋의 실제 바이트를 직접 판독하여 JPEG, PNG, PDF, ZIP, MP4, NTFS 부트 시그니처를 식별합니다.
             </p>
             <p>
-              2. <strong>ECC 패리티 비트 플립 교정</strong>: 플래시 메모리 셀 누설이나 자성 감쇠로 인해 변형된 1~4비트 헤더 손상을 해밍 디스턴스 역산으로 자동 정정합니다.
+              2. <strong>무가공 원칙</strong>: 물리 핸들 또는 첨부 파일이 없는 브라우저 샌드박스에서는 임의의 가짜 섹터 Hex 데이터를 생성하지 않고 권한 필요 상태를 명확히 보고합니다.
             </p>
           </div>
         </div>

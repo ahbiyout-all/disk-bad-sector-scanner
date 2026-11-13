@@ -121,10 +121,16 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
             </div>
 
             <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
-              <div className="text-slate-400 text-[10px]">평균 전송 속도</div>
+              <div className="text-slate-400 text-[10px]">
+                {typeof record.avgSpeedMbSec === 'number' && record.avgSpeedMbSec > 0 ? '평균 전송 속도' : '평균 응답 지연'}
+              </div>
               <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1">
                 <Activity className="w-3.5 h-3.5 text-emerald-500" />
-                <span>{record.avgSpeedMbSec.toFixed(1)} MB/s</span>
+                <span>
+                  {typeof record.avgSpeedMbSec === 'number' && record.avgSpeedMbSec > 0
+                    ? `${record.avgSpeedMbSec.toFixed(1)} MB/s`
+                    : `${record.avgLatencyMs} ms`}
+                </span>
               </div>
             </div>
           </div>

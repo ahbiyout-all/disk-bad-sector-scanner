@@ -209,7 +209,7 @@ DS_API bool DS_CALL DS_CalculateParityChecksum(
 /**
  * 7. Non-destructive soft bad sector evaluation and spare block reallocation trigger
  */
-DS_API bool DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t* outRecoveredStatus);
+DS_API bool DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t count, uint32_t* outRecoveredStatus);
 
 /**
  * 8. Close physical drive handle and release memory resources

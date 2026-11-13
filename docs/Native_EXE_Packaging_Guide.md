@@ -19,7 +19,7 @@ DiskSentinel Pro는 웹 브라우저 샌드박스의 한계를 넘어 **물리 �
         │                              │                              │
    Cargo Build                  Tauri WebView2 Bundler         Inno Setup Compiler (ISCC)
         │                              │                              │
-  DiskSentinelPro.exe          DiskSentinelPro.msi / .exe    DiskSentinel_Setup_v4.4.0.exe
+  DiskSentinelPro.exe          DiskSentinelPro.msi / .exe    DiskSentinel_Setup_v4.6.0.exe
         │                              │                              │
  14대 C ABI DLL 직접 링크       Rust Direct FFI Bridge         관리자 UAC 권한 + 방화벽 자동구성
 ```
@@ -82,8 +82,8 @@ npm run tauri:build
 
 ### 3) 산출물
 - `src-tauri\target\release\DiskSentinelPro.exe` (초경량 단일 실행 파일, 약 8~12MB)
-- `src-tauri\target\release\bundle\msi\DiskSentinelPro_4.4.0_x64_en-US.msi`
-- `src-tauri\target\release\bundle\nsis\DiskSentinelPro_4.4.0_x64-setup.exe`
+- `src-tauri\target\release\bundle\msi\DiskSentinelPro_4.6.0_x64_en-US.msi`
+- `src-tauri\target\release\bundle\nsis\DiskSentinelPro_4.6.0_x64-setup.exe`
 
 ---
 
@@ -96,12 +96,12 @@ npm run tauri:build
 build.bat
 ```
 `build.bat`는 아래 6단계를 전자동으로 수행합니다:
-1. `package.json`에서 현재 버전(v4.4.0)을 동적으로 추출
+1. `package.json`에서 현재 버전(v4.6.0)을 동적으로 추출
 2. 의존성 검증 및 `npm run build` 프로덕션 번들링
 3. Rust / MSVC / MinGW 컴파일러 감지 시 네이티브 DLL 및 `DiskSentinelPro.exe` 빌드
 4. **[무설치 대체]** 컴파일러가 없을 경우 윈도우 내장 `csc.exe`로 `DiskSentinelPro.exe` 자동 생성
-5. `dist_packages\DiskSentinel-Pro-v4.4.0-PC-Windows.zip` 압축 아카이브 생성
-6. Inno Setup 컴파일러(ISCC)를 자동 탐색하여 `DiskSentinel_Setup_v4.4.0.exe` 인스톨러 컴파일
+5. `dist_packages\DiskSentinel-Pro-v4.6.0-PC-Windows.zip` 압축 아카이브 생성
+6. Inno Setup 컴파일러(ISCC)를 자동 탐색하여 `DiskSentinel_Setup_v4.6.0.exe` 인스톨러 컴파일
 
 ### 2) 인스톨러의 주요 특징
 - **관리자 권한 요구 (`PrivilegesRequired=admin`)**: 윈도우 스토리지 직접 접근(`\\.\PhysicalDriveX`)에 필수적인 관리자 권한 UAC 자동 요청

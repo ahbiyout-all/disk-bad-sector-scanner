@@ -1,5 +1,23 @@
 # DiskSentinel Pro - Developer Work Log (작업 로그)
 
+### 2026-11-13 (v4.6.0 D3 Latency Histogram, 32-Drive IOCTL/WMI Enumeration, Zero-Dummy Audit & SMART Alerts)
+- **D3.js 기반 실시간 섹터별 읽기 속도 및 I/O 레이턴시 분포 히스토그램 구축 (`LatencyHistogramDashboard.tsx`)**:
+  - `d3` 및 `@types/d3` 패키지를 도입해 `TelemetryPanel` 하단(표면 검사 탭)과 `HealthSummaryDashboard`(건강 요약 탭)에 실시간 D3 SVG 히스토그램 대시보드 통합.
+  - 로그 티어(`adaptive`)와 D3 균등(`linear`) 빈 분할, Y축 로그/선형 스케일 전환, P50/P95/P99·표준편차(`σ`)·꼬리 왜도(Tail Ratio) 기반 4단계 전조 증상 판정 및 클릭 LBA 드릴다운 테이블 구현.
+  - **검사 방식(`scanMode`: Quick vs Full) 연동 통계 정밀도 동적 조정**:
+    - `Quick` 모드 시 8-Bin 해상도, 0.1ms 소수점 정밀도 및 유한 모집단 표본 오차한계(`±ms`) 표시; `Full` 모드 시 20-Bin 해상도, 0.01ms 초정밀 표기 적용 및 `Auto / Quick / Full` 수동 전환 셀렉터 탑재.
+  - **100ms 이상 `Slow/Critical` 섹터 오렌지/레드 하이라이트 및 차트 상단 실시간 카운터**:
+    - `100ms` 및 사용자 지정 임계값(`50/100/150/200/300ms`)에서 D3 빈 경계를 강제 분할하여 정상/지연 블록 혼재 원천 차단.
+    - 지연 `>= 100ms` 막대는 고대비 오렌지-레드 SVG 선형 그라데이션(`#EF4444`→`#F97316`), 대각선 해치 패턴, `#C2410C` 스트로크로 강조하고 차트 상단 헤더에 실시간 카운터(`Slow/Critical (≥100ms) 총 N개`)를 배치.
+- **S.M.A.R.T. 임계치 초과 시각 경고 및 툴팁 (`HealthSummaryDashboard.tsx`)**:
+  - 제조사 Threshold 초과/근접 속성 감지 시 시각적 경고 아이콘·행 하이라이트·상세 설명 툴팁 렌더링.
+- **Windows IOCTL/WMI 네이티브 다중 드라이브 전수 탐색(32개 물리 드라이브 + 볼륨 매핑)**:
+  - C++, Rust, Tauri 백엔드에서 `PhysicalDrive0`~`31` 전수 탐색 및 WMI/논리 볼륨 매핑을 수행해 SSD/HDD/NVMe/외장 USB 장치 인식률 향상.
+- **전 계층 더미 코드 완전 제거 & 실측 API 교체 + 심층 감사(Self-Reflection Audit)**:
+  - C++, Rust, Tauri, TypeScript 전반의 하드코딩 폴백을 제거하고 커널 Direct I/O 및 브라우저 실측 API(OPFS/File/Storage)로 교체, 미지원 센서는 `N/A` 표기 일원화.
+- **v4.6.0 버전업 및 GitHub / Google Blogger 문서 동기화**:
+  - 코드베이스 및 패키징 설정 전반을 `4.6.0`으로 일원화하고 `README.md`, `docs/` 및 구글 블로거용 작성 모드/HTML 모드 문서 생성.
+
 ### 2026-10-13 (v4.5.0 Rust Native Engine, NVMe Log 02h Deep Telemetry & AVX2 SIMD Zero-Check)
 - **Rust 고성능 네이티브 코어 엔진 크레이트 구축 (`src/native/rust/`)**:
   - `Cargo.toml` (`crate-type = ["cdylib", "rlib"]`) 및 `windows-sys` 의존성을 구성하여 안전한 Win32 Direct I/O 파이프라인 수립.

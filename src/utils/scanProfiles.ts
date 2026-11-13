@@ -275,7 +275,7 @@ export function getAvailableMethodsForDrive(drive: DiskDrive): ScanMethodDefinit
       SCAN_METHOD_DEFINITIONS.hdd_butterfly_seek
     ];
     // If drive has warnings, also add smart targeted
-    if (drive.healthScore < 80 || (drive.seededBadSectors && drive.seededBadSectors.length > 0)) {
+    if (drive.healthScore !== null && drive.healthScore < 80) {
       list.push(SCAN_METHOD_DEFINITIONS.hdd_smart_targeted);
     }
     return list;
@@ -321,7 +321,7 @@ export function getDefaultMethodForDrive(drive: DiskDrive): SpecializedScanMetho
   if (drive.type === 'NVMe') return 'nvme_multiqueue_direct';
   if (drive.type === 'SSD') return 'sata_block_aligned';
   if (drive.type === 'HDD') {
-    if (drive.healthScore < 60) return 'hdd_smart_targeted';
+    if (drive.healthScore !== null && drive.healthScore < 60) return 'hdd_smart_targeted';
     return 'hdd_sequential_zone';
   }
   if (drive.type === 'EXTERNAL_SSD' || drive.usbProtocol?.includes('UASP')) {
@@ -337,148 +337,6 @@ export function getDefaultMethodForDrive(drive: DiskDrive): SpecializedScanMetho
 }
 
 /**
- * Real Physical & Profiled Sector Inspection Engine
- * Executes actual high-precision hardware timer measurements and protocol profile evaluation.
- */
-export function inspectSectorBlock(
-  drive: DiskDrive,
-  methodId: SpecializedScanMethodId,
-  blockIndex: number,
-  totalBlocks: number,
-  isBad: boolean,
-  isSlow: boolean
-): {
-  status: 'good' | 'normal' | 'slow' | 'critical' | 'bad';
-  latencyMs: number;
-  errorCode?: string;
-  checksum?: string;
-  zoneTag?: 'Outer Track' | 'Middle Zone' | 'Inner Track' | 'MBR/FAT Area' | 'NAND Die Ch1' | 'NAND Die Ch2' | 'UASP Stream';
-} {
-  const method = SCAN_METHOD_DEFINITIONS[methodId];
-  const progressRatio = blockIndex / totalBlocks;
-
-  // Determine Zone Tag
-  let zoneTag: 'Outer Track' | 'Middle Zone' | 'Inner Track' | 'MBR/FAT Area' | 'NAND Die Ch1' | 'NAND Die Ch2' | 'UASP Stream' | undefined;
-  if (drive.type === 'HDD' || methodId.startsWith('hdd')) {
-    if (progressRatio < 0.33) zoneTag = 'Outer Track';
-    else if (progressRatio < 0.66) zoneTag = 'Middle Zone';
-    else zoneTag = 'Inner Track';
-  } else if (drive.type === 'NVMe' || methodId.startsWith('nvme')) {
-    zoneTag = blockIndex % 2 === 0 ? 'NAND Die Ch1' : 'NAND Die Ch2';
-  } else if (methodId === 'usb_uasp_streaming') {
-    zoneTag = 'UASP Stream';
-  } else if (methodId === 'usb_fat_meta_priority' && progressRatio < 0.05) {
-    zoneTag = 'MBR/FAT Area';
-  }
-
-  // Handle Bad Sector (Uncorrectable Error)
-  if (isBad) {
-    let errorCode = 'UNC (Uncorrectable Physical Media Error)';
-    if (drive.type === 'NVMe') {
-      errorCode = 'NVMe Media & Data Integrity Error (0x0281)';
-    } else if (drive.isUsb2 || methodId === 'usb_bot_jitter_filter') {
-      errorCode = 'USB Flash Raw Read Fail / ECC Uncorrectable';
-    } else if (methodId === 'hdd_butterfly_seek') {
-      errorCode = 'VCM Seek Timeout & Head Crash (0x04 IDNF)';
-    }
-    return {
-      status: 'bad',
-      latencyMs: -1,
-      errorCode,
-      zoneTag
-    };
-  }
-
-  // Real micro hardware timer measurement
-  const t0 = performance.now();
-  let checksumAcc = (blockIndex * 31) & 0xffff;
-  for (let k = 0; k < 64; k++) {
-    checksumAcc = (checksumAcc ^ (k * 17)) & 0xffff;
-  }
-  const t1 = performance.now();
-  const rawMicroLatency = Math.max(0.005, t1 - t0);
-  const checksum = `0x${checksumAcc.toString(16).padStart(4, '0').toUpperCase()}`;
-
-  // Calibrate base latency according to media technology and method
-  let baseLatency = 1.8;
-  if (methodId === 'nvme_multiqueue_direct') {
-    baseLatency = Number((rawMicroLatency * 8 + 0.08).toFixed(2));
-  } else if (methodId === 'nvme_log02h_telemetry') {
-    baseLatency = Number((rawMicroLatency * 15 + 0.18).toFixed(2));
-  } else if (methodId === 'sata_block_aligned') {
-    baseLatency = Number((rawMicroLatency * 25 + 0.6).toFixed(1));
-  } else if (methodId === 'sata_phy_crc_retention') {
-    baseLatency = Number((rawMicroLatency * 30 + 0.8).toFixed(1));
-  } else if (methodId === 'hdd_sequential_zone') {
-    const trackFactor = 1.5 + progressRatio * 9.5;
-    baseLatency = Number((trackFactor + rawMicroLatency * 10).toFixed(1));
-  } else if (methodId === 'hdd_butterfly_seek') {
-    baseLatency = Number((10.0 + rawMicroLatency * 60).toFixed(1));
-  } else if (methodId === 'usb_uasp_streaming') {
-    baseLatency = Number((1.5 + rawMicroLatency * 35).toFixed(1));
-  } else if (methodId === 'usb_bot_jitter_filter') {
-    baseLatency = Number((18.0 + rawMicroLatency * 80).toFixed(1));
-  } else if (methodId === 'usb_fat_meta_priority') {
-    baseLatency = progressRatio < 0.05 ? Number((3.0 + rawMicroLatency * 15).toFixed(1)) : Number((12.0 + rawMicroLatency * 40).toFixed(1));
-  } else if (methodId === 'usb_power_glitch_recovery') {
-    baseLatency = Number((16.0 + rawMicroLatency * 90).toFixed(1));
-  }
-
-  // Handle Seeded Slow Sectors
-  if (isSlow) {
-    const isCritical = rawMicroLatency > 0.03 || (blockIndex % 3 === 0);
-    if (isCritical) {
-      const critLatency = Number((method.criticalThresholdMs + rawMicroLatency * 300).toFixed(1));
-      let errorCode = `CRITICAL DELAY (>${method.criticalThresholdMs}ms)`;
-      if (drive.type === 'NVMe') errorCode = 'NVMe Controller Queue Wait / Die Throttle';
-      else if (methodId === 'sata_phy_crc_retention') errorCode = 'SATA PHY CRC Retry / Data Retention Drift';
-      else if (methodId.startsWith('usb')) errorCode = 'USB Packet Retry / Power Droop Delay';
-      else if (methodId.startsWith('hdd')) errorCode = 'Magnetic Surface Degradation / Head Track Wobble';
-
-      return {
-        status: 'critical',
-        latencyMs: critLatency,
-        errorCode,
-        checksum,
-        zoneTag
-      };
-    } else {
-      const slowLatency = Number((method.slowThresholdMs + rawMicroLatency * 80).toFixed(1));
-      return {
-        status: 'slow',
-        latencyMs: slowLatency,
-        errorCode: `SLOW RESPONSE (>${method.slowThresholdMs}ms)`,
-        checksum,
-        zoneTag
-      };
-    }
-  }
-
-  // Normal slight jitter based on raw hardware micro-timer
-  if (rawMicroLatency > 0.04) {
-    const normalLatency = Number((baseLatency * 1.8).toFixed(1));
-    return {
-      status: 'normal',
-      latencyMs: normalLatency,
-      checksum,
-      zoneTag
-    };
-  }
-
-  return {
-    status: 'good',
-    latencyMs: baseLatency,
-    checksum,
-    zoneTag
-  };
-}
-
-/**
- * Backwards compatibility alias for inspectSectorBlock
- */
-export const simulateSectorInspection = inspectSectorBlock;
-
-/**
  * Generate specialized diagnostic conclusion based on storage media and inspection profile
  */
 export function generateMediaSpecificDiagnosis(
@@ -489,15 +347,17 @@ export function generateMediaSpecificDiagnosis(
   criticalCount: number
 ): string {
   const method = SCAN_METHOD_DEFINITIONS[methodId];
+  const sparePct = drive.hardwareSpecs?.availableSparePercent;
+  const spareText = sparePct !== null && sparePct !== undefined ? ` (Available Spare: ${sparePct}%)` : '';
 
   if (method.category === 'NVME_SSD') {
     if (badCount > 0) {
-      return `[NVMe SSD 진단] ${badCount}개의 플래시 다이 무결성 오류가 감지되었습니다. NVMe Available Spare 수치가 급감할 수 있으므로 제조사 전용 툴(Samsung Magician, WD Dashboard 등)로 펌웨어 업데이트 및 즉각 데이터 백업을 권장합니다.`;
+      return `[NVMe SSD 진단] ${badCount}개의 플래시 다이 무결성 오류가 감지되었습니다. 즉시 중요 데이터를 백업하고 제조사 전용 툴(Samsung Magician, WD Dashboard 등)로 상태를 점검하십시오.`;
     }
     if (criticalCount > 0 || slowCount > 0) {
-      return `[NVMe SSD 진단] 물리 배드섹터는 없으나 일부 낸드 채널에서 레이턴시 지연이 발생했습니다. M.2 방열판 서멀패드 부착 상태 및 PCIe Gen 링크 속도를 확인하십시오.`;
+      return `[NVMe SSD 진단] 물리 배드섹터는 없으나 일부 낸드 채널에서 응답 지연이 발생했습니다. M.2 방열판 서멀패드 부착 상태 및 PCIe 링크 속도를 확인하십시오.`;
     }
-    return `[NVMe SSD 진단] 64-Queue 병렬 다이렉트 I/O 전 구간 무결성 통과. 서브 밀리초(<0.5ms) 응답성과 Available Spare(100%)가 완벽히 유지되고 있습니다.`;
+    return `[NVMe SSD 진단] 전 구간 읽기 무결성 검증 통과${spareText}.`;
   }
 
   if (method.category === 'SATA_SSD') {

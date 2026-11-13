@@ -133,12 +133,258 @@ pub struct DSCarvedSectorResult {
 }
 
 
+// ---------------------------------------------------------------------------
+// Physical Drive Advanced Hardware Discovery Details
+// ---------------------------------------------------------------------------
+#[repr(C, packed(8))]
+#[derive(Debug, Copy, Clone)]
+pub struct DSPhysicalDriveDetail {
+    pub drive_index: u32,
+    pub device_path: [u8; 64],
+    pub model: [u8; 64],
+    pub serial_number: [u8; 64],
+    pub firmware_rev: [u8; 32],
+    pub bus_type: [u8; 32],
+    pub total_capacity_bytes: u64,
+    pub sector_size: u32,
+    pub physical_sector_size: u32,
+    pub is_ssd: bool,
+    pub is_trim_supported: bool,
+    pub is_write_cache_enabled: bool,
+    pub temperature_celsius: u32,
+    pub health_score: u32,
+}
+
 // Internal drive handle representation
 pub struct DriveContext {
     pub drive_index: u32,
     pub sector_size: u32,
     #[cfg(windows)]
     pub raw_handle: *mut c_void,
+}
+
+#[cfg(windows)]
+struct AlignedSectorBuffer {
+    ptr: *mut u8,
+    layout: std::alloc::Layout,
+    len: usize,
+}
+
+#[cfg(windows)]
+impl AlignedSectorBuffer {
+    fn new(size: usize, align: usize) -> Option<Self> {
+        let safe_size = size.max(1);
+        let safe_align = align.max(4096).next_power_of_two();
+        let layout = std::alloc::Layout::from_size_align(safe_size, safe_align).ok()?;
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Self {
+            ptr,
+            layout,
+            len: safe_size,
+        })
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for AlignedSectorBuffer {
+    fn drop(&mut self) {
+        unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 0. DS_GetDriveDetails (Fetch real hardware descriptors)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_GetDriveDetails(
+    drive_handle: *mut c_void,
+    out_detail: *mut DSPhysicalDriveDetail,
+) -> bool {
+    if drive_handle.is_null() || out_detail.is_null() {
+        return false;
+    }
+
+    let detail = &mut *out_detail;
+    let ctx = &*(drive_handle as *const DriveContext);
+    
+    detail.drive_index = ctx.drive_index;
+    detail.sector_size = ctx.sector_size;
+    detail.physical_sector_size = 4096;
+    copy_str_to_fixed_bytes(&format!("\\\\.\\PhysicalDrive{}", ctx.drive_index), &mut detail.device_path);
+    copy_str_to_fixed_bytes("Physical Storage Drive", &mut detail.model);
+    copy_str_to_fixed_bytes("", &mut detail.serial_number);
+    copy_str_to_fixed_bytes("N/A", &mut detail.firmware_rev);
+    copy_str_to_fixed_bytes("Standard Storage", &mut detail.bus_type);
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
+            StorageDeviceProperty, StorageDeviceSeekPenaltyProperty, StorageDeviceTrimProperty,
+            StorageDeviceTemperatureProperty, PropertyStandardQuery,
+            STORAGE_DEVICE_DESCRIPTOR, DEVICE_SEEK_PENALTY_DESCRIPTOR, DEVICE_TRIM_DESCRIPTOR,
+            STORAGE_TEMPERATURE_DATA_DESCRIPTOR,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX,
+            BusTypeNvme, BusTypeSata, BusTypeUsb, BusTypeScsi, BusTypeSas,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let h_device = ctx.raw_handle;
+        if h_device.is_null() {
+            return false;
+        }
+
+        // 1. Query Geometry for capacity
+        let mut geom: DISK_GEOMETRY_EX = std::mem::zeroed();
+        let mut bytes_returned: u32 = 0;
+        let ok = DeviceIoControl(
+            h_device as _,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+            std::ptr::null(),
+            0,
+            &mut geom as *mut _ as _,
+            std::mem::size_of::<DISK_GEOMETRY_EX>() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        );
+        if ok != 0 {
+            detail.total_capacity_bytes = geom.DiskSize as u64;
+            if geom.Geometry.BytesPerSector > 0 {
+                detail.sector_size = geom.Geometry.BytesPerSector;
+            }
+        }
+
+        // 2. Query Device Descriptor for Model/Serial/Bus
+        let mut query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        query.PropertyId = StorageDeviceProperty;
+        query.QueryType = PropertyStandardQuery;
+
+        let mut buffer = vec![0u8; 2048];
+        let ok = DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            buffer.as_mut_ptr() as _,
+            buffer.len() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        );
+
+        if ok != 0 && bytes_returned >= std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() as u32 {
+            let desc = &*(buffer.as_ptr() as *const STORAGE_DEVICE_DESCRIPTOR);
+
+            if desc.ProductIdOffset > 0 && (desc.ProductIdOffset as usize) < buffer.len() {
+                let model_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.ProductIdOffset as usize) as *const i8)
+                    .to_string_lossy().trim().to_string();
+                if !model_str.is_empty() {
+                    copy_str_to_fixed_bytes(&model_str, &mut detail.model);
+                }
+            }
+            if desc.SerialNumberOffset > 0 && (desc.SerialNumberOffset as usize) < buffer.len() {
+                let serial_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.SerialNumberOffset as usize) as *const i8)
+                    .to_string_lossy().trim().to_string();
+                copy_str_to_fixed_bytes(&serial_str, &mut detail.serial_number);
+            }
+            if desc.ProductRevisionOffset > 0 && (desc.ProductRevisionOffset as usize) < buffer.len() {
+                let rev_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.ProductRevisionOffset as usize) as *const i8)
+                    .to_string_lossy().trim().to_string();
+                if !rev_str.is_empty() {
+                    copy_str_to_fixed_bytes(&rev_str, &mut detail.firmware_rev);
+                }
+            }
+
+            match desc.BusType {
+                BusTypeNvme => { copy_str_to_fixed_bytes("NVMe", &mut detail.bus_type); detail.is_ssd = true; },
+                BusTypeSata => copy_str_to_fixed_bytes("SATA", &mut detail.bus_type),
+                BusTypeUsb => copy_str_to_fixed_bytes("USB", &mut detail.bus_type),
+                BusTypeScsi | BusTypeSas => copy_str_to_fixed_bytes("SCSI/SAS", &mut detail.bus_type),
+                _ => copy_str_to_fixed_bytes("Standard Storage", &mut detail.bus_type),
+            }
+        }
+
+        // 3. Query Seek Penalty (SSD vs HDD)
+        let mut seek_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        seek_query.PropertyId = StorageDeviceSeekPenaltyProperty;
+        seek_query.QueryType = PropertyStandardQuery;
+        let mut seek_desc: DEVICE_SEEK_PENALTY_DESCRIPTOR = std::mem::zeroed();
+        let mut seek_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &seek_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            &mut seek_desc as *mut _ as _,
+            std::mem::size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32,
+            &mut seek_bytes,
+            std::ptr::null_mut(),
+        ) != 0 {
+            detail.is_ssd = seek_desc.IncursSeekPenalty == 0;
+        }
+
+        // 4. Query TRIM capability
+        let mut trim_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        trim_query.PropertyId = StorageDeviceTrimProperty;
+        trim_query.QueryType = PropertyStandardQuery;
+        let mut trim_desc: DEVICE_TRIM_DESCRIPTOR = std::mem::zeroed();
+        let mut trim_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &trim_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            &mut trim_desc as *mut _ as _,
+            std::mem::size_of::<DEVICE_TRIM_DESCRIPTOR>() as u32,
+            &mut trim_bytes,
+            std::ptr::null_mut(),
+        ) != 0 {
+            detail.is_trim_supported = trim_desc.TrimEnabled != 0;
+        }
+
+        // 5. Query Temperature Property if exposed by storage driver
+        let mut temp_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        temp_query.PropertyId = StorageDeviceTemperatureProperty;
+        temp_query.QueryType = PropertyStandardQuery;
+        let mut temp_desc: STORAGE_TEMPERATURE_DATA_DESCRIPTOR = std::mem::zeroed();
+        let mut temp_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &temp_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            &mut temp_desc as *mut _ as _,
+            std::mem::size_of::<STORAGE_TEMPERATURE_DATA_DESCRIPTOR>() as u32,
+            &mut temp_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && temp_desc.InfoCount > 0 {
+            let t_c = temp_desc.TemperatureInfo[0].Temperature;
+            if t_c > 0 && t_c < 150 {
+                detail.temperature_celsius = t_c as u32;
+            }
+        }
+
+        return true;
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,17 +403,19 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
     {
         use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, GENERIC_READ, GENERIC_WRITE};
         use windows_sys::Win32::Storage::FileSystem::{
-            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING,
             FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH
         };
+        use windows_sys::Win32::System::Ioctl::{IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX};
+        use windows_sys::Win32::System::IO::DeviceIoControl;
 
         let path_str = format!("\\\\.\\PhysicalDrive{}\0", drive_index);
         let wide: Vec<u16> = path_str.encode_utf16().collect();
 
-        let handle = CreateFileW(
+        let mut handle = CreateFileW(
             wide.as_ptr(),
             GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
@@ -176,29 +424,58 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
 
         if handle == INVALID_HANDLE_VALUE {
             // Fallback to Read-Only if write permission denied
-            let ro_handle = CreateFileW(
+            handle = CreateFileW(
                 wide.as_ptr(),
                 GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 std::ptr::null(),
                 OPEN_EXISTING,
                 FILE_FLAG_NO_BUFFERING,
                 0,
             );
-            if ro_handle == INVALID_HANDLE_VALUE {
-                return std::ptr::null_mut();
-            }
-            let ctx = Box::new(DriveContext {
-                drive_index,
-                sector_size: 512,
-                raw_handle: ro_handle as *mut c_void,
-            });
-            return Box::into_raw(ctx) as *mut c_void;
+        }
+
+        if handle == INVALID_HANDLE_VALUE {
+            // Secondary Fallback to Query Access (0 desired access)
+            handle = CreateFileW(
+                wide.as_ptr(),
+                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                0,
+            );
+        }
+
+        if handle == INVALID_HANDLE_VALUE {
+            return std::ptr::null_mut();
+        }
+
+        let mut detected_sector_size = 512u32;
+        let mut geom: DISK_GEOMETRY_EX = std::mem::zeroed();
+        let mut geom_bytes: u32 = 0;
+        let geom_ok = DeviceIoControl(
+            handle as _,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+            std::ptr::null(),
+            0,
+            &mut geom as *mut _ as _,
+            std::mem::size_of::<DISK_GEOMETRY_EX>() as u32,
+            &mut geom_bytes,
+            std::ptr::null_mut(),
+        );
+        if geom_ok != 0 && geom.Geometry.BytesPerSector >= 512 {
+            detected_sector_size = geom.Geometry.BytesPerSector;
+        }
+
+        if !out_sector_size.is_null() {
+            *out_sector_size = detected_sector_size;
         }
 
         let ctx = Box::new(DriveContext {
             drive_index,
-            sector_size: 512,
+            sector_size: detected_sector_size,
             raw_handle: handle as *mut c_void,
         });
         Box::into_raw(ctx) as *mut c_void
@@ -236,9 +513,13 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
         use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, ReadFile, FILE_BEGIN};
 
         let ctx = &*(drive_handle as *const DriveContext);
-        let byte_offset = (lba as i64) * (ctx.sector_size as i64);
-        let buffer_size = (count * ctx.sector_size) as usize;
-        let mut buffer = vec![0u8; buffer_size];
+        let sec_size = ctx.sector_size.max(512);
+        let byte_offset = (lba as i64) * (sec_size as i64);
+        let buffer_size = (count.max(1) as usize) * (sec_size as usize);
+        let mut aligned_buf = match AlignedSectorBuffer::new(buffer_size, sec_size.max(4096) as usize) {
+            Some(b) => b,
+            None => return false,
+        };
         let mut bytes_read: u32 = 0;
 
         let seek_ok = SetFilePointerEx(
@@ -251,7 +532,7 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
         let read_ok = if seek_ok != 0 {
             ReadFile(
                 ctx.raw_handle as _,
-                buffer.as_mut_ptr(),
+                aligned_buf.as_mut_ptr(),
                 buffer_size as u32,
                 &mut bytes_read,
                 std::ptr::null_mut(),
@@ -290,15 +571,67 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
 
     #[cfg(not(windows))]
     {
-        let elapsed = start.elapsed();
-        let res = &mut *out_result;
-        res.start_lba = lba;
-        res.sector_count = count as u64;
-        res.latency_ms = (elapsed.as_secs_f64() * 1000.0).max(0.05);
-        res.status_code = DSSectorStatus::Good as u32;
-        res.win32_error_code = 0;
-        copy_str_to_fixed_bytes("NO_ERROR", &mut res.error_mnemonic);
-        true
+        let _ = (start, lba, count, out_result);
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2.1. DS_ReadRawSector (Read raw bytes from physical sector with NO_BUFFERING alignment)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_ReadRawSector(
+    drive_handle: *mut c_void,
+    lba: u64,
+    out_buffer: *mut u8,
+    buffer_size: u32,
+) -> bool {
+    if drive_handle.is_null() || out_buffer.is_null() || buffer_size == 0 {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, ReadFile, FILE_BEGIN};
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        let sec_size = ctx.sector_size.max(512) as usize;
+        let byte_offset = (lba as i64) * (sec_size as i64);
+        // FILE_FLAG_NO_BUFFERING requires both pointer alignment and sector-multiple read size
+        let aligned_read_len = (buffer_size as usize).div_ceil(sec_size) * sec_size;
+        let mut aligned_buf = match AlignedSectorBuffer::new(aligned_read_len, sec_size.max(4096)) {
+            Some(b) => b,
+            None => return false,
+        };
+        let mut bytes_read: u32 = 0;
+
+        let seek_ok = SetFilePointerEx(
+            ctx.raw_handle as _,
+            byte_offset,
+            std::ptr::null_mut(),
+            FILE_BEGIN,
+        );
+
+        if seek_ok != 0 {
+            let read_ok = ReadFile(
+                ctx.raw_handle as _,
+                aligned_buf.as_mut_ptr(),
+                aligned_read_len as u32,
+                &mut bytes_read,
+                std::ptr::null_mut(),
+            );
+            if read_ok != 0 && bytes_read >= buffer_size {
+                std::ptr::copy_nonoverlapping(aligned_buf.as_ptr(), out_buffer, buffer_size as usize);
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (lba, out_buffer, buffer_size);
+        false
     }
 }
 
@@ -360,43 +693,216 @@ pub unsafe extern "system" fn DS_AdaptiveScanChunk(
 }
 
 // ---------------------------------------------------------------------------
-// 4. DS_GetSmartTelemetry
+// 4. DS_GetSmartTelemetry (Real Win32 S.M.A.R.T. Implementation)
 // ---------------------------------------------------------------------------
 #[no_mangle]
 pub unsafe extern "system" fn DS_GetSmartTelemetry(
-    _drive_handle: *mut c_void,
+    drive_handle: *mut c_void,
     out_entries: *mut DSSmartEntry,
     max_entries: i32,
 ) -> i32 {
-    if out_entries.is_null() || max_entries <= 0 {
+    if drive_handle.is_null() || out_entries.is_null() || max_entries <= 0 {
         return 0;
     }
 
-    let defaults = [
-        (0x05, "Reallocated Sectors Count", 100u8, 100u8, 36u8, 0u64, 0u32),
-        (0x09, "Power-On Hours (POH)", 98, 98, 0, 4820, 0),
-        (0x0C, "Power Cycle Count", 99, 99, 0, 312, 0),
-        (0xBB, "Reported Uncorrectable Errors", 100, 100, 0, 0, 0),
-        (0xBC, "Command Timeout", 100, 100, 0, 0, 0),
-        (0xC2, "Drive Temperature", 68, 52, 0, 32, 0),
-        (0xC5, "Current Pending Sector Count", 100, 100, 0, 0, 0),
-        (0xC6, "Offline Uncorrectable Sector Count", 100, 100, 0, 0, 0),
-        (0xC7, "UltraDMA CRC Error Count", 200, 200, 0, 0, 0),
-    ];
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            SMART_GET_VERSION, SMART_RCV_DRIVE_DATA, SMART_READ_ATTRIBUTE_VALUES,
+            IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
+            StorageDeviceTemperatureProperty, PropertyStandardQuery, STORAGE_TEMPERATURE_DATA_DESCRIPTOR,
+            GETVERSIONINPARAMS, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
 
-    let count = (defaults.len() as i32).min(max_entries);
-    for (i, item) in defaults.iter().take(count as usize).enumerate() {
-        let entry = &mut *out_entries.add(i);
-        entry.attribute_id = item.0;
-        copy_str_to_fixed_bytes(item.1, &mut entry.attribute_name);
-        entry.current_value = item.2;
-        entry.worst_value = item.3;
-        entry.threshold_value = item.4;
-        entry.raw_value = item.5;
-        entry.health_status = item.6;
+        let ctx = &*(drive_handle as *const DriveContext);
+        let h_device = ctx.raw_handle;
+        if h_device.is_null() {
+            return 0;
+        }
+
+        // 1. Get SMART version and capabilities
+        let mut gvip: GETVERSIONINPARAMS = std::mem::zeroed();
+        let mut bytes_returned: u32 = 0;
+        let smart_ver_ok = DeviceIoControl(
+            h_device as _,
+            SMART_GET_VERSION,
+            std::ptr::null(),
+            0,
+            &mut gvip as *mut _ as _,
+            std::mem::size_of::<GETVERSIONINPARAMS>() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        );
+
+        if smart_ver_ok != 0 {
+            // Read thresholds (ATA SMART subcommand 0xD1)
+            let mut thresholds = [0u8; 256];
+            let mut thresh_scip: SENDCMDINPARAMS = std::mem::zeroed();
+            thresh_scip.cBufferSize = 512;
+            thresh_scip.irDriveRegs.bFeaturesReg = 0xD1; // READ_THRESHOLDS
+            thresh_scip.irDriveRegs.bSectorCountReg = 1;
+            thresh_scip.irDriveRegs.bSectorNumberReg = 1;
+            thresh_scip.irDriveRegs.bCylLowReg = 0x4F;
+            thresh_scip.irDriveRegs.bCylHighReg = 0xC2;
+            thresh_scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+            thresh_scip.irDriveRegs.bCommandReg = 0xB0;
+
+            let thresh_out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
+            let mut thresh_out_buf = vec![0u8; thresh_out_size];
+            let mut thresh_bytes: u32 = 0;
+            if DeviceIoControl(
+                h_device as _,
+                SMART_RCV_DRIVE_DATA,
+                &thresh_scip as *const _ as _,
+                std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                thresh_out_buf.as_mut_ptr() as _,
+                thresh_out_size as u32,
+                &mut thresh_bytes,
+                std::ptr::null_mut(),
+            ) != 0 && thresh_bytes >= 528 {
+                let p_tout = thresh_out_buf.as_ptr() as *const SENDCMDOUTPARAMS;
+                let p_tdata = (*p_tout).bBuffer.as_ptr();
+                for i in 0..30 {
+                    let rec = p_tdata.add(2 + i * 12);
+                    let id = *rec;
+                    if id != 0 {
+                        thresholds[id as usize] = *rec.add(1);
+                    }
+                }
+            }
+
+            // Request Attribute Values (0xD0)
+            let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
+            scip.cBufferSize = 512;
+            scip.irDriveRegs.bFeaturesReg = SMART_READ_ATTRIBUTE_VALUES;
+            scip.irDriveRegs.bSectorCountReg = 1;
+            scip.irDriveRegs.bSectorNumberReg = 1;
+            scip.irDriveRegs.bCylLowReg = 0x4F;
+            scip.irDriveRegs.bCylHighReg = 0xC2;
+            scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+            scip.irDriveRegs.bCommandReg = 0xB0; // SMART_CMD
+
+            let out_buffer_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
+            let mut out_buffer = vec![0u8; out_buffer_size];
+
+            let ok = DeviceIoControl(
+                h_device as _,
+                SMART_RCV_DRIVE_DATA,
+                &scip as *const _ as _,
+                std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                out_buffer.as_mut_ptr() as _,
+                out_buffer_size as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            );
+
+            if ok != 0 && bytes_returned >= 528 {
+                let p_out = out_buffer.as_ptr() as *const SENDCMDOUTPARAMS;
+                let p_data = (*p_out).bBuffer.as_ptr();
+
+                let mut count = 0;
+                for i in 0..30 {
+                    if count >= max_entries { break; }
+                    let attr_ptr = p_data.add(2 + i * 12);
+                    let id = *attr_ptr;
+                    if id == 0 { continue; }
+
+                    let entry = &mut *out_entries.add(count as usize);
+                    entry.attribute_id = id as u32;
+
+                    let name = match id {
+                        0x01 => "Read Error Rate",
+                        0x03 => "Spin Up Time",
+                        0x04 => "Start/Stop Count",
+                        0x05 => "Reallocated Sectors Count",
+                        0x07 => "Seek Error Rate",
+                        0x09 => "Power-On Hours",
+                        0x0A => "Spin Retry Count",
+                        0x0C => "Power Cycle Count",
+                        0xBB => "Reported Uncorrectable Errors",
+                        0xBC => "Command Timeout",
+                        0xBE => "Airflow Temperature",
+                        0xC0 => "Unsafe Shutdown Count",
+                        0xC1 => "Load Cycle Count",
+                        0xC2 => "Temperature Celsius",
+                        0xC4 => "Reallocation Event Count",
+                        0xC5 => "Current Pending Sector Count",
+                        0xC6 => "Offline Uncorrectable Sector Count",
+                        0xC7 => "UltraDMA CRC Error Count",
+                        0xE1 => "Host Writes (Total)",
+                        0xE7 => "SSD Life Left",
+                        0xF1 => "Total LBA Written",
+                        0xF2 => "Total LBA Read",
+                        _ => "Vendor Specific Attribute",
+                    };
+                    copy_str_to_fixed_bytes(name, &mut entry.attribute_name);
+
+                    entry.current_value = *attr_ptr.add(3);
+                    entry.worst_value = *attr_ptr.add(4);
+                    entry.threshold_value = thresholds[id as usize];
+
+                    let raw: [u8; 6] = [
+                        *attr_ptr.add(5), *attr_ptr.add(6), *attr_ptr.add(7),
+                        *attr_ptr.add(8), *attr_ptr.add(9), *attr_ptr.add(10)
+                    ];
+                    entry.raw_value = u64::from_le_bytes([raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], 0, 0]);
+
+                    entry.health_status = if entry.threshold_value > 0 && entry.current_value <= entry.threshold_value {
+                        2 // Crossed manufacturer failure threshold
+                    } else if (id == 0x05 || id == 0xC5 || id == 0xC6 || id == 0xBB) && entry.raw_value > 0 {
+                        if entry.raw_value >= 8 { 2 } else { 1 }
+                    } else if (id == 0xC2 || id == 0xBE) && (entry.raw_value & 0xFF) >= 60 {
+                        2
+                    } else if (id == 0xC2 || id == 0xBE) && (entry.raw_value & 0xFF) >= 52 {
+                        1
+                    } else {
+                        0
+                    };
+
+                    count += 1;
+                }
+                if count > 0 {
+                    return count;
+                }
+            }
+        }
+
+        // 2. For NVMe/USB UASP devices without ATA SMART, query StorageDeviceTemperatureProperty
+        if max_entries >= 1 {
+            let mut temp_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+            temp_query.PropertyId = StorageDeviceTemperatureProperty;
+            temp_query.QueryType = PropertyStandardQuery;
+            let mut temp_desc: STORAGE_TEMPERATURE_DATA_DESCRIPTOR = std::mem::zeroed();
+            let mut temp_bytes: u32 = 0;
+            if DeviceIoControl(
+                h_device as _,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                &temp_query as *const _ as _,
+                std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+                &mut temp_desc as *mut _ as _,
+                std::mem::size_of::<STORAGE_TEMPERATURE_DATA_DESCRIPTOR>() as u32,
+                &mut temp_bytes,
+                std::ptr::null_mut(),
+            ) != 0 && temp_desc.InfoCount > 0 {
+                let temp_c = temp_desc.TemperatureInfo[0].Temperature;
+                if temp_c > -40 && temp_c < 150 {
+                    let entry = &mut *out_entries.add(0);
+                    entry.attribute_id = 0xC2;
+                    copy_str_to_fixed_bytes("Temperature Celsius", &mut entry.attribute_name);
+                    entry.current_value = if temp_c >= 0 && temp_c < 100 { (100 - temp_c) as u8 } else { 0 };
+                    entry.worst_value = entry.current_value;
+                    entry.threshold_value = 0;
+                    entry.raw_value = if temp_c > 0 { temp_c as u64 } else { 0 };
+                    entry.health_status = if temp_c >= 60 { 2 } else if temp_c >= 52 { 1 } else { 0 };
+                    return 1;
+                }
+            }
+        }
     }
 
-    count
+    // No telemetry available on this interface/OS without kernel permissions
+    0
 }
 
 // ---------------------------------------------------------------------------
@@ -418,30 +924,36 @@ pub unsafe extern "system" fn DS_EvaluateDriveReliability(
     report.reallocated_sectors = 0;
     report.pending_sectors = 0;
     report.uncorrectable_errors = 0;
-    report.temperature_celsius = 34;
+    report.temperature_celsius = 0; // 0 = temperature sensor unavailable
 
     for i in 0..(entry_count as usize) {
         let e = &*entries.add(i);
+        if e.threshold_value > 0 && e.current_value <= e.threshold_value {
+            report.reliability_score -= 30.0;
+        }
         match e.attribute_id {
             0x05 => {
                 report.reallocated_sectors = e.raw_value as u32;
-                report.reliability_score -= (report.reallocated_sectors as f64) * 5.0;
+                report.reliability_score -= ((report.reallocated_sectors as f64) * 5.0).min(45.0);
             }
             0xC5 => {
                 report.pending_sectors = e.raw_value as u32;
-                report.reliability_score -= (report.pending_sectors as f64) * 8.0;
+                report.reliability_score -= ((report.pending_sectors as f64) * 8.0).min(50.0);
             }
             0xBB | 0xC6 => {
-                report.uncorrectable_errors = e.raw_value as u32;
-                report.reliability_score -= (report.uncorrectable_errors as f64) * 10.0;
+                report.uncorrectable_errors += e.raw_value as u32;
+                report.reliability_score -= ((e.raw_value as f64) * 10.0).min(40.0);
             }
             0x09 => {
                 report.total_power_on_hours = e.raw_value as u32;
             }
-            0xC2 => {
-                report.temperature_celsius = (e.raw_value as u32) & 0xFF;
-                if report.temperature_celsius > 55 {
-                    report.reliability_score -= 15.0;
+            0xC2 | 0xBE => {
+                let t = (e.raw_value as u32) & 0xFF;
+                if t > 0 && t < 150 {
+                    report.temperature_celsius = t;
+                    if t > 55 {
+                        report.reliability_score -= ((t - 55) as f64) * 2.0;
+                    }
                 }
             }
             _ => {}
@@ -523,6 +1035,7 @@ pub unsafe extern "system" fn DS_CalculateParityChecksum(
 pub unsafe extern "system" fn DS_AttemptSoftSectorRepair(
     drive_handle: *mut c_void,
     bad_lba: u64,
+    count: u32,
     out_recovered_status: *mut u32,
 ) -> bool {
     if drive_handle.is_null() || out_recovered_status.is_null() {
@@ -531,11 +1044,20 @@ pub unsafe extern "system" fn DS_AttemptSoftSectorRepair(
 
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, WriteFile, FILE_BEGIN};
+        use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, WriteFile, ReadFile, FILE_BEGIN};
 
         let ctx = &*(drive_handle as *const DriveContext);
-        let byte_offset = (bad_lba as i64) * (ctx.sector_size as i64);
-        let zero_buffer = vec![0u8; ctx.sector_size as usize];
+        let sec_size = ctx.sector_size.max(512);
+        let safe_count = count.max(1);
+        let byte_offset = (bad_lba as i64) * (sec_size as i64);
+        let total_bytes = safe_count * sec_size;
+        let mut aligned_buf = match AlignedSectorBuffer::new(total_bytes as usize, sec_size.max(4096) as usize) {
+            Some(b) => b,
+            None => {
+                *out_recovered_status = 0;
+                return false;
+            }
+        };
         let mut bytes_written: u32 = 0;
 
         let seek_ok = SetFilePointerEx(
@@ -548,25 +1070,45 @@ pub unsafe extern "system" fn DS_AttemptSoftSectorRepair(
         if seek_ok != 0 {
             let write_ok = WriteFile(
                 ctx.raw_handle as _,
-                zero_buffer.as_ptr(),
-                ctx.sector_size,
+                aligned_buf.as_ptr(),
+                total_bytes,
                 &mut bytes_written,
                 std::ptr::null_mut(),
             );
-            if write_ok != 0 && bytes_written == ctx.sector_size {
-                *out_recovered_status = 1; // 1 = Soft bad sector repaired via reallocation
-                return true;
+            if write_ok != 0 && bytes_written == total_bytes {
+                // Verify zeros via read-back check
+                let reseek_ok = SetFilePointerEx(
+                    ctx.raw_handle as _,
+                    byte_offset,
+                    std::ptr::null_mut(),
+                    FILE_BEGIN,
+                );
+                if reseek_ok != 0 {
+                    let mut bytes_read: u32 = 0;
+                    let read_ok = ReadFile(
+                        ctx.raw_handle as _,
+                        aligned_buf.as_mut_ptr(),
+                        total_bytes,
+                        &mut bytes_read,
+                        std::ptr::null_mut(),
+                    );
+                    if read_ok != 0 && bytes_read == total_bytes && aligned_buf.as_slice().iter().all(|&b| b == 0) {
+                        *out_recovered_status = 1; // 1 = Zero-fill & read-back verification succeeded
+                        return true;
+                    }
+                }
             }
         }
 
-        *out_recovered_status = 0; // Failed (Hard physical damage)
+        *out_recovered_status = 0; // Failed (Hard physical damage or read-only protection)
         false
     }
 
     #[cfg(not(windows))]
     {
-        *out_recovered_status = 1;
-        true
+        let _ = (bad_lba, count);
+        *out_recovered_status = 0;
+        false
     }
 }
 
@@ -602,115 +1144,113 @@ pub unsafe extern "system" fn DS_GetNvmeDeepTelemetry(
     drive_handle: *mut c_void,
     out_log: *mut DSNvmeHealthLog,
 ) -> bool {
-    if out_log.is_null() {
+    if drive_handle.is_null() || out_log.is_null() {
         return false;
     }
 
     let log = &mut *out_log;
+    *log = std::mem::zeroed();
 
     #[cfg(windows)]
     {
-        use windows_sys::Win32::System::Ioctl::IOCTL_STORAGE_PROTOCOL_COMMAND;
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            STORAGE_PROPERTY_QUERY,
+            STORAGE_PROTOCOL_SPECIFIC_DATA,
+            STORAGE_PROTOCOL_DATA_DESCRIPTOR,
+            StorageDeviceProtocolSpecificProperty,
+            StorageAdapterProtocolSpecificProperty,
+            PropertyStandardQuery,
+            ProtocolTypeNvme,
+            NVMeDataTypeLogPage,
+        };
         use windows_sys::Win32::System::IO::DeviceIoControl;
 
-        let ctx = if !drive_handle.is_null() {
-            Some(&*(drive_handle as *const DriveContext))
-        } else {
-            None
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        const LOG_PAGE_SIZE: usize = 512;
+        let query_header_size = std::mem::size_of::<STORAGE_PROPERTY_QUERY>()
+            + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>();
+        let total_size = query_header_size + LOG_PAGE_SIZE;
+        let mut buffer = vec![0u8; total_size];
+
+        let query_offset = std::mem::offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+
+        let try_property = |prop_id: i32, buf: &mut [u8]| -> bool {
+            buf.fill(0);
+            let q = &mut *(buf.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY);
+            q.PropertyId = prop_id;
+            q.QueryType = PropertyStandardQuery;
+
+            let pdata = &mut *(buf.as_mut_ptr().add(query_offset) as *mut STORAGE_PROTOCOL_SPECIFIC_DATA);
+            pdata.ProtocolType = ProtocolTypeNvme;
+            pdata.DataType = NVMeDataTypeLogPage as u32;
+            pdata.ProtocolDataRequestValue = 0x02; // Health Information Log Page
+            pdata.ProtocolDataRequestSubValue = 0;
+            pdata.ProtocolDataOffset = std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+            pdata.ProtocolDataLength = LOG_PAGE_SIZE as u32;
+
+            let mut bytes_returned: u32 = 0;
+            let ok = DeviceIoControl(
+                ctx.raw_handle as _,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                buf.as_ptr() as _,
+                buf.len() as u32,
+                buf.as_mut_ptr() as _,
+                buf.len() as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            );
+            ok != 0 && bytes_returned >= std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
         };
 
-        let mut query_success = false;
+        let ok = try_property(StorageDeviceProtocolSpecificProperty, &mut buffer)
+            || try_property(StorageAdapterProtocolSpecificProperty, &mut buffer);
 
-        // If a real Windows handle is open, attempt STORAGE_PROTOCOL_COMMAND for NVMe
-        if let Some(c) = ctx {
-            if !c.raw_handle.is_null() {
-                let mut buffer = vec![0u8; 4096];
-                let mut bytes_returned: u32 = 0;
+        if ok {
+            let desc = &*(buffer.as_ptr() as *const STORAGE_PROTOCOL_DATA_DESCRIPTOR);
+            let data_offset = desc.ProtocolSpecificData.ProtocolDataOffset as usize;
+            let data_len = desc.ProtocolSpecificData.ProtocolDataLength as usize;
+            let base_ptr = (&desc.ProtocolSpecificData as *const STORAGE_PROTOCOL_SPECIFIC_DATA) as usize;
+            let buf_start = buffer.as_ptr() as usize;
+            let rel_start = (base_ptr - buf_start) + data_offset;
 
-                let ok = DeviceIoControl(
-                    c.raw_handle as _,
-                    IOCTL_STORAGE_PROTOCOL_COMMAND,
-                    buffer.as_mut_ptr() as _,
-                    buffer.len() as u32,
-                    buffer.as_mut_ptr() as _,
-                    buffer.len() as u32,
-                    &mut bytes_returned,
-                    std::ptr::null_mut(),
-                );
+            if data_offset > 0 && data_len >= 200 && rel_start + 200 <= buffer.len() {
+                let raw = &buffer[rel_start..rel_start + 200];
+                log.critical_warning = raw[0];
+                let temp_kelvin = u16::from_le_bytes([raw[1], raw[2]]);
+                log.temperature_celsius = if temp_kelvin >= 273 { temp_kelvin - 273 } else { 0 };
+                log.available_spare = raw[3];
+                log.available_spare_threshold = raw[4];
+                log.percentage_used = raw[5];
 
-                if ok != 0 && bytes_returned >= 512 {
-                    query_success = true;
-                    log.critical_warning = buffer[0];
-                    let temp_kelvin = u16::from_le_bytes([buffer[1], buffer[2]]);
-                    log.temperature_celsius = if temp_kelvin >= 273 { temp_kelvin - 273 } else { 38 };
-                    log.available_spare = buffer[3];
-                    log.available_spare_threshold = buffer[4];
-                    log.percentage_used = buffer[5];
+                let read_units = u64::from_le_bytes(raw[32..40].try_into().unwrap_or([0; 8]));
+                let written_units = u64::from_le_bytes(raw[48..56].try_into().unwrap_or([0; 8]));
+                log.data_units_read_tb = ((read_units as f64) * 512_000.0) / 1e12;
+                log.data_units_written_tb = ((written_units as f64) * 512_000.0) / 1e12;
 
-                    let read_units = u64::from_le_bytes(buffer[32..40].try_into().unwrap_or([0; 8]));
-                    log.data_units_read_tb = (read_units as f64) * 0.000512;
-
-                    let written_units = u64::from_le_bytes(buffer[48..56].try_into().unwrap_or([0; 8]));
-                    log.data_units_written_tb = (written_units as f64) * 0.000512;
-
-                    log.host_read_commands = u64::from_le_bytes(buffer[64..72].try_into().unwrap_or([0; 8]));
-                    log.host_write_commands = u64::from_le_bytes(buffer[80..88].try_into().unwrap_or([0; 8]));
-                    log.controller_busy_time_minutes = u64::from_le_bytes(buffer[96..104].try_into().unwrap_or([0; 8]));
-                    log.power_cycles = u64::from_le_bytes(buffer[112..120].try_into().unwrap_or([0; 8]));
-                    log.power_on_hours = u64::from_le_bytes(buffer[128..136].try_into().unwrap_or([0; 8]));
-                    log.unsafe_shutdowns = u64::from_le_bytes(buffer[144..152].try_into().unwrap_or([0; 8]));
-                    log.media_errors = u64::from_le_bytes(buffer[160..168].try_into().unwrap_or([0; 8]));
-                    log.num_err_log_entries = u64::from_le_bytes(buffer[176..184].try_into().unwrap_or([0; 8]));
-                    log.warning_temp_time_min = u32::from_le_bytes(buffer[192..196].try_into().unwrap_or([0; 4]));
-                    log.critical_temp_time_min = u32::from_le_bytes(buffer[196..200].try_into().unwrap_or([0; 4]));
-                }
+                log.host_read_commands = u64::from_le_bytes(raw[64..72].try_into().unwrap_or([0; 8]));
+                log.host_write_commands = u64::from_le_bytes(raw[80..88].try_into().unwrap_or([0; 8]));
+                log.controller_busy_time_minutes = u64::from_le_bytes(raw[96..104].try_into().unwrap_or([0; 8]));
+                log.power_cycles = u64::from_le_bytes(raw[112..120].try_into().unwrap_or([0; 8]));
+                log.power_on_hours = u64::from_le_bytes(raw[128..136].try_into().unwrap_or([0; 8]));
+                log.unsafe_shutdowns = u64::from_le_bytes(raw[144..152].try_into().unwrap_or([0; 8]));
+                log.media_errors = u64::from_le_bytes(raw[160..168].try_into().unwrap_or([0; 8]));
+                log.num_err_log_entries = u64::from_le_bytes(raw[176..184].try_into().unwrap_or([0; 8]));
+                log.warning_temp_time_min = u32::from_le_bytes(raw[192..196].try_into().unwrap_or([0; 4]));
+                log.critical_temp_time_min = u32::from_le_bytes(raw[196..200].try_into().unwrap_or([0; 4]));
+                return true;
             }
         }
-
-        if !query_success {
-            // High-fidelity calibrated fallback for standard SATA/NVMe or virtual devices
-            log.critical_warning = 0;
-            log.temperature_celsius = 39;
-            log.available_spare = 100;
-            log.available_spare_threshold = 10;
-            log.percentage_used = 3; // 3% endurance consumed
-            log.data_units_read_tb = 14.82;
-            log.data_units_written_tb = 11.24;
-            log.host_read_commands = 28_491_032;
-            log.host_write_commands = 19_182_401;
-            log.controller_busy_time_minutes = 412;
-            log.power_cycles = 184;
-            log.power_on_hours = 2_150;
-            log.unsafe_shutdowns = 2;
-            log.media_errors = 0;
-            log.num_err_log_entries = 0;
-            log.warning_temp_time_min = 0;
-            log.critical_temp_time_min = 0;
-        }
-        true
+        false
     }
 
     #[cfg(not(windows))]
     {
-        let _ = drive_handle;
-        log.critical_warning = 0;
-        log.temperature_celsius = 39;
-        log.available_spare = 100;
-        log.available_spare_threshold = 10;
-        log.percentage_used = 3;
-        log.data_units_read_tb = 14.82;
-        log.data_units_written_tb = 11.24;
-        log.host_read_commands = 28_491_032;
-        log.host_write_commands = 19_182_401;
-        log.controller_busy_time_minutes = 412;
-        log.power_cycles = 184;
-        log.power_on_hours = 2_150;
-        log.unsafe_shutdowns = 2;
-        log.media_errors = 0;
-        log.num_err_log_entries = 0;
-        log.warning_temp_time_min = 0;
-        log.critical_temp_time_min = 0;
-        true
+        false
     }
 }
 
@@ -873,8 +1413,9 @@ pub unsafe extern "system" fn DS_ScanMultipleDrivesParallel(
 
                 let mut total_bad = 0u32;
                 let mut total_scanned = 0u64;
-                let mut total_latency = 0.0;
                 let mut status = 0u32;
+                let mut completed = false;
+                let step = target.burst_step.max(1);
 
                 if !handle.is_null() {
                     let mut bad_chunk = [DSBlockResult {
@@ -886,21 +1427,41 @@ pub unsafe extern "system" fn DS_ScanMultipleDrivesParallel(
                         error_mnemonic: [0; 32],
                     }; 32];
                     let mut detected = 0u32;
+                    let mut ok = true;
+                    let mut remaining = target.sector_count;
+                    let mut cur_lba = target.start_lba;
 
-                    let ok = DS_AdaptiveScanChunk(
-                        handle,
-                        target.start_lba,
-                        target.sector_count as u32,
-                        target.burst_step,
-                        bad_chunk.as_mut_ptr(),
-                        32,
-                        &mut detected,
-                    );
+                    while remaining > 0 {
+                        let chunk = remaining.min(u32::MAX as u64) as u32;
+                        let mut chunk_bad = 0u32;
+                        let space_left = 32u32.saturating_sub(detected);
+                        let res_ptr = if space_left > 0 {
+                            bad_chunk.as_mut_ptr().add(detected as usize)
+                        } else {
+                            std::ptr::null_mut()
+                        };
+
+                        if !DS_AdaptiveScanChunk(
+                            handle,
+                            cur_lba,
+                            chunk,
+                            step,
+                            res_ptr,
+                            space_left,
+                            &mut chunk_bad,
+                        ) {
+                            ok = false;
+                            break;
+                        }
+                        detected = detected.saturating_add(chunk_bad);
+                        cur_lba = cur_lba.saturating_add(chunk as u64);
+                        remaining -= chunk as u64;
+                    }
 
                     total_bad = detected;
                     total_scanned = target.sector_count;
-                    total_latency = 0.65; // Average block latency in ms
-                    status = if ok && detected == 0 { 0 } else if detected > 0 { 4 } else { 1 };
+                    completed = ok;
+                    status = if ok && detected == 0 { 0 } else if detected > 0 { 4 } else { 2 };
 
                     DS_CloseDrive(handle);
                 } else {
@@ -908,14 +1469,16 @@ pub unsafe extern "system" fn DS_ScanMultipleDrivesParallel(
                 }
 
                 let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let chunk_ops = (total_scanned.max(1)).div_ceil(step as u64).max(1);
+                let avg_latency = elapsed / (chunk_ops as f64);
 
                 DSMultiDriveScanSummary {
                     drive_index: target.drive_index,
                     total_sectors_scanned: total_scanned,
                     bad_sectors_found: total_bad,
                     elapsed_ms: elapsed,
-                    avg_latency_ms: total_latency,
-                    is_completed: true,
+                    avg_latency_ms: avg_latency,
+                    is_completed: completed,
                     status_code: status,
                 }
             })
@@ -977,44 +1540,74 @@ pub unsafe extern "system" fn DS_RunTrayGuardianCheck(
 
     status.is_monitoring_active = is_active;
     status.poll_interval_sec = interval;
-    status.monitored_drive_count = 3; // Typically PhysicalDrive0, 1, 2
-    status.highest_temp_celsius = 41; // Calibrated normal operating temp
+    status.monitored_drive_count = 0;
+    status.highest_temp_celsius = 0;
     status.critical_alert_triggered = false;
     status.warning_drive_index = 0;
     status.last_alert_code = 0;
-    copy_str_to_fixed_bytes("All monitored drives operational (S.M.A.R.T. Normal)", &mut status.last_alert_message);
+    copy_str_to_fixed_bytes("Probing physical drives...", &mut status.last_alert_message);
+
+    let mut pending_drive_idx = 0u32;
+    let mut pending_found = false;
+    let mut reallocated_drive_idx = 0u32;
+    let mut reallocated_found = false;
 
     #[cfg(windows)]
     {
-        // Probe PhysicalDrive0 health
-        let mut sector_size: u32 = 512;
-        let h_drive = DS_OpenDriveDirect(0, &mut sector_size);
-        if !h_drive.is_null() {
+        for drive_idx in 0u32..32u32 {
+            let mut sector_size: u32 = 512;
+            let h_drive = DS_OpenDriveDirect(drive_idx, &mut sector_size);
+            if h_drive.is_null() {
+                continue;
+            }
+            status.monitored_drive_count += 1;
+
+            let mut nvme_log: DSNvmeHealthLog = std::mem::zeroed();
+            if DS_GetNvmeDeepTelemetry(h_drive, &mut nvme_log) {
+                let t = nvme_log.temperature_celsius as u32;
+                if t > 0 && t < 150 && t > status.highest_temp_celsius {
+                    status.highest_temp_celsius = t;
+                    if t >= temp_limit {
+                        status.warning_drive_index = drive_idx;
+                    }
+                }
+                if check_pending && nvme_log.media_errors > 0 {
+                    pending_found = true;
+                    pending_drive_idx = drive_idx;
+                }
+            }
+
             let mut entries = [DSSmartEntry {
                 attribute_id: 0,
                 attribute_name: [0; 64],
-                current_value: 100,
-                worst_value: 100,
+                current_value: 0,
+                worst_value: 0,
                 threshold_value: 0,
                 raw_value: 0,
                 health_status: 0,
-            }; 30];
-            let count = DS_GetSmartTelemetry(h_drive, entries.as_mut_ptr(), 30);
-            if count > 0 {
-                for i in 0..(count as usize) {
-                    if entries[i].attribute_id == 194 || entries[i].attribute_id == 231 {
-                        let cur_temp = entries[i].current_value.min(99) as u32;
-                        if cur_temp > status.highest_temp_celsius {
-                            status.highest_temp_celsius = cur_temp;
+            }; 32];
+            let count = DS_GetSmartTelemetry(h_drive, entries.as_mut_ptr(), 32);
+            for i in 0..(count.max(0) as usize) {
+                let id = entries[i].attribute_id;
+                if id == 0xC2 || id == 0xBE || id == 0xE7 {
+                    let cur_temp = (entries[i].raw_value & 0xFF) as u32;
+                    if cur_temp > 0 && cur_temp < 150 && cur_temp > status.highest_temp_celsius {
+                        status.highest_temp_celsius = cur_temp;
+                        if cur_temp >= temp_limit {
+                            status.warning_drive_index = drive_idx;
                         }
                     }
-                    if check_pending && (entries[i].attribute_id == 197 || entries[i].attribute_id == 198) && entries[i].raw_value > 0 {
-                        status.critical_alert_triggered = true;
-                        status.last_alert_code = 4;
-                        copy_str_to_fixed_bytes("S.M.A.R.T. Alert: Pending/Uncorrectable Sectors Detected on PhysicalDrive0!", &mut status.last_alert_message);
-                    }
+                }
+                if check_pending && (id == 0xC5 || id == 0xC6 || id == 0xBB) && entries[i].raw_value > 0 {
+                    pending_found = true;
+                    pending_drive_idx = drive_idx;
+                }
+                if id == 0x05 && entries[i].raw_value > 0 {
+                    reallocated_found = true;
+                    reallocated_drive_idx = drive_idx;
                 }
             }
+
             DS_CloseDrive(h_drive);
         }
     }
@@ -1022,7 +1615,45 @@ pub unsafe extern "system" fn DS_RunTrayGuardianCheck(
     if status.highest_temp_celsius >= temp_limit {
         status.critical_alert_triggered = true;
         status.last_alert_code = if status.highest_temp_celsius >= 60 { 2 } else { 1 };
-        let msg = format!("Thermal Warning: PhysicalDrive0 reached {}°C (Threshold {}°C)", status.highest_temp_celsius, temp_limit);
+        let msg = format!(
+            "Thermal Warning: PhysicalDrive{} reached {} C (Threshold {} C)",
+            status.warning_drive_index, status.highest_temp_celsius, temp_limit
+        );
+        copy_str_to_fixed_bytes(&msg, &mut status.last_alert_message);
+    } else if pending_found {
+        status.critical_alert_triggered = true;
+        status.warning_drive_index = pending_drive_idx;
+        status.last_alert_code = 4;
+        let msg = format!(
+            "S.M.A.R.T. Alert: Pending/Uncorrectable Sectors Detected on PhysicalDrive{}!",
+            pending_drive_idx
+        );
+        copy_str_to_fixed_bytes(&msg, &mut status.last_alert_message);
+    } else if reallocated_found {
+        status.critical_alert_triggered = true;
+        status.warning_drive_index = reallocated_drive_idx;
+        status.last_alert_code = 3;
+        let msg = format!(
+            "S.M.A.R.T. Notice: Reallocated Sectors Detected on PhysicalDrive{}",
+            reallocated_drive_idx
+        );
+        copy_str_to_fixed_bytes(&msg, &mut status.last_alert_message);
+    } else if status.monitored_drive_count == 0 {
+        copy_str_to_fixed_bytes(
+            "No direct physical drive handles accessible (Windows native elevation required)",
+            &mut status.last_alert_message,
+        );
+    } else if status.highest_temp_celsius == 0 {
+        let msg = format!(
+            "{} drive(s) monitored; hardware thermal sensor unavailable",
+            status.monitored_drive_count
+        );
+        copy_str_to_fixed_bytes(&msg, &mut status.last_alert_message);
+    } else {
+        let msg = format!(
+            "All {} monitored drives operational (Peak {} C)",
+            status.monitored_drive_count, status.highest_temp_celsius
+        );
         copy_str_to_fixed_bytes(&msg, &mut status.last_alert_message);
     }
 
@@ -1039,7 +1670,7 @@ pub unsafe extern "system" fn DS_ExecuteBitCarvingRecovery(
     cluster_span: u32,
     out_result: *mut DSCarvedSectorResult,
 ) -> bool {
-    if out_result.is_null() {
+    if drive_handle.is_null() || out_result.is_null() {
         return false;
     }
 
@@ -1050,152 +1681,101 @@ pub unsafe extern "system" fn DS_ExecuteBitCarvingRecovery(
     result.ecc_recovered_bits = 0;
     result.is_salvaged = false;
     result.hex_preview.fill(0);
-    copy_str_to_fixed_bytes("Unknown Raw Data", &mut result.signature_name);
+    copy_str_to_fixed_bytes("Unreadable / Unavailable Raw Sector", &mut result.signature_name);
 
+    let ctx = &*(drive_handle as *const DriveContext);
+    let sector_bytes = if ctx.sector_size > 0 { ctx.sector_size } else { 512 };
     let span = if cluster_span == 0 { 8 } else { cluster_span.min(64) };
-    let buffer_size = (span as usize) * 512;
-    let mut raw_buffer = vec![0u8; buffer_size];
+    let buffer_size = (span as usize) * (sector_bytes as usize);
+    let mut actual_bytes_read: u32 = 0;
 
-    let mut read_ok = false;
+    #[cfg(windows)]
+    let mut aligned_raw_buffer = match AlignedSectorBuffer::new(buffer_size, sector_bytes.max(4096) as usize) {
+        Some(b) => b,
+        None => return false,
+    };
+    #[cfg(not(windows))]
+    let aligned_raw_buffer = vec![0u8; buffer_size];
 
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Storage::FileSystem::ReadFile;
-        use windows_sys::Win32::Storage::FileSystem::SetFilePointerEx;
-        if !drive_handle.is_null() {
-            let ctx = &*(drive_handle as *const DriveContext);
-            if !ctx.raw_handle.is_null() {
-                let offset = (target_lba * (ctx.sector_size as u64)) as i64;
-                let mut new_pos: i64 = 0;
-                let seek_ok = SetFilePointerEx(ctx.raw_handle as _, offset, &mut new_pos, 0);
-                if seek_ok != 0 {
-                    let mut bytes_read: u32 = 0;
-                    let r = ReadFile(
-                        ctx.raw_handle as _,
-                        raw_buffer.as_mut_ptr() as _,
-                        buffer_size as u32,
-                        &mut bytes_read,
-                        std::ptr::null_mut(),
-                    );
-                    if r != 0 && bytes_read > 0 {
-                        read_ok = true;
-                    }
+        use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+        if !ctx.raw_handle.is_null() {
+            let offset = (target_lba * (sector_bytes as u64)) as i64;
+            let mut new_pos: i64 = 0;
+            if SetFilePointerEx(ctx.raw_handle as _, offset, &mut new_pos, FILE_BEGIN) != 0 {
+                let mut bytes_read: u32 = 0;
+                let r = ReadFile(
+                    ctx.raw_handle as _,
+                    aligned_raw_buffer.as_mut_ptr() as _,
+                    buffer_size as u32,
+                    &mut bytes_read,
+                    std::ptr::null_mut(),
+                );
+                if r != 0 && bytes_read > 0 {
+                    actual_bytes_read = bytes_read;
                 }
             }
         }
     }
 
-    if !read_ok {
-        let _ = drive_handle;
-        // Deterministic synthetic buffer based on target_lba for deep carving simulation
-        let pattern_selector = (target_lba / 1000) % 5;
-        match pattern_selector {
-            0 => {
-                // Corrupted JPEG Header (FF D8 FF E0 00 10 'JFIF') with 2 bit flips
-                raw_buffer[0] = 0xFF;
-                raw_buffer[1] = 0xD8;
-                raw_buffer[2] = 0xFF;
-                raw_buffer[3] = 0xE0;
-                raw_buffer[4] = 0x00;
-                raw_buffer[5] = 0x10;
-                raw_buffer[6..10].copy_from_slice(b"JFIF");
-                // simulate bit flip in marker byte
-                raw_buffer[10] = 0x01 ^ 0x02; // 1 bit flip
-            }
-            1 => {
-                // Corrupted PNG Header (89 50 4E 47 0D 0A 1A 0A) with 1 bit flip
-                raw_buffer[0] = 0x89 ^ 0x01; // bit flip in header
-                raw_buffer[1] = 0x50;
-                raw_buffer[2] = 0x4E;
-                raw_buffer[3] = 0x47;
-                raw_buffer[4] = 0x0D;
-                raw_buffer[5] = 0x0A;
-                raw_buffer[6] = 0x1A;
-                raw_buffer[7] = 0x0A;
-            }
-            2 => {
-                // PDF Document Header (%PDF-1.7)
-                raw_buffer[0..8].copy_from_slice(b"%PDF-1.7");
-            }
-            3 => {
-                // ZIP / Office OpenXML Header (PK 03 04)
-                raw_buffer[0] = 0x50;
-                raw_buffer[1] = 0x4B;
-                raw_buffer[2] = 0x03;
-                raw_buffer[3] = 0x04;
-                raw_buffer[4..8].copy_from_slice(&[0x14, 0x00, 0x06, 0x00]);
-            }
-            _ => {
-                // MP4 Video Container (....ftypisom)
-                raw_buffer[0..4].copy_from_slice(&[0x00, 0x00, 0x00, 0x20]);
-                raw_buffer[4..12].copy_from_slice(b"ftypisom");
-            }
-        }
-        for i in 12..buffer_size {
-            raw_buffer[i] = ((i * 37 + (target_lba as usize)) % 256) as u8;
-        }
+    if actual_bytes_read == 0 {
+        return false;
     }
 
-    // Heuristic Signature Matching & Hamming/Parity Correction
-    let mut sig_found = 0u32;
-    let mut sig_name = "Unknown Raw";
-    let mut recovered_bits = 0u32;
-    let mut carved_bytes = (span as u64) * 512;
+    #[cfg(windows)]
+    let valid_slice_all = aligned_raw_buffer.as_slice();
+    #[cfg(not(windows))]
+    let valid_slice_all = aligned_raw_buffer.as_slice();
 
-    // Test JPEG
-    if (raw_buffer[0] == 0xFF && raw_buffer[1] == 0xD8 && raw_buffer[2] == 0xFF)
-        || ((raw_buffer[0] ^ 0xFF).count_ones() <= 1 && raw_buffer[1] == 0xD8)
-    {
+    let valid_len = (actual_bytes_read as usize).min(valid_slice_all.len());
+    let valid_slice = &valid_slice_all[..valid_len];
+
+    let mut sig_found = 0u32;
+    let mut sig_name = "Raw Binary / Unmapped Sector";
+    let mut salvaged = false;
+
+    if valid_len >= 4 && valid_slice[0] == 0xFF && valid_slice[1] == 0xD8 && valid_slice[2] == 0xFF {
         sig_found = 1;
         sig_name = "JPEG Image (EXIF/JFIF)";
-        recovered_bits = (raw_buffer[0] ^ 0xFF).count_ones() + (raw_buffer[1] ^ 0xD8).count_ones();
-        raw_buffer[0] = 0xFF;
-        raw_buffer[1] = 0xD8;
-        raw_buffer[2] = 0xFF;
-        carved_bytes = 2_458_120; // 2.45 MB image cluster
-    } else if (raw_buffer[1] == 0x50 && raw_buffer[2] == 0x4E && raw_buffer[3] == 0x47)
-        || (raw_buffer[0..4] == [0x89, 0x50, 0x4E, 0x47])
-    {
+        salvaged = true;
+    } else if valid_len >= 4 && valid_slice[0..4] == [0x89, 0x50, 0x4E, 0x47] {
         sig_found = 2;
         sig_name = "PNG Lossless Image";
-        recovered_bits = (raw_buffer[0] ^ 0x89).count_ones();
-        raw_buffer[0] = 0x89;
-        carved_bytes = 1_845_600;
-    } else if &raw_buffer[0..4] == b"%PDF" || &raw_buffer[1..5] == b"%PDF" {
+        salvaged = true;
+    } else if valid_len >= 4 && &valid_slice[0..4] == b"%PDF" {
         sig_found = 3;
         sig_name = "PDF Portable Document";
-        recovered_bits = 1;
-        carved_bytes = 5_214_080;
-    } else if raw_buffer[0] == 0x50 && raw_buffer[1] == 0x4B {
+        salvaged = true;
+    } else if valid_len >= 4 && valid_slice[0..4] == [0x50, 0x4B, 0x03, 0x04] {
         sig_found = 4;
         sig_name = "ZIP / DOCX / XLSX Archive";
-        recovered_bits = 2;
-        carved_bytes = 8_912_384;
-    } else if &raw_buffer[4..8] == b"ftyp" {
+        salvaged = true;
+    } else if valid_len >= 8 && &valid_slice[4..8] == b"ftyp" {
         sig_found = 5;
-        sig_name = "MP4 / MOV High-Definition Video";
-        recovered_bits = 0;
-        carved_bytes = 24_680_000;
+        sig_name = "MP4 / MOV Video Container";
+        salvaged = true;
     } else {
-        // Fallback: Check if ASCII text
-        let ascii_count = raw_buffer.iter().take(256).filter(|&&b| b >= 32 && b <= 126 || b == 10 || b == 13).count();
-        if ascii_count > 200 {
+        let inspect_len = valid_len.min(256);
+        let ascii_count = valid_slice[..inspect_len]
+            .iter()
+            .filter(|&&b| (b >= 32 && b <= 126) || b == 10 || b == 13 || b == 9)
+            .count();
+        if inspect_len > 0 && ascii_count * 100 >= inspect_len * 80 {
             sig_found = 6;
-            sig_name = "UTF-8 Source Code / System Log";
-            recovered_bits = 0;
-            carved_bytes = 65_536;
+            sig_name = "UTF-8 Source / System Log";
+            salvaged = true;
         }
     }
 
     result.signature_type = sig_found;
     copy_str_to_fixed_bytes(sig_name, &mut result.signature_name);
-    result.carved_size_bytes = carved_bytes;
-    result.ecc_recovered_bits = recovered_bits;
-    result.is_salvaged = sig_found > 0;
+    result.carved_size_bytes = actual_bytes_read as u64;
+    result.ecc_recovered_bits = 0;
+    result.is_salvaged = salvaged;
 
-    // Fill 64-byte preview
-    let copy_len = raw_buffer.len().min(64);
-    result.hex_preview[..copy_len].copy_from_slice(&raw_buffer[..copy_len]);
+    let copy_len = valid_len.min(64);
+    result.hex_preview[..copy_len].copy_from_slice(&valid_slice[..copy_len]);
 
     true
 }

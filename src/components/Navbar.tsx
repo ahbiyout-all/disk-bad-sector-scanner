@@ -33,10 +33,7 @@ import {
   ArrowRight,
   Download,
   RotateCcw,
-  FileCheck,
-  Minus,
-  Square,
-  X
+  FileCheck
 } from 'lucide-react';
 
 export interface NavbarProps {
@@ -50,8 +47,10 @@ export interface NavbarProps {
   isMuted: boolean;
   onToggleMute: () => void;
   notificationPermission: NotificationPermission;
+  notificationsEnabled?: boolean;
   onRequestNotification: () => void;
-  currentHealthScore: number;
+  onToggleNotificationsEnabled?: () => void;
+  currentHealthScore: number | null;
   badCount?: number;
   hasUpdate?: boolean;
   latestVersion?: string;
@@ -64,8 +63,6 @@ export interface NavbarProps {
   onOpenParallelScanModal?: () => void;
   onOpenTrayGuardianModal?: () => void;
   onOpenBitCarvingModal?: () => void;
-  showDemoPresets?: boolean;
-  onToggleDemoPresets?: () => void;
   onPickDirectoryVolume?: () => void;
   onOpenRealFile?: () => void;
   onOpenHardwareDetails?: () => void;
@@ -73,8 +70,6 @@ export interface NavbarProps {
   isRescanning?: boolean;
   onOpenOptionsModal?: () => void;
   onOpenHelpGuideModal?: () => void;
-  isThermalStress?: boolean;
-  onToggleThermalStress?: () => void;
   onExportResults?: () => void;
   onResetScan?: () => void;
   onOpenReport?: () => void;
@@ -95,7 +90,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   isMuted,
   onToggleMute,
   notificationPermission,
+  notificationsEnabled = true,
   onRequestNotification,
+  onToggleNotificationsEnabled,
   currentHealthScore,
   badCount = 0,
   hasUpdate = false,
@@ -109,8 +106,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenParallelScanModal,
   onOpenTrayGuardianModal,
   onOpenBitCarvingModal,
-  showDemoPresets = false,
-  onToggleDemoPresets,
   onPickDirectoryVolume,
   onOpenRealFile,
   onOpenHardwareDetails,
@@ -118,8 +113,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRescanning = false,
   onOpenOptionsModal,
   onOpenHelpGuideModal,
-  isThermalStress = false,
-  onToggleThermalStress,
   onExportResults,
   onResetScan,
   onOpenReport,
@@ -161,10 +154,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
   };
 
-  // Categorize drives: real host storage, real mounted files/volumes, and demo simulation presets
-  const realHostDrives = drives.filter(d => !d.isDemoPreset && !d.attachedFile && !d.attachedFileHandle);
-  const realFileAndVolumeDrives = drives.filter(d => !d.isDemoPreset && (d.attachedFile || d.attachedFileHandle));
-  const demoDrives = drives.filter(d => d.isDemoPreset);
+  // Categorize drives: real host/physical storage and mounted files/volumes
+  const realHostDrives = drives.filter(d => !d.attachedFile && !d.attachedFileHandle);
+  const realFileAndVolumeDrives = drives.filter(d => Boolean(d.attachedFile || d.attachedFileHandle));
 
   // Active drive metadata
   const currentDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
@@ -410,7 +402,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                          {currentHealthScore}%
+                          {currentHealthScore !== null ? `${currentHealthScore}%` : 'N/A'}
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">3</span>
                       </div>
@@ -485,7 +477,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <span>하드웨어 상세 스펙 분석기</span>
                         </div>
                         <span className="text-[10px] font-mono text-indigo-500 font-bold">
-                          {currentDrive.hardwareSpecs?.busType || 'NVMe'}
+                          {currentDrive?.hardwareSpecs?.busType || 'N/A'}
                         </span>
                       </button>
                     )}
@@ -623,47 +615,35 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
 
                     <button
-                      onClick={onRequestNotification}
+                      onClick={() => {
+                        if (notificationPermission === 'granted' && onToggleNotificationsEnabled) {
+                          onToggleNotificationsEnabled();
+                        } else {
+                          onRequestNotification();
+                        }
+                      }}
                       className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
                     >
                       <div className="flex items-center gap-2">
-                        <Bell className="w-4 h-4 text-indigo-500" />
+                        <Bell className={`w-4 h-4 ${notificationPermission === 'granted' && notificationsEnabled ? 'text-emerald-500' : 'text-indigo-500'}`} />
                         <span>데스크톱 웹 푸시 알림</span>
                       </div>
-                      <span className={`text-[11px] font-bold ${notificationPermission === 'granted' ? 'text-emerald-500' : 'text-slate-400'}`}>
-                        {notificationPermission === 'granted' ? '허용됨' : '설정하기'}
+                      <span className={`text-[11px] font-bold ${
+                        notificationPermission === 'granted' && notificationsEnabled
+                          ? 'text-emerald-500'
+                          : notificationPermission === 'granted'
+                          ? 'text-amber-500'
+                          : 'text-slate-400'
+                      }`}>
+                        {notificationPermission === 'granted'
+                          ? notificationsEnabled
+                            ? '허용됨'
+                            : '일시 중지'
+                          : '설정하기'}
                       </span>
                     </button>
 
-                    {onToggleDemoPresets && (
-                      <button
-                        onClick={onToggleDemoPresets}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-amber-500" />
-                          <span>가상 시뮬레이션 데모</span>
-                        </div>
-                        <span className={`text-[11px] font-bold ${showDemoPresets ? 'text-amber-500' : 'text-slate-400'}`}>
-                          {showDemoPresets ? 'ON' : 'OFF'}
-                        </span>
-                      </button>
-                    )}
-
-                    {onToggleThermalStress && (
-                      <button
-                        onClick={onToggleThermalStress}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Thermometer className="w-4 h-4 text-red-500" />
-                          <span>60°C 과열 경보 테스트</span>
-                        </div>
-                        <span className={`text-[11px] font-bold ${isThermalStress ? 'text-red-500 animate-pulse' : 'text-slate-400'}`}>
-                          {isThermalStress ? '과열 부하' : '정상'}
-                        </span>
-                      </button>
-                    )}
+                    {/* Auto-Repair option follows */}
 
                     {onToggleAutoRepairMode && (
                       <button
@@ -828,30 +808,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                 aria-label="대상 드라이브 선택"
               >
                 {realFileAndVolumeDrives.length > 0 && (
-                  <optgroup label="📂 실제 마운트 볼륨 & 파일 (Direct I/O)" className="bg-white dark:bg-slate-900 text-emerald-600 font-bold">
+                  <optgroup label="📂 마운트된 로컬 볼륨 & 파일 (Direct I/O)" className="bg-white dark:bg-slate-900 text-emerald-600 font-bold">
                     {realFileAndVolumeDrives.map((d) => (
                       <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                        [📂 실제] {d.name} ({d.capacityGb}GB)
+                        [📂 파일] {d.name} ({d.capacityGb !== null ? `${d.capacityGb}GB` : '용량 N/A'})
                       </option>
                     ))}
                   </optgroup>
                 )}
-                <optgroup label="🖥️ 실제 로컬 저장장치 (Physical Storage)" className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold">
+                <optgroup label="🖥️ 호스트 / 물리 저장장치 (Hardware)" className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold">
                   {realHostDrives.map((d) => (
                     <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                      [{d.type} {d.mountPoint || ''}] {d.name} ({d.capacityGb}GB)
+                      [{d.type} {d.mountPoint || ''}] {d.name} ({d.capacityGb !== null ? `${d.capacityGb}GB` : 'N/A'})
                     </option>
                   ))}
                 </optgroup>
-                {showDemoPresets && demoDrives.length > 0 && (
-                  <optgroup label="🧪 가상 시뮬레이션 데모 프리셋 (Demo Presets)" className="bg-white dark:bg-slate-900 text-amber-600 font-bold">
-                    {demoDrives.map((d) => (
-                      <option key={d.id} value={d.id} className="text-slate-600 dark:text-slate-400 font-sans font-normal">
-                        [가상 데모] {d.name} ({d.capacityGb}GB)
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
               </select>
 
               {onRescanDrives && (
@@ -870,40 +841,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Quick Health & Temperature Badges */}
             <div className="flex items-center gap-1 font-mono text-xs font-bold">
               <span className={`px-2 py-0.5 rounded-md border text-[11px] ${
-                currentHealthScore >= 80 
+                currentHealthScore === null
+                  ? 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+                  : currentHealthScore >= 80
                   ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                   : 'bg-red-50 dark:bg-red-950/60 border-red-500/30 text-red-600 dark:text-red-400'
               }`}>
-                {currentHealthScore}%
+                {currentHealthScore !== null ? `${currentHealthScore}%` : 'N/A'}
               </span>
               <span className="px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-[11px]">
-                {currentDrive?.temperatureC || 36}°C
+                {currentDrive?.temperatureC !== null && currentDrive?.temperatureC !== undefined
+                  ? `${currentDrive.temperatureC}°C`
+                  : 'N/A'}
               </span>
-            </div>
-
-            {/* Native Desktop Window Action Controls simulation */}
-            <div className="hidden lg:flex items-center gap-0.5 ml-1 border-l border-slate-200 dark:border-slate-800 pl-2">
-              <button
-                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                title="최소화 (Minimize)"
-                onClick={() => {}}
-              >
-                <Minus className="w-3 h-3" />
-              </button>
-              <button
-                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                title="최대화 / 이전 크기 (Maximize / Restore)"
-                onClick={() => {}}
-              >
-                <Square className="w-2.5 h-2.5" />
-              </button>
-              <button
-                className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-red-600 transition-colors cursor-pointer"
-                title="프로그램 닫기 (Close)"
-                onClick={() => {}}
-              >
-                <X className="w-3 h-3" />
-              </button>
             </div>
 
           </div>

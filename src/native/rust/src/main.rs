@@ -8,8 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const APP_VERSION: &str = "4.4.0";
-const ENGINE_VERSION: &str = "4.5.0";
+const APP_VERSION: &str = "4.6.0";
+const ENGINE_VERSION: &str = "4.6.0";
 
 fn print_banner() {
     println!("===================================================================");

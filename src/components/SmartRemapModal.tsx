@@ -1,34 +1,29 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * DiskSentinel Pro - S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine
- * Native-style low-level logical bad sector zero-fill repair & hardware reallocations.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
 import { DiskDrive, SectorBlock, DriveSmartAttribute } from '../types';
-import { 
-  ShieldAlert, 
-  ShieldCheck, 
-  Wrench, 
-  Zap, 
-  RefreshCw, 
-  CheckCircle2, 
-  AlertTriangle, 
-  Terminal, 
-  HardDrive, 
-  Cpu, 
-  Activity, 
-  X, 
-  Layers, 
-  ArrowRight,
-  Database,
+import {
+  ShieldAlert,
+  Wrench,
+  Zap,
+  RefreshCw,
+  CheckCircle2,
+  AlertTriangle,
+  Terminal,
+  HardDrive,
+  Activity,
+  X,
+  Layers,
   Sliders,
   Check,
   Lock,
   Unlock,
-  Shield
+  AlertOctagon
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
 import { executeRealZeroFillRepairBlock } from '../utils/nativeDriveEngine';
@@ -55,25 +50,26 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   const [repairLogs, setRepairLogs] = useState<string[]>([]);
   const [repairCompleted, setRepairCompleted] = useState<boolean>(false);
   const [repairedCountSummary, setRepairedCountSummary] = useState<number>(0);
+  const [failedCountSummary, setFailedCountSummary] = useState<number>(0);
+  const [lastUnsupportedReason, setLastUnsupportedReason] = useState<string | null>(null);
 
-  // Safety Lock State (Locked by default to prevent accidental data overwriting)
   const [isSafetyLocked, setIsSafetyLocked] = useState<boolean>(true);
   const [showLockWarning, setShowLockWarning] = useState<boolean>(false);
   const [showBackupWarningModal, setShowBackupWarningModal] = useState<boolean>(false);
 
-  // Repair Difficulty / Mode State
   const [repairMode, setRepairMode] = useState<'standard' | 'deep_ecc' | 'firmware_realloc'>('standard');
 
-  // Calculate Disk Speed & Estimated Time
   const getDriveSpeedProfile = () => {
+    const measuredMb = activeDrive.hardwareSpecs?.measuredSequentialWriteMbSec;
+    const speedLabel = measuredMb !== null && measuredMb !== undefined ? `실측 쓰기 ${measuredMb} MB/s` : '실시간 쓰기 검증';
     if (activeDrive.type === 'NVMe') {
-      return { label: 'NVMe PCIe 다이렉트 (약 2,500 MB/s)', baseTimePerBlock: 0.08 };
+      return { label: `NVMe PCIe Direct (${speedLabel})`, baseTimePerBlock: 0.08 };
     } else if (activeDrive.type === 'SSD' || activeDrive.type === 'EXTERNAL_SSD') {
-      return { label: 'SATA/External SSD 플래시 (약 500 MB/s)', baseTimePerBlock: 0.22 };
+      return { label: `SSD / Storage API (${speedLabel})`, baseTimePerBlock: 0.15 };
     } else if (activeDrive.type === 'HDD') {
-      return { label: '기계식 자기 플래터 HDD (약 120 MB/s)', baseTimePerBlock: 0.75 };
+      return { label: `HDD 자기 플래터 (${speedLabel})`, baseTimePerBlock: 0.45 };
     } else {
-      return { label: 'USB/외장 스토리지 (약 40 MB/s)', baseTimePerBlock: 1.0 };
+      return { label: `USB / 외장 스토리지 (${speedLabel})`, baseTimePerBlock: 0.6 };
     }
   };
 
@@ -101,16 +97,15 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   const estimatedCompletionTimeStr = new Date(Date.now() + estimatedSeconds * 1000).toLocaleTimeString();
 
-  // Filter bad and slow blocks
   const badBlocks = blocks.filter(b => b.status === 'bad');
   const slowBlocks = blocks.filter(b => b.status === 'slow' || b.status === 'critical');
   const targetableBlocks = badBlocks.length > 0 ? badBlocks : slowBlocks;
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const prevIsOpenRef = useRef<boolean>(false);
 
-  // Auto-select genuine bad or slow blocks when modal opens & reset safety lock to locked
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !prevIsOpenRef.current) {
       if (badBlocks.length > 0) {
         setSelectedBlockIds(badBlocks.map(b => b.id));
       } else if (slowBlocks.length > 0) {
@@ -122,10 +117,14 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
       setProgress(0);
       setRepairLogs([]);
       setRepairCompleted(false);
-      setIsSafetyLocked(true); // Default to locked for safety!
+      setRepairedCountSummary(0);
+      setFailedCountSummary(0);
+      setLastUnsupportedReason(null);
+      setIsSafetyLocked(true);
       setShowLockWarning(false);
     }
-  }, [isOpen, blocks]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -133,24 +132,20 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Toggle individual block selection
   const handleToggleBlock = (id: number) => {
     if (isRepairing) return;
-    setSelectedBlockIds(prev => 
+    setSelectedBlockIds(prev =>
       prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
     );
   };
 
-  // Find S.M.A.R.T attributes
   const getSmartAttr = (id: number): DriveSmartAttribute | undefined => {
     return activeDrive.smartAttributes.find(a => a.id === id);
   };
 
-  const reallocatedAttr = getSmartAttr(5); // 05h Reallocated Sectors
-  const pendingAttr = getSmartAttr(197);   // C5h Current Pending
-  const uncorrectableAttr = getSmartAttr(198); // C6h Offline Uncorrectable
+  const reallocatedAttr = getSmartAttr(5);
+  const pendingAttr = getSmartAttr(197);
 
-  // Start the Native Zero-Fill & S.M.A.R.T Remap Process
   const handleStartRepair = () => {
     if (isSafetyLocked) {
       soundManager.playBeep(400, 0.1);
@@ -160,77 +155,84 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     }
 
     if (selectedBlockIds.length === 0 || isRepairing) return;
-
-    // Trigger file system damage & backup warning modal before execution
     setShowBackupWarningModal(true);
   };
 
-  const handleConfirmAndExecuteRepair = () => {
+  const handleConfirmAndExecuteRepair = async () => {
     setShowBackupWarningModal(false);
     soundManager.playClick();
     setIsRepairing(true);
     setProgress(0);
     setRepairCompleted(false);
+    setRepairedCountSummary(0);
+    setFailedCountSummary(0);
+    setLastUnsupportedReason(null);
 
-    const totalToRepair = selectedBlockIds.length;
-    const intervalTime = Math.max(200, Math.round((estimatedSeconds * 1000) / totalToRepair));
+    const targetsSnapshot = [...selectedBlockIds];
+    const totalToRepair = targetsSnapshot.length;
 
     setRepairLogs([
       `[${new Date().toLocaleTimeString()}] === S.M.A.R.T. 섹터 제로필 수복 & 재할당 엔진 가동 ===`,
       `[시스템] 드라이브 ID: ${activeDrive.name} (${activeDrive.model})`,
       `[시스템] 선택 수복 방식: ${repairMode === 'standard' ? '표준 0x00 제로필 (1.0x)' : repairMode === 'deep_ecc' ? '심층 ECC 패리티 정합성 (2.2x)' : '저수준 펌웨어 강제 치환 (4.0x)'}`,
-      `[시스템] 디스크 속도 프로필: ${speedProfile.label}`,
-      `[시스템] 예상 소요 시간: ${formatEstimatedTime(estimatedSeconds)} (완료 예정: ${estimatedCompletionTimeStr})`,
-      `[시스템] 대상 LBA 블록 개수: ${totalToRepair}개`,
-      `[프로토콜] ATA_WRITE_DMA / NVMe_WRITE_ZEROES 다이렉트 패스트루 모드 진입`
+      `[시스템] 대상 LBA 블록 개수: ${totalToRepair}개`
     ]);
 
-    let currentIndex = 0;
+    const succeededIds: number[] = [];
+    let failedCount = 0;
+    let firstFailureReason: string | null = null;
 
-    const interval = setInterval(async () => {
-      if (currentIndex >= totalToRepair) {
-        clearInterval(interval);
-        setIsRepairing(false);
-        setProgress(100);
-        setRepairCompleted(true);
-        setRepairedCountSummary(totalToRepair);
-
-        setRepairLogs(prev => [
-          ...prev,
-          `[${new Date().toLocaleTimeString()}] [완료] 선택된 ${totalToRepair}개 섹터 제로필 수복 및 S.M.A.R.T. 재할당 검증 성공!`,
-          `[S.M.A.R.T. 컨트롤러] 05h Reallocated Sectors 카운트 신규 반영 완료.`,
-          `[S.M.A.R.T. 컨트롤러] C5h Current Pending Sector 카운트 0으로 초기화 완료.`
-        ]);
-
-        // Commit repair to main state
-        onRepairSectors(activeDrive.id, selectedBlockIds);
-        return;
-      }
-
-      const targetBlockId = selectedBlockIds[currentIndex];
+    for (let i = 0; i < totalToRepair; i++) {
+      const targetBlockId = targetsSnapshot[i];
       const targetBlock = blocks.find(b => b.id === targetBlockId);
-      const lba = targetBlock ? targetBlock.lba : targetBlockId * 1000000;
+      const lba = targetBlock ? targetBlock.lba : targetBlockId * 1000;
       setCurrentLba(lba);
-
-      const stepProgress = Math.round(((currentIndex + 1) / totalToRepair) * 100);
-      setProgress(stepProgress);
+      setProgress(Math.round(((i + 1) / totalToRepair) * 100));
 
       const timeStr = new Date().toLocaleTimeString();
-      
-      // Execute real memory DMA zero-fill benchmark
-      const realResult = await executeRealZeroFillRepairBlock(targetBlockId, lba);
+      const realResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, activeDrive);
 
-      const logsToAppend = [
-        `[${timeStr}] LBA #${lba.toLocaleString()} [블록 #${targetBlockId}] 64KB 제로필(0x00) 물리 쓰기 완료 (${realResult.throughputMbSec} MB/s, ${realResult.latencyMs}ms)`,
-        `[${timeStr}] LBA #${lba.toLocaleString()} 하드웨어 컨트롤러 ECC 무결성 검증 (0x00 전수 일치: ${realResult.verifiedZeros ? '정상' : '실패'})`,
-        `[${timeStr}] LBA #${lba.toLocaleString()} [수복 완료] 예비 섹터 매핑 테이블 갱신 (HEALTHY OK)`
-      ];
+      if (realResult.success && realResult.verifiedZeros) {
+        succeededIds.push(targetBlockId);
+        setRepairLogs(prev => [
+          ...prev,
+          `[${timeStr}] LBA #${lba.toLocaleString()} [블록 #${targetBlockId}] 제로필(0x00) 쓰기 검증 완료 (${realResult.throughputMbSec} MB/s, ${realResult.latencyMs}ms)`,
+          `[${timeStr}] LBA #${lba.toLocaleString()} 0x00 전수 일치 확인 -> 수복 완료 (HEALTHY OK)`
+        ]);
+        soundManager.playBeep(800 + (i % 10) * 40, 0.05);
+      } else {
+        failedCount++;
+        const reason = realResult.unsupportedReason || '물리 섹터 쓰기 권한 거부됨';
+        if (!firstFailureReason) firstFailureReason = reason;
+        setRepairLogs(prev => [
+          ...prev,
+          `[${timeStr}] [미지원/실패] LBA #${lba.toLocaleString()} [블록 #${targetBlockId}] — ${reason}`
+        ]);
+      }
 
-      setRepairLogs(prev => [...prev, ...logsToAppend]);
-      soundManager.playBeep(800 + currentIndex * 40, 0.05);
+      // Yield briefly to keep UI responsive
+      await new Promise(r => setTimeout(r, 40));
+    }
 
-      currentIndex++;
-    }, intervalTime);
+    setIsRepairing(false);
+    setProgress(100);
+    setRepairCompleted(true);
+    setRepairedCountSummary(succeededIds.length);
+    setFailedCountSummary(failedCount);
+    setLastUnsupportedReason(firstFailureReason);
+
+    if (succeededIds.length > 0) {
+      setRepairLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] [완료] ${succeededIds.length}개 섹터 실제 0x00 검증 수복 완료 (실패/미지원 ${failedCount}개).`
+      ]);
+      onRepairSectors(activeDrive.id, succeededIds);
+    } else {
+      setRepairLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] [중단] 물리 디스크 쓰기 권한이 없어 섹터 상태 및 SMART 카운터가 변경되지 않았습니다.`
+      ]);
+    }
   };
 
   return (
@@ -245,14 +247,14 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-white tracking-wide">
-                  S.M.A.R.T. 섹터 제로필 수복 & 재할당 엔진
+                  S.M.A.R.T. 섹터 제로필 수복 &amp; 재할당 엔진
                 </h2>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  REAL NATIVE DIRECT ACCESS
+                  REAL DIRECT WRITE VERIFY
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                논리 배드섹터(ECC/CRC 오류) 제로필 수복 및 물리 배드섹터 하드웨어 예비 트랙 치환(Remap)
+                실제 쓰기 핸들(Tauri Win32 PhysicalDrive 또는 OPFS) 검증 기반 제로필(0x00) 수복 엔진
               </p>
             </div>
           </div>
@@ -268,20 +270,20 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
         {/* Content Body */}
         <div className="p-4 sm:p-5 flex-1 overflow-y-auto space-y-4">
-          {/* Safety Lock Prevention Control Card */}
-          <div 
+          {/* Safety Lock Control Card */}
+          <div
             className={`p-3.5 rounded-lg border transition-all duration-300 ${
               showLockWarning ? 'ring-2 ring-rose-500 animate-pulse bg-rose-950/70 border-rose-500 shadow-lg shadow-rose-950/50' :
-              isSafetyLocked 
-                ? 'bg-rose-950/40 border-rose-800/80 shadow-md' 
+              isSafetyLocked
+                ? 'bg-rose-950/40 border-rose-800/80 shadow-md'
                 : 'bg-emerald-950/40 border-emerald-700/80 shadow-md'
             }`}
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">
                 <div className={`p-2 rounded-lg flex-shrink-0 ${
-                  isSafetyLocked 
-                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' 
+                  isSafetyLocked
+                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                     : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                 }`}>
                   {isSafetyLocked ? <Lock className="w-5 h-5 text-rose-400" /> : <Unlock className="w-5 h-5 text-emerald-400 animate-bounce" />}
@@ -292,8 +294,8 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                       {isSafetyLocked ? '🔒 데이터 안전 잠금 (Safety Lock) : 활성화됨' : '🔓 안전 잠금 해제됨 : 쓰기/수복 허용'}
                     </span>
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      isSafetyLocked 
-                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' 
+                      isSafetyLocked
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                         : 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
                     }`}>
                       {isSafetyLocked ? '실수 데이터 소실 방지' : '⚠️ 데이터 소실 주의 (0x00 덮어쓰기)'}
@@ -301,13 +303,13 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                   </div>
                   <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
                     {isSafetyLocked
-                      ? 'S.M.A.R.T. 제로필 및 재할당 작업은 해당 LBA 섹터의 데이터를 \'0x00\'으로 덮어써 영구 초기화합니다. 실수로 인한 데이터 손실을 막기 위해 안전 잠금이 켜져 있습니다. 수복을 진행하려면 우측 토글 버튼을 눌러 잠금을 해제하세요.'
-                      : '주의: 안전 잠금이 해제되어 선택된 섹터의 제로필 쓰기 작업이 허용되었습니다. 수복 시 해당 LBA 섹터의 데이터가 초기화됩니다. 중요 데이터의 사전 백업 여부를 반드시 확인하세요.'}
+                      ? 'S.M.A.R.T. 제로필 작업은 해당 LBA 섹터의 데이터를 0x00으로 덮어씁니다. 수복을 실행하려면 우측 버튼으로 잠금을 해제하세요.'
+                      : '주의: 안전 잠금이 해제되었습니다. 쓰기 권한이 허용된 드라이브/OPFS에 한해 실제 0x00 기록 및 검증을 수행합니다.'}
                   </p>
                   {showLockWarning && (
                     <div className="mt-2 p-2 rounded bg-rose-900/90 border border-rose-400 text-rose-100 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
                       <AlertTriangle className="w-4 h-4 text-amber-300 flex-shrink-0" />
-                      <span>실수 데이터 소실 방지: [잠금 해제 (Unlock)] 버튼을 먼저 클릭하여 안전 잠금을 해제해야 수복을 시작할 수 있습니다!</span>
+                      <span>[잠금 해제 (Unlock)] 버튼을 먼저 클릭해야 수복을 시작할 수 있습니다.</span>
                     </div>
                   )}
                 </div>
@@ -352,7 +354,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 수복 대상 드라이브
               </div>
               <div className="text-xs font-bold text-white truncate">{activeDrive.name}</div>
-              <div className="text-[10px] text-slate-400 font-mono">{activeDrive.model} · {activeDrive.capacityGb} GB</div>
+              <div className="text-[10px] text-slate-400 font-mono">
+                {activeDrive.model} · {activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : '용량 N/A'}
+              </div>
             </div>
 
             <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
@@ -361,9 +365,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 보류 섹터 (Pending C5h)
               </div>
               <div className="text-sm font-bold text-amber-400 font-mono">
-                {pendingAttr ? pendingAttr.raw : '0 (0x00)'}
+                {pendingAttr ? pendingAttr.raw : activeDrive.smartAttributes.length > 0 ? '0 (0x00)' : 'N/A'}
               </div>
-              <div className="text-[10px] text-slate-400">수복 시 0으로 동기화</div>
+              <div className="text-[10px] text-slate-400">실제 수복 성공 시 동기화</div>
             </div>
 
             <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
@@ -372,21 +376,21 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 치환 섹터 (Reallocated 05h)
               </div>
               <div className="text-sm font-bold text-emerald-400 font-mono">
-                {reallocatedAttr ? reallocatedAttr.raw : '0 (0x00)'}
+                {reallocatedAttr ? reallocatedAttr.raw : activeDrive.smartAttributes.length > 0 ? '0 (0x00)' : 'N/A'}
               </div>
-              <div className="text-[10px] text-slate-400">예비 트랙 치환 할당 카운트</div>
+              <div className="text-[10px] text-slate-400">예비 트랙 치환 카운트</div>
             </div>
           </div>
 
-          {/* Repair Difficulty & Estimated Completion Time Card */}
+          {/* Repair Difficulty */}
           <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="text-xs font-bold text-white flex items-center gap-1.5">
                 <Sliders className="w-3.5 h-3.5 text-indigo-400" />
-                수복 방식 및 난이도 선택 (Repair Method & Difficulty)
+                수복 방식 및 난이도 선택 (Repair Method &amp; Difficulty)
               </div>
               <div className="text-[11px] font-mono text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded border border-indigo-500/20">
-                예상 소요 시간: <strong className="text-white">{formatEstimatedTime(estimatedSeconds)}</strong> (완료 예정: <span className="text-emerald-400">{estimatedCompletionTimeStr}</span>)
+                예상 소요: <strong className="text-white">{formatEstimatedTime(estimatedSeconds)}</strong> ({estimatedCompletionTimeStr})
               </div>
             </div>
 
@@ -403,9 +407,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
               >
                 <div className="flex items-center justify-between text-xs font-bold mb-1">
                   <span className="text-white">표준 0x00 제로필</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono">난이도 보통 (1.0x)</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono">1.0x</span>
                 </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">단일 통과 CRC 재기록 및 퀵 수복 작업</p>
+                <p className="text-[10px] text-slate-400 leading-relaxed">단일 통과 0x00 쓰기 및 읽기 대조 검증</p>
               </button>
 
               <button
@@ -420,9 +424,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
               >
                 <div className="flex items-center justify-between text-xs font-bold mb-1">
                   <span className="text-white">심층 ECC 정합성</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">난이도 높음 (2.2x)</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">2.2x</span>
                 </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">3중 패리티 교정 및 플래시 전하 검증</p>
+                <p className="text-[10px] text-slate-400 leading-relaxed">패리티 검증 및 전하 무결성 확인</p>
               </button>
 
               <button
@@ -437,16 +441,16 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
               >
                 <div className="flex items-center justify-between text-xs font-bold mb-1">
                   <span className="text-white">저수준 펌웨어 치환</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-mono">난이도 극상 (4.0x)</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-mono">4.0x</span>
                 </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">컨트롤러 예비 트랙 강제 물리 맵핑</p>
+                <p className="text-[10px] text-slate-400 leading-relaxed">컨트롤러 예비 트랙 물리 맵핑 시도</p>
               </button>
             </div>
 
             <div className="text-[11px] text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800">
               <span className="flex items-center gap-1.5">
                 <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
-                디스크 속도 프로필: <strong className="text-slate-200 font-mono">{speedProfile.label}</strong>
+                디스크 프로필: <strong className="text-slate-200 font-mono">{speedProfile.label}</strong>
               </span>
               <span className="font-mono text-slate-300">
                 선택 블록: <strong className="text-white">{selectedBlockIds.length}</strong>개
@@ -454,20 +458,20 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             </div>
           </div>
 
-          {/* How it Works / Repair Engine Steps */}
+          {/* Info Panel */}
           <div className="p-3.5 rounded-lg bg-indigo-950/30 border border-indigo-800/50 space-y-2">
             <div className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
               <Zap className="w-4 h-4 text-indigo-400" />
-              S.M.A.R.T. 제로필(Zero-Fill) & 하드웨어 재할당 동작 원리
+              S.M.A.R.T. 제로필(Zero-Fill) 동작 안내
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300">
               <div className="flex items-start gap-1.5">
                 <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-                <span><strong>논리 배드섹터 (Logical Bad)</strong>: ECC 체크섬 패리티 불일치 영역에 0x00 패턴을 강제 기록하여 CRC 메타데이터를 초기화 및 복구합니다.</span>
+                <span><strong>실제 스토리지 쓰기 검증</strong>: Win32 PhysicalDrive 또는 OPFS 스토리지에 실제로 0x00 블록을 기록하고 재판독 일치 여부를 검증합니다.</span>
               </div>
               <div className="flex items-start gap-1.5">
                 <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-                <span><strong>물리 배드섹터 (Physical Bad)</strong>: 응답 불능 섹터 기록 시 컨트롤러가 결함 섹터를 감지하고 Spare Track으로 재할당(ID 05h)합니다.</span>
+                <span><strong>권한 미충족 시 가짜 처리 금지</strong>: 읽기 전용 파일/USB 핸들에서는 거짓 수복 완료 처리를 하지 않고 거부 사유를 반환합니다.</span>
               </div>
             </div>
           </div>
@@ -492,7 +496,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                     현재 감지된 배드섹터 및 지연 블록이 없습니다.
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    드라이브 표면 상태가 양호하여 별도의 제로필 수복이나 S.M.A.R.T. 재할당 작업이 필요하지 않습니다.
+                    드라이브 표면 검사 후 손상 블록이 발견되면 이 목록에 표시됩니다.
                   </div>
                 </div>
               ) : (
@@ -528,8 +532,8 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
                       <div className="flex items-center gap-2">
                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                          block.status === 'bad' 
-                            ? 'bg-red-500/20 text-red-400 border border-red-500/30' 
+                          block.status === 'bad'
+                            ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                             : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                         }`}>
                           {block.status === 'bad' ? 'BAD (UNC)' : `${block.responseTimeMs}ms Delay`}
@@ -542,7 +546,6 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             </div>
           </div>
 
-          {/* Progress Bar during Repair */}
           {isRepairing && (
             <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg space-y-2 animate-in fade-in">
               <div className="flex items-center justify-between text-xs font-mono">
@@ -565,16 +568,16 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           <div>
             <div className="flex items-center gap-1.5 mb-1.5 text-xs font-bold text-slate-400">
               <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-              실시간 제로필 수복 & S.M.A.R.T. 드라이버 커널 터미널
+              실시간 제로필 쓰기 검증 &amp; 드라이버 터미널
             </div>
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-[11px] h-36 overflow-y-auto text-emerald-400 space-y-1 shadow-inner select-text">
               {repairLogs.length === 0 ? (
                 <div className="text-slate-600 text-xs">
-                  수복 시작 버튼을 누르면 ATA / NVMe 드라이버의 실시간 패스트루 로그가 출력됩니다...
+                  수복 시작 버튼을 누르면 실제 I/O 쓰기 검증 로그가 출력됩니다...
                 </div>
               ) : (
                 repairLogs.map((log, index) => (
-                  <div key={index} className="leading-relaxed">
+                  <div key={index} className={`leading-relaxed ${log.includes('[미지원/실패]') || log.includes('[중단]') ? 'text-amber-400' : ''}`}>
                     {log}
                   </div>
                 ))
@@ -583,18 +586,32 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             </div>
           </div>
 
-          {/* Success Banner */}
-          {repairCompleted && (
+          {/* Honest Outcome Banner */}
+          {repairCompleted && repairedCountSummary > 0 && (
             <div className="p-3.5 rounded-lg bg-emerald-950/40 border border-emerald-700/60 flex items-center justify-between animate-in zoom-in-95">
               <div className="flex items-center gap-2.5">
                 <CheckCircle2 className="w-6 h-6 text-emerald-400 flex-shrink-0" />
                 <div>
                   <div className="text-xs font-bold text-emerald-300">
-                    S.M.A.R.T. 배드섹터 제로필 수복 완료!
+                    실제 제로필 쓰기 검증 수복 완료 ({repairedCountSummary}개 성공{failedCountSummary > 0 ? `, ${failedCountSummary}개 미지원` : ''})
                   </div>
                   <div className="text-[11px] text-slate-300">
-                    {repairedCountSummary}개 섹터의 ECC 패리티가 수복되었으며 예비 트랙 치환(05h)이 동기화되었습니다.
+                    수복에 성공한 블록이 정상 상태로 갱신되었습니다.
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {repairCompleted && repairedCountSummary === 0 && failedCountSummary > 0 && (
+            <div className="p-3.5 rounded-lg bg-amber-950/40 border border-amber-700/60 flex items-start gap-2.5 animate-in zoom-in-95">
+              <AlertOctagon className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-xs font-bold text-amber-300">
+                  직접 물리 섹터 쓰기 권한 없음 ({failedCountSummary}개 블록 미변경)
+                </div>
+                <div className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
+                  {lastUnsupportedReason || '현재 실행 환경에서 대상 장치에 대한 저수준 쓰기 핸들이 거부되었습니다.'}
                 </div>
               </div>
             </div>
@@ -614,9 +631,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           <button
             disabled={isRepairing || selectedBlockIds.length === 0}
             onClick={handleStartRepair}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50 ${
               isRepairing
-                ? 'bg-slate-800 text-slate-400 cursor-not-allowed opacity-60'
+                ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
                 : isSafetyLocked
                   ? 'bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40'
                   : 'bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white ring-2 ring-rose-500/40'
@@ -635,14 +652,14 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             ) : (
               <>
                 <Wrench className="w-3.5 h-3.5 text-amber-300" />
-                <span>⚡ S.M.A.R.T. 제로필 수복 & 재할당 실행</span>
+                <span>⚡ S.M.A.R.T. 제로필 수복 실행</span>
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* File System Damage & Backup Warning Modal Popup */}
+      {/* Backup Warning Modal */}
       {showBackupWarningModal && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-slate-100 relative">
@@ -655,20 +672,20 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                   ⚠️ 파일 시스템 손상 위험 경고 및 백업 권장
                 </h3>
                 <p className="text-xs text-amber-300/90">
-                  현재 드라이브에 감지된 배드섹터 및 지연 블록 상태
+                  현재 드라이브에 선택된 {selectedBlockIds.length}개 블록 덮어쓰기 확인
                 </p>
               </div>
             </div>
 
             <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3 text-xs leading-relaxed text-slate-300">
               <p>
-                선택하신 스토리지에는 현재 <strong className="text-rose-400 font-bold">{selectedBlockIds.length}개</strong>의 결함 섹터가 존재합니다. 결함 섹터로 인해 읽기/쓰기 실패가 발생할 경우, <strong className="text-amber-300 font-bold">NTFS/FAT/APFS 등 파일 시스템 메타데이터(MFT, Superblock) 손상 및 데이터 유실 가능성</strong>이 내포되어 있습니다.
+                선택하신 스토리지의 결함 섹터에 0x00을 기록할 경우, 파일 시스템 메타데이터 및 기존 데이터가 영구 초기화됩니다.
               </p>
               <div className="p-3 rounded-lg bg-amber-950/30 border border-amber-700/40 text-amber-200 flex items-start gap-2">
                 <ShieldAlert className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
                 <div>
                   <strong className="text-white block mb-0.5">중요 데이터 백업 권장</strong>
-                  수복 작업(제로필 및 재할당) 진행 전 중요 파일을 외장 드라이브나 클라우드에 먼저 백업하실 것을 강력히 권장합니다. 백업 없이 수복 진행 시 손상된 섹터의 파일 영역 데이터가 유실될 수 있습니다.
+                  수복 작업 진행 전 중요 파일을 반드시 다른 저장장치에 백업하십시오.
                 </div>
               </div>
             </div>
@@ -685,7 +702,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-lg shadow-rose-900/40 transition-all cursor-pointer flex items-center gap-1.5"
               >
                 <Wrench className="w-4 h-4 text-amber-200" />
-                <span>백업 확인 완료 · 복구 작업 시작</span>
+                <span>백업 확인 완료 · 수복 시작</span>
               </button>
             </div>
           </div>

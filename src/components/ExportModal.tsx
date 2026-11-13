@@ -18,6 +18,7 @@ import {
   Check
 } from 'lucide-react';
 import { exportPdfReport, exportCsvReport, exportJsonReport, exportOtelMetricsReport } from '../utils/reportGenerator';
+import { PROJECT_INFO } from '../config/projectInfo';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -302,7 +303,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {/* Footer */}
         <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex items-center justify-between">
           <div className="text-[11px] text-slate-400 font-mono">
-            DiskSentinel Pro v4.4.0 · Apache 2.0
+            {PROJECT_INFO.appName} {PROJECT_INFO.version} · Apache 2.0
           </div>
           <button
             onClick={onClose}

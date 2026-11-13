@@ -1,104 +1,76 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { DiskDrive } from '../types';
-import { 
-  Thermometer, 
-  TrendingUp, 
-  TrendingDown, 
-  Clock, 
-  Flame, 
-  ShieldCheck, 
-  AlertTriangle, 
-  Activity, 
-  Info,
-  Minus
+import {
+  Thermometer,
+  TrendingUp,
+  TrendingDown,
+  Clock,
+  Flame,
+  Activity,
+  Info
 } from 'lucide-react';
 
 interface TemperaturePoint {
-  timeOffsetSeconds: number; // -600 to 0 (where 0 is now)
+  timeOffsetSeconds: number;
   temperature: number;
   timestamp: number;
 }
 
 interface TemperatureLineChartProps {
   drive: DiskDrive;
-  currentTemperature: number;
+  currentTemperature: number | null;
   isScanning?: boolean;
-  isThermalStress?: boolean;
 }
 
 export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
   drive,
-  currentTemperature,
-  isScanning = false,
-  isThermalStress = false
+  currentTemperature
 }) => {
-  // 10 minutes = 600 seconds
   const WINDOW_SECONDS = 600;
-  const SAMPLE_INTERVAL_SECONDS = 10;
-  const TOTAL_POINTS = WINDOW_SECONDS / SAMPLE_INTERVAL_SECONDS; // 60 data points
 
-  // Generate initial 10-minute history seeded around baseline temperature
-  const [history, setHistory] = useState<TemperaturePoint[]>(() => {
-    const points: TemperaturePoint[] = [];
-    const now = Date.now();
-    const baseTemp = Math.max(25, drive.temperatureC || 36);
-
-    for (let i = TOTAL_POINTS; i >= 0; i--) {
-      const offset = -(i * SAMPLE_INTERVAL_SECONDS);
-      // Gentle curve ending at current temperature
-      const progress = 1 - (i / TOTAL_POINTS); // 0 (10m ago) to 1 (now)
-      const simulatedTemp = baseTemp + (currentTemperature - baseTemp) * progress + (Math.sin(i * 0.4) * 0.3);
-      points.push({
-        timeOffsetSeconds: offset,
-        temperature: Number(simulatedTemp.toFixed(1)),
-        timestamp: now + offset * 1000
-      });
-    }
-    return points;
-  });
+  // Record ONLY genuine measured temperature points — zero fabricated backfill curves
+  const [history, setHistory] = useState<TemperaturePoint[]>(() =>
+    currentTemperature !== null
+      ? [{ timeOffsetSeconds: 0, temperature: Number(currentTemperature.toFixed(1)), timestamp: Date.now() }]
+      : []
+  );
 
   const lastDriveIdRef = useRef(drive.id);
 
-  // Reset or reseed when drive changes
+  // Reset timeline on drive switch
   useEffect(() => {
     if (lastDriveIdRef.current !== drive.id) {
       lastDriveIdRef.current = drive.id;
-      const points: TemperaturePoint[] = [];
-      const now = Date.now();
-      const baseTemp = Math.max(25, drive.temperatureC || 36);
-
-      for (let i = TOTAL_POINTS; i >= 0; i--) {
-        const offset = -(i * SAMPLE_INTERVAL_SECONDS);
-        const progress = 1 - (i / TOTAL_POINTS);
-        const simulatedTemp = baseTemp + (currentTemperature - baseTemp) * progress + (Math.sin(i * 0.4) * 0.3);
-        points.push({
-          timeOffsetSeconds: offset,
-          temperature: Number(simulatedTemp.toFixed(1)),
-          timestamp: now + offset * 1000
-        });
-      }
-      setHistory(points);
+      setHistory(
+        currentTemperature !== null
+          ? [{ timeOffsetSeconds: 0, temperature: Number(currentTemperature.toFixed(1)), timestamp: Date.now() }]
+          : []
+      );
     }
-  }, [drive.id, currentTemperature, TOTAL_POINTS]);
+  }, [drive.id, currentTemperature]);
 
-  // Append real-time temperature updates every 4 seconds
+  // Append genuine polled thermal readings every 4 seconds when hardware sensor is present
   useEffect(() => {
+    if (currentTemperature === null) {
+      setHistory([]);
+      return;
+    }
+
     const timer = setInterval(() => {
       setHistory(prev => {
         const now = Date.now();
-        // Shift time offsets backward by interval
-        const updated = prev.map(p => ({
-          ...p,
-          timeOffsetSeconds: Math.round((p.timestamp - now) / 1000)
-        })).filter(p => p.timeOffsetSeconds >= -WINDOW_SECONDS);
+        const updated = prev
+          .map(p => ({
+            ...p,
+            timeOffsetSeconds: Math.round((p.timestamp - now) / 1000)
+          }))
+          .filter(p => p.timeOffsetSeconds >= -WINDOW_SECONDS);
 
-        // Add current live point
         updated.push({
           timeOffsetSeconds: 0,
           temperature: Number(currentTemperature.toFixed(1)),
           timestamp: now
         });
-
         return updated;
       });
     }, 4000);
@@ -106,21 +78,58 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
     return () => clearInterval(timer);
   }, [currentTemperature, WINDOW_SECONDS]);
 
-  // Statistics over the 10-minute window
   const stats = useMemo(() => {
-    if (history.length === 0) {
-      return { min: currentTemperature, max: currentTemperature, avg: currentTemperature, delta: 0 };
+    if (currentTemperature === null || history.length === 0) {
+      return { min: null, max: null, avg: null, delta: null };
     }
     const temps = history.map(p => p.temperature);
     const min = Math.min(...temps);
     const max = Math.max(...temps);
     const avg = Number((temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1));
-    const first = history[0]?.temperature || currentTemperature;
+    const first = history[0]?.temperature ?? currentTemperature;
     const delta = Number((currentTemperature - first).toFixed(1));
     return { min, max, avg, delta };
   }, [history, currentTemperature]);
 
-  // Thermal classification
+  // Hover Tooltip Interaction hooks must be declared unconditionally before any return
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  if (currentTemperature === null) {
+    return (
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 shadow-xs transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0">
+              <Thermometer className="w-4 h-4 text-slate-400" />
+            </div>
+            <div>
+              <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                실시간 디스크 온도 변화 추이
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                NVMe Log 02h / ATA S.M.A.R.T. 온도 센서 기반 열화 프로파일
+              </p>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+            온도 센서 N/A
+          </span>
+        </div>
+
+        <div className="p-6 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 text-center space-y-1.5">
+          <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            하드웨어 온도 센서 미제공 (N/A)
+          </div>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-lg mx-auto leading-relaxed">
+            브라우저 샌드박스 또는 USB 브릿지 장치에서는 물리 디스크의 서멀 센서 레지스터를 읽을 수 없으므로 가상 온도 곡선을 생성하지 않습니다.
+            Windows Tauri 데스크톱 관리자 권한으로 실행 시 실제 하드웨어 온도가 실시간 기록됩니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   let thermalGrade = {
     title: '정상 동작 범위',
     colorText: 'text-emerald-500 dark:text-emerald-400',
@@ -163,22 +172,16 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
     };
   }
 
-  // Hover Tooltip Interaction
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-
-  // SVG Chart Geometry
   const chartWidth = 840;
   const chartHeight = 220;
   const padding = { top: 25, right: 30, bottom: 35, left: 50 };
   const innerWidth = chartWidth - padding.left - padding.right;
   const innerHeight = chartHeight - padding.top - padding.bottom;
 
-  // Y Scale bounds (dynamic with safe margin)
-  const yMin = Math.min(25, Math.floor(stats.min - 3));
-  const yMax = Math.max(68, Math.ceil(stats.max + 4));
+  const yMin = Math.min(25, Math.floor((stats.min ?? currentTemperature) - 3));
+  const yMax = Math.max(68, Math.ceil((stats.max ?? currentTemperature) + 4));
 
   const getX = (timeOffset: number) => {
-    // timeOffset is between -600 and 0
     const ratio = (timeOffset + WINDOW_SECONDS) / WINDOW_SECONDS;
     return padding.left + ratio * innerWidth;
   };
@@ -188,26 +191,21 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
     return padding.top + innerHeight - ratio * innerHeight;
   };
 
-  // Generate SVG Path
   const pointsString = history.map(p => `${getX(p.timeOffsetSeconds)},${getY(p.temperature)}`).join(' ');
-  const areaPath = history.length > 0
+  const areaPath = history.length > 1
     ? `M ${getX(history[0].timeOffsetSeconds)},${padding.top + innerHeight} L ${history.map(p => `${getX(p.timeOffsetSeconds)},${getY(p.temperature)}`).join(' L ')} L ${getX(history[history.length - 1].timeOffsetSeconds)},${padding.top + innerHeight} Z`
     : '';
 
-  // Reference lines Y positions
   const yOverheat60 = getY(60);
   const yCaution45 = getY(45);
   const yBase30 = getY(30);
 
-  // Handle Mouse Over SVG
-  const svgRef = useRef<SVGSVGElement>(null);
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!svgRef.current || history.length === 0) return;
     const rect = svgRef.current.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const svgX = (mouseX / rect.width) * chartWidth;
 
-    // Find closest point
     let closestIdx = 0;
     let minDiff = Infinity;
     history.forEach((p, idx) => {
@@ -229,7 +227,6 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs transition-colors">
-      {/* Chart Top Header & Summary Pill Badges */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-200 dark:border-slate-800">
         <div>
           <div className="flex items-center gap-2">
@@ -238,21 +235,19 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
             </div>
             <div>
               <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span>최근 10분간 디스크 온도 변화 추이</span>
+                <span>실시간 디스크 온도 변화 추이 ({history.length}개 실측 샘플)</span>
                 <span className="hidden sm:inline-block text-[10px] font-mono px-1.5 py-0.2 rounded font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
-                  실시간 롤링 그래프
+                  실시간 계측 롤링 그래프
                 </span>
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                연속 I/O 부하에 따른 드라이브 센서의 10분간 열화 및 온도 프로파일 분석
+                커널 온도 센서에서 4초 간격으로 실측 수집된 드라이브 열 변화 추이
               </p>
             </div>
           </div>
         </div>
 
-        {/* 4 Quick Stat Metric Cards */}
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-          {/* Current Temp */}
           <div className={`px-2.5 py-1.5 rounded-lg border flex items-center gap-2 ${thermalGrade.colorBg}`}>
             <Flame className={`w-3.5 h-3.5 ${thermalGrade.colorText} shrink-0 animate-pulse`} />
             <div>
@@ -265,33 +260,30 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
             </div>
           </div>
 
-          {/* Min Temp */}
           <div className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center gap-2">
             <TrendingDown className="w-3.5 h-3.5 text-blue-500 shrink-0" />
             <div>
               <div className="text-[9px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">
-                10분 최저
+                관측 최저
               </div>
               <div className="text-xs sm:text-sm font-bold font-mono text-slate-800 dark:text-slate-200">
-                {stats.min.toFixed(1)}°C
+                {stats.min !== null ? `${stats.min.toFixed(1)}°C` : 'N/A'}
               </div>
             </div>
           </div>
 
-          {/* Max Temp */}
           <div className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center gap-2">
             <TrendingUp className="w-3.5 h-3.5 text-rose-500 shrink-0" />
             <div>
               <div className="text-[9px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">
-                10분 최고
+                관측 최고
               </div>
               <div className="text-xs sm:text-sm font-bold font-mono text-slate-800 dark:text-slate-200">
-                {stats.max.toFixed(1)}°C
+                {stats.max !== null ? `${stats.max.toFixed(1)}°C` : 'N/A'}
               </div>
             </div>
           </div>
 
-          {/* Average & Delta */}
           <div className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center gap-2">
             <Activity className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
             <div>
@@ -299,19 +291,20 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
                 평균 (변화량)
               </div>
               <div className="text-xs sm:text-sm font-bold font-mono text-slate-800 dark:text-slate-200">
-                {stats.avg.toFixed(1)}°C
-                <span className={`text-[10px] ml-1 font-semibold ${
-                  stats.delta > 0 ? 'text-rose-500' : stats.delta < 0 ? 'text-blue-500' : 'text-slate-400'
-                }`}>
-                  ({stats.delta > 0 ? `+${stats.delta}` : stats.delta}°C)
-                </span>
+                {stats.avg !== null ? `${stats.avg.toFixed(1)}°C` : 'N/A'}
+                {stats.delta !== null && (
+                  <span className={`text-[10px] ml-1 font-semibold ${
+                    stats.delta > 0 ? 'text-rose-500' : stats.delta < 0 ? 'text-blue-500' : 'text-slate-400'
+                  }`}>
+                    ({stats.delta > 0 ? `+${stats.delta}` : stats.delta}°C)
+                  </span>
+                )}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* SVG Interactive Line Chart Container */}
       <div className="relative w-full overflow-hidden select-none bg-slate-50/60 dark:bg-slate-950/60 rounded-lg border border-slate-200 dark:border-slate-800/80 p-1 sm:p-2">
         <svg
           ref={svgRef}
@@ -321,129 +314,60 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
           onMouseLeave={handleMouseLeave}
         >
           <defs>
-            {/* Linear Gradient Fill under the Curve */}
             <linearGradient id="tempGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={thermalGrade.gradientStart} stopOpacity="0.35" />
               <stop offset="60%" stopColor={thermalGrade.gradientEnd} stopOpacity="0.10" />
               <stop offset="100%" stopColor={thermalGrade.gradientEnd} stopOpacity="0.0" />
             </linearGradient>
 
-            {/* Glowing Drop Shadow Filter for Active Line */}
             <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor={thermalGrade.gradientStart} floodOpacity="0.4" />
             </filter>
           </defs>
 
-          {/* Horizontal Grid & Threshold Guides */}
-          {/* 60°C Critical Overheat Threshold */}
           {yOverheat60 >= padding.top && yOverheat60 <= padding.top + innerHeight && (
-            <g className="transition-all">
-              <line
-                x1={padding.left}
-                y1={yOverheat60}
-                x2={padding.left + innerWidth}
-                y2={yOverheat60}
-                stroke="#EF4444"
-                strokeWidth="1.2"
-                strokeDasharray="4 4"
-                strokeOpacity="0.8"
-              />
-              <text
-                x={padding.left + innerWidth - 6}
-                y={yOverheat60 - 5}
-                textAnchor="end"
-                className="fill-red-500 dark:fill-red-400 text-[10px] font-mono font-bold"
-              >
-                60°C 과열 한계선 (Overheat)
+            <g>
+              <line x1={padding.left} y1={yOverheat60} x2={padding.left + innerWidth} y2={yOverheat60} stroke="#EF4444" strokeWidth="1.2" strokeDasharray="4 4" strokeOpacity="0.8" />
+              <text x={padding.left + innerWidth - 6} y={yOverheat60 - 5} textAnchor="end" className="fill-red-500 dark:fill-red-400 text-[10px] font-mono font-bold">
+                60°C 과열 한계선
               </text>
             </g>
           )}
 
-          {/* 45°C Warning Caution Line */}
           {yCaution45 >= padding.top && yCaution45 <= padding.top + innerHeight && (
-            <g className="transition-all">
-              <line
-                x1={padding.left}
-                y1={yCaution45}
-                x2={padding.left + innerWidth}
-                y2={yCaution45}
-                stroke="#F59E0B"
-                strokeWidth="1"
-                strokeDasharray="3 3"
-                strokeOpacity="0.7"
-              />
-              <text
-                x={padding.left + innerWidth - 6}
-                y={yCaution45 - 5}
-                textAnchor="end"
-                className="fill-amber-600 dark:fill-amber-400 text-[10px] font-mono font-bold"
-              >
-                45°C 주의선 (Warning)
+            <g>
+              <line x1={padding.left} y1={yCaution45} x2={padding.left + innerWidth} y2={yCaution45} stroke="#F59E0B" strokeWidth="1" strokeDasharray="3 3" strokeOpacity="0.7" />
+              <text x={padding.left + innerWidth - 6} y={yCaution45 - 5} textAnchor="end" className="fill-amber-600 dark:fill-amber-400 text-[10px] font-mono font-bold">
+                45°C 주의선
               </text>
             </g>
           )}
 
-          {/* 30°C Baseline */}
           {yBase30 >= padding.top && yBase30 <= padding.top + innerHeight && (
             <g>
-              <line
-                x1={padding.left}
-                y1={yBase30}
-                x2={padding.left + innerWidth}
-                y2={yBase30}
-                stroke="#94A3B8"
-                strokeWidth="0.8"
-                strokeDasharray="2 2"
-                strokeOpacity="0.3"
-              />
-              <text
-                x={padding.left + innerWidth - 6}
-                y={yBase30 - 4}
-                textAnchor="end"
-                className="fill-slate-400 text-[9px] font-mono"
-              >
+              <line x1={padding.left} y1={yBase30} x2={padding.left + innerWidth} y2={yBase30} stroke="#94A3B8" strokeWidth="0.8" strokeDasharray="2 2" strokeOpacity="0.3" />
+              <text x={padding.left + innerWidth - 6} y={yBase30 - 4} textAnchor="end" className="fill-slate-400 text-[9px] font-mono">
                 30°C 상온 기저선
               </text>
             </g>
           )}
 
-          {/* Y-Axis Temperature Labels */}
           {[yMin, 35, 45, 55, 65].filter(t => t >= yMin && t <= yMax).map(t => {
             const y = getY(t);
             return (
               <g key={t}>
-                <line
-                  x1={padding.left - 4}
-                  y1={y}
-                  x2={padding.left + innerWidth}
-                  y2={y}
-                  stroke="#CBD5E1"
-                  className="dark:stroke-slate-800"
-                  strokeWidth="0.5"
-                  strokeOpacity="0.4"
-                />
-                <text
-                  x={padding.left - 8}
-                  y={y + 3}
-                  textAnchor="end"
-                  className="fill-slate-400 text-[10px] font-mono"
-                >
+                <line x1={padding.left - 4} y1={y} x2={padding.left + innerWidth} y2={y} stroke="#CBD5E1" className="dark:stroke-slate-800" strokeWidth="0.5" strokeOpacity="0.4" />
+                <text x={padding.left - 8} y={y + 3} textAnchor="end" className="fill-slate-400 text-[10px] font-mono">
                   {t}°C
                 </text>
               </g>
             );
           })}
 
-          {/* Area Fill */}
           {areaPath && (
-            <path
-              d={areaPath}
-              fill="url(#tempGradient)"
-              className="transition-all duration-300"
-            />
+            <path d={areaPath} fill="url(#tempGradient)" className="transition-all duration-300" />
           )}
 
-          {/* Main Temperature Polyline */}
           {history.length > 1 && (
             <polyline
               points={pointsString}
@@ -457,7 +381,6 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
             />
           )}
 
-          {/* Real-time Pulsing Dot at Current Timestamp (0s, Right Edge) */}
           {history.length > 0 && (() => {
             const last = history[history.length - 1];
             const cx = getX(last.timeOffsetSeconds);
@@ -470,32 +393,13 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
             );
           })()}
 
-          {/* Hover Crosshair & Tooltip Point */}
           {hoveredPoint && (
             <g>
-              {/* Vertical Crosshair Line */}
-              <line
-                x1={getX(hoveredPoint.timeOffsetSeconds)}
-                y1={padding.top}
-                x2={getX(hoveredPoint.timeOffsetSeconds)}
-                y2={padding.top + innerHeight}
-                stroke="#6366F1"
-                strokeWidth="1.2"
-                strokeDasharray="3 3"
-              />
-              {/* Point Circle */}
-              <circle
-                cx={getX(hoveredPoint.timeOffsetSeconds)}
-                cy={getY(hoveredPoint.temperature)}
-                r="5"
-                fill="#FFFFFF"
-                stroke="#6366F1"
-                strokeWidth="2.5"
-              />
+              <line x1={getX(hoveredPoint.timeOffsetSeconds)} y1={padding.top} x2={getX(hoveredPoint.timeOffsetSeconds)} y2={padding.top + innerHeight} stroke="#6366F1" strokeWidth="1.2" strokeDasharray="3 3" />
+              <circle cx={getX(hoveredPoint.timeOffsetSeconds)} cy={getY(hoveredPoint.temperature)} r="5" fill="#FFFFFF" stroke="#6366F1" strokeWidth="2.5" />
             </g>
           )}
 
-          {/* X-Axis Ticks (-10m, -8m, -6m, -4m, -2m, Now) */}
           {[
             { offset: -600, label: '-10분' },
             { offset: -480, label: '-8분' },
@@ -507,14 +411,7 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
             const x = getX(tick.offset);
             return (
               <g key={tick.offset}>
-                <line
-                  x1={x}
-                  y1={padding.top + innerHeight}
-                  x2={x}
-                  y2={padding.top + innerHeight + 4}
-                  stroke="#94A3B8"
-                  strokeWidth="1"
-                />
+                <line x1={x} y1={padding.top + innerHeight} x2={x} y2={padding.top + innerHeight + 4} stroke="#94A3B8" strokeWidth="1" />
                 <text
                   x={x}
                   y={padding.top + innerHeight + 17}
@@ -528,11 +425,8 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
           })}
         </svg>
 
-        {/* Floating Tooltip HTML Overlay */}
         {hoveredPoint && (
-          <div
-            className="absolute top-3 left-1/2 transform -translate-x-1/2 pointer-events-none px-3 py-1.5 rounded-lg bg-slate-900/95 text-white border border-slate-700 shadow-xl backdrop-blur-xs text-xs flex items-center gap-3 font-mono animate-in fade-in duration-100"
-          >
+          <div className="absolute top-3 left-1/2 transform -translate-x-1/2 pointer-events-none px-3 py-1.5 rounded-lg bg-slate-900/95 text-white border border-slate-700 shadow-xl backdrop-blur-xs text-xs flex items-center gap-3 font-mono animate-in fade-in duration-100">
             <div className="flex items-center gap-1.5 text-slate-300">
               <Clock className="w-3.5 h-3.5 text-indigo-400" />
               <span>
@@ -546,35 +440,20 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
               <Thermometer className="w-3.5 h-3.5 text-rose-400" />
               <span className="text-amber-300">{hoveredPoint.temperature.toFixed(1)}°C</span>
             </div>
-            <div className="h-3 w-px bg-slate-700" />
-            <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold font-sans ${
-              hoveredPoint.temperature >= 60
-                ? 'bg-red-500/30 text-red-300 border border-red-500/50'
-                : hoveredPoint.temperature >= 45
-                ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
-                : 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/50'
-            }`}>
-              {hoveredPoint.temperature >= 60 ? '과열' : hoveredPoint.temperature >= 45 ? '주의' : '정상'}
-            </span>
           </div>
         )}
       </div>
 
-      {/* Bottom Health & Thermal Assessment Advisory Strip */}
       <div className={`mt-2.5 p-2.5 rounded-lg border text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 ${thermalGrade.colorBg}`}>
         <div className="flex items-center gap-2">
           <div className={`w-2.5 h-2.5 rounded-full ${thermalGrade.colorBadge} shrink-0 animate-ping`} />
-          <span className="font-bold">
-            열 상태 진단: {thermalGrade.title}
-          </span>
-          <span className="text-[11px] text-slate-600 dark:text-slate-300">
-            — {thermalGrade.advice}
-          </span>
+          <span className="font-bold">열 상태 진단: {thermalGrade.title}</span>
+          <span className="text-[11px] text-slate-600 dark:text-slate-300">— {thermalGrade.advice}</span>
         </div>
 
         <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 flex items-center gap-2 shrink-0">
           <Info className="w-3.5 h-3.5" />
-          <span>권장 보증 정격: 0°C ~ 45°C (초과 시 수명 감소)</span>
+          <span>권장 보증 정격: 0°C ~ 45°C</span>
         </div>
       </div>
     </div>

@@ -15,8 +15,8 @@ namespace DiskSentinel
 {
     static class Program
     {
-        private const string AppVersion = "4.5.0";
-        private const string EngineVersion = "4.5.0";
+        private const string AppVersion = "4.6.0";
+        private const string EngineVersion = "4.6.0";
 
         [STAThread]
         static void Main(string[] args)

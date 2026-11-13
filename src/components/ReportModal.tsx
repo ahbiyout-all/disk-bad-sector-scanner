@@ -177,14 +177,14 @@ export const ReportModal: React.FC<ReportModalProps> = ({
           {/* Diagnostic Result Banner */}
           <div className={`p-3 rounded-lg border flex items-start gap-2.5 ${
             isHealthy
-              ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
-              : 'bg-red-950/20 border-red-500/30 text-red-200'
+              ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200'
+              : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-500/30 text-red-800 dark:text-red-200'
           }`}>
             <div className="shrink-0 mt-0.5">
               {isHealthy ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               ) : (
-                <ShieldAlert className="w-5 h-5 text-red-400" />
+                <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400" />
               )}
             </div>
             <div className="space-y-0.5">
@@ -192,11 +192,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({
                 <span className="text-xs sm:text-sm font-bold font-mono">
                   {isHealthy ? '정상 판정 (PASS - 배드섹터 0개)' : `주의/경고 판정 (FAIL - 배드섹터 ${record.badCount}개 검출)`}
                 </span>
-                <span className="px-2 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-900 border border-slate-700">
+                <span className="px-2 py-0.2 rounded text-[10px] font-mono font-bold bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100">
                   건강도: {record.healthScore}%
                 </span>
               </div>
-              <p className="text-[11px] leading-relaxed text-slate-300">
+              <p className="text-[11px] leading-relaxed text-slate-700 dark:text-slate-300">
                 {record.recommendation}
               </p>
             </div>
@@ -208,25 +208,25 @@ export const ReportModal: React.FC<ReportModalProps> = ({
               Response Latency Distribution
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs text-center font-mono">
-              <div className="p-2 rounded bg-emerald-950/20 border border-emerald-500/30">
-                <div className="text-[10px] text-emerald-400 mb-0.5">정상 (&lt;10ms)</div>
-                <div className="text-xs font-bold text-emerald-200">{record.goodCount.toLocaleString()}</div>
+              <div className="p-2 rounded bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-500/30">
+                <div className="text-[10px] text-emerald-600 dark:text-emerald-400 mb-0.5">정상 (&lt;10ms)</div>
+                <div className="text-xs font-bold text-emerald-700 dark:text-emerald-200">{record.goodCount.toLocaleString()}</div>
               </div>
-              <div className="p-2 rounded bg-lime-950/20 border border-lime-500/30">
-                <div className="text-[10px] text-lime-400 mb-0.5">양호 (&lt;50ms)</div>
-                <div className="text-xs font-bold text-lime-200">{record.normalCount.toLocaleString()}</div>
+              <div className="p-2 rounded bg-lime-50 dark:bg-lime-950/20 border border-lime-200 dark:border-lime-500/30">
+                <div className="text-[10px] text-lime-600 dark:text-lime-400 mb-0.5">양호 (&lt;50ms)</div>
+                <div className="text-xs font-bold text-lime-700 dark:text-lime-200">{record.normalCount.toLocaleString()}</div>
               </div>
-              <div className="p-2 rounded bg-amber-950/20 border border-amber-500/30">
-                <div className="text-[10px] text-amber-400 mb-0.5">지연 (&lt;150ms)</div>
-                <div className="text-xs font-bold text-amber-200">{record.slowCount.toLocaleString()}</div>
+              <div className="p-2 rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-500/30">
+                <div className="text-[10px] text-amber-600 dark:text-amber-400 mb-0.5">지연 (&lt;150ms)</div>
+                <div className="text-xs font-bold text-amber-700 dark:text-amber-200">{record.slowCount.toLocaleString()}</div>
               </div>
-              <div className="p-2 rounded bg-orange-950/20 border border-orange-500/30">
-                <div className="text-[10px] text-orange-400 mb-0.5">심각 (&lt;500ms)</div>
-                <div className="text-xs font-bold text-orange-200">{record.criticalCount.toLocaleString()}</div>
+              <div className="p-2 rounded bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-500/30">
+                <div className="text-[10px] text-orange-600 dark:text-orange-400 mb-0.5">심각 (&lt;500ms)</div>
+                <div className="text-xs font-bold text-orange-700 dark:text-orange-200">{record.criticalCount.toLocaleString()}</div>
               </div>
-              <div className="p-2 rounded bg-red-950/30 border border-red-500/40">
-                <div className="text-[10px] text-red-400 font-bold mb-0.5">배드 (Error)</div>
-                <div className="text-xs font-bold text-red-300">{record.badCount.toLocaleString()}</div>
+              <div className="p-2 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-500/40">
+                <div className="text-[10px] text-red-600 dark:text-red-400 font-bold mb-0.5">배드 (Error)</div>
+                <div className="text-xs font-bold text-red-700 dark:text-red-300">{record.badCount.toLocaleString()}</div>
               </div>
             </div>
             <div className="flex items-center justify-between mt-1.5 text-[11px] text-slate-500 font-mono">
@@ -298,7 +298,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
                         <td className="px-2.5 py-1.5 font-sans font-medium">{s.name}</td>
                         <td className="px-2.5 py-1.5 text-center">{s.current}</td>
                         <td className="px-2.5 py-1.5 text-center text-slate-500">{s.threshold}</td>
-                        <td className="px-2.5 py-1.5 font-semibold text-slate-200">{s.raw}</td>
+                        <td className="px-2.5 py-1.5 font-semibold text-slate-800 dark:text-slate-200">{s.raw}</td>
                         <td className="px-2.5 py-1.5 text-center font-sans">
                           <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
                             s.status === 'critical'

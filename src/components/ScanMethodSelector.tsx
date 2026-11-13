@@ -41,6 +41,7 @@ interface ScanMethodSelectorProps {
   blocks?: SectorBlock[];
   onRepairSectors?: (driveId: string, repairedBlockIds: number[]) => void;
   onOpenFilePicker?: () => void;
+  onOpenRemapModal?: () => void;
 }
 
 export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
@@ -50,7 +51,8 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
   isScanning,
   blocks = [],
   onRepairSectors,
-  onOpenFilePicker
+  onOpenFilePicker,
+  onOpenRemapModal
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -132,7 +134,13 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
 
           {/* S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine Button */}
           <button
-            onClick={() => setShowRemapModal(true)}
+            onClick={() => {
+              if (onOpenRemapModal) {
+                onOpenRemapModal();
+              } else {
+                setShowRemapModal(true);
+              }
+            }}
             className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded text-xs font-bold bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-xs transition-all cursor-pointer relative group min-h-[34px]"
             title="S.M.A.R.T. 논리 배드섹터 제로필 수복 & 예비 트랙 섹터 재할당(Remap) 실행"
           >
@@ -334,18 +342,20 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
         </div>
       )}
 
-      {/* S.M.A.R.T. Sector Remapping & Zero-Fill Repair Modal */}
-      <SmartRemapModal
-        isOpen={showRemapModal}
-        onClose={() => setShowRemapModal(false)}
-        activeDrive={activeDrive}
-        blocks={blocks}
-        onRepairSectors={(driveId, repairedBlockIds) => {
-          if (onRepairSectors) {
-            onRepairSectors(driveId, repairedBlockIds);
-          }
-        }}
-      />
+      {/* Fallback local S.M.A.R.T. Sector Remapping Modal when not lifted to App root */}
+      {!onOpenRemapModal && (
+        <SmartRemapModal
+          isOpen={showRemapModal}
+          onClose={() => setShowRemapModal(false)}
+          activeDrive={activeDrive}
+          blocks={blocks}
+          onRepairSectors={(driveId, repairedBlockIds) => {
+            if (onRepairSectors) {
+              onRepairSectors(driveId, repairedBlockIds);
+            }
+          }}
+        />
+      )}
     </div>
   );
 };
