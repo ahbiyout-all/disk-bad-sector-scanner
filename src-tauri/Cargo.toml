@@ -6,6 +6,10 @@ authors = ["AhBiYout <https://github.com/AhBiYout-all>"]
 license = "Apache-2.0"
 edition = "2021"
 
+[[bin]]
+name = "DiskBadSectorScanner"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

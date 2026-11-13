@@ -7,9 +7,12 @@
 import { DiskDrive } from '../types';
 import {
   isTauriDesktopRuntime,
+  isNativeHardwareRuntime,
+  detectNativeBridgeAvailable,
   queryTauriBitCarving,
   queryTauriParallelScan,
   queryTauriRawSector,
+  queryTauriScanBlock,
   queryTauriTrayGuardianCheck
 } from './nativeDriveEngine';
 
@@ -325,13 +328,18 @@ export async function DS_ScanMultipleDrivesParallel(
   drives?: DiskDrive[]
 ): Promise<DSMultiDriveScanSummary[]> {
   const isTauri = isTauriDesktopRuntime();
-  const tauriTargets = isTauri ? targets.filter(t => t.driveId.startsWith('drive-tauri-physical-')) : [];
-  const nonTauriTargets = isTauri ? targets.filter(t => !t.driveId.startsWith('drive-tauri-physical-')) : targets;
+  const isBridge = !isTauri && (await detectNativeBridgeAvailable());
+  const physicalTargets = (isTauri || isBridge)
+    ? targets.filter(t => t.driveId.startsWith('drive-tauri-physical-'))
+    : [];
+  const nonTauriTargets = (isTauri || isBridge)
+    ? targets.filter(t => !t.driveId.startsWith('drive-tauri-physical-'))
+    : targets;
 
   const summaries: DSMultiDriveScanSummary[] = [];
 
-  if (tauriTargets.length > 0) {
-    const payload = tauriTargets.map(t => ({
+  if (physicalTargets.length > 0 && isTauri) {
+    const payload = physicalTargets.map(t => ({
       driveIndex: t.driveIndex,
       startLba: Number(t.startLba),
       sectorCount: Number(t.sectorCount),
@@ -341,7 +349,7 @@ export async function DS_ScanMultipleDrivesParallel(
     const results = await queryTauriParallelScan(payload);
     if (results) {
       for (const r of results) {
-        const target = tauriTargets.find(t => t.driveIndex === r.driveIndex);
+        const target = physicalTargets.find(t => t.driveIndex === r.driveIndex);
         const matchedDrive = drives?.find(d => d.id === target?.driveId);
         const secBytes = matchedDrive?.hardwareSpecs?.logicalSectorSize || 512;
         if (onProgressUpdate && target) {
@@ -364,27 +372,79 @@ export async function DS_ScanMultipleDrivesParallel(
         });
       }
     }
+  } else if (physicalTargets.length > 0 && isBridge) {
+    const bridgeResults = await Promise.all(
+      physicalTargets.map(async (target): Promise<DSMultiDriveScanSummary> => {
+        const tStart = performance.now();
+        const steps = 10;
+        const matchedDrive = drives?.find(d => d.id === target.driveId);
+        const secBytes = matchedDrive?.hardwareSpecs?.logicalSectorSize || 512;
+        const stepSectors = BigInt(Math.max(128, Number(target.burstStep || 128)));
+        let scannedSectors = 0n;
+        let badCount = 0;
+        let slowCount = 0;
+        let totalLatency = 0;
 
-    for (const target of tauriTargets) {
-      if (!summaries.some(s => s.driveId === target.driveId)) {
-        if (onProgressUpdate) {
-          onProgressUpdate(target.driveId, 100, 0);
+        for (let i = 0; i < steps; i++) {
+          const probeLba = Number(target.startLba) + i * Number(stepSectors);
+          const res = await queryTauriScanBlock(target.driveIndex, probeLba, 128);
+          if (res) {
+            scannedSectors += 128n;
+            const ms = Number(res.latencyMs || 0);
+            totalLatency += ms;
+            if (Number(res.statusCode) >= 4) badCount++;
+            else if (Number(res.statusCode) >= 2 || ms > 50) slowCount++;
+          } else {
+            badCount++;
+          }
+          if (onProgressUpdate) {
+            onProgressUpdate(target.driveId, Math.round(((i + 1) / steps) * 100), badCount);
+          }
         }
-        summaries.push({
+
+        const elapsedMs = Math.max(0.1, performance.now() - tStart);
+        const avgLatencyMs = Number((totalLatency / steps).toFixed(3));
+        const throughputMbSec = scannedSectors > 0n && totalLatency > 0
+          ? Number((((Number(scannedSectors) * secBytes) / (1024 * 1024)) / (totalLatency / 1000)).toFixed(1))
+          : null;
+
+        return {
           driveIndex: target.driveIndex,
           driveId: target.driveId,
           driveName: target.driveName,
-          totalSectorsScanned: 0n,
-          badSectorsFound: 0,
-          slowSectorsFound: 0,
-          elapsedMs: 0,
-          avgLatencyMs: 0,
-          throughputMbSec: null,
-          isCompleted: false,
-          statusCode: DSSectorStatus.DS_STATUS_ABORTED,
-          unsupportedReason: 'Tauri 병렬 스캔 IPC 응답 실패 (관리자 권한 또는 커널 핸들 확인 필요)'
-        });
+          totalSectorsScanned: scannedSectors,
+          badSectorsFound: badCount,
+          slowSectorsFound: slowCount,
+          elapsedMs,
+          avgLatencyMs,
+          throughputMbSec,
+          isCompleted: scannedSectors > 0n,
+          statusCode: badCount > 0 ? 4 : slowCount > 0 ? 2 : 0
+        };
+      })
+    );
+    summaries.push(...bridgeResults);
+  }
+
+  for (const target of physicalTargets) {
+    if (!summaries.some(s => s.driveId === target.driveId)) {
+      if (onProgressUpdate) {
+        onProgressUpdate(target.driveId, 100, 0);
       }
+      summaries.push({
+        driveIndex: target.driveIndex,
+        driveId: target.driveId,
+        driveName: target.driveName,
+        totalSectorsScanned: 0n,
+        badSectorsFound: 0,
+        slowSectorsFound: 0,
+        elapsedMs: 0,
+        avgLatencyMs: 0,
+        throughputMbSec: null,
+        isCompleted: false,
+        statusCode: DSSectorStatus.DS_STATUS_ABORTED,
+        unsupportedReason: 'Win32 병렬 스캔 응답 실패 (관리자 권한 또는 커널 핸들 확인 필요)'
+      });
     }
   }
 
@@ -772,10 +832,12 @@ export async function DS_ExecuteBitCarvingRecovery(
     }
   }
 
-  // 2. Native Tauri Win32 Physical Drive Bit Carving / Raw Sector Read
-  if (drive?.id.startsWith('drive-tauri-physical-') && isTauriDesktopRuntime()) {
+  // 2. Native Tauri / Win32 Bridge Physical Drive Bit Carving / Raw Sector Read
+  if (drive?.id.startsWith('drive-tauri-physical-') && (isNativeHardwareRuntime() || isTauriDesktopRuntime())) {
     const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
-    const tauriCarved = await queryTauriBitCarving(driveIndex, targetLba, span);
+    const tauriCarved = isTauriDesktopRuntime()
+      ? await queryTauriBitCarving(driveIndex, targetLba, span)
+      : null;
     if (tauriCarved && Array.isArray(tauriCarved.hexPreview)) {
       const rawBytes = new Uint8Array(tauriCarved.hexPreview);
       const { hexPreview, rawAsciiPreview } = formatHexAndAscii(rawBytes);

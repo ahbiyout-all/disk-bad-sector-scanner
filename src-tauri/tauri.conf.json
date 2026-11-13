@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Disk Bad Sector Scanner - 데스크톱 디스크 배드섹터 정밀 진단기",

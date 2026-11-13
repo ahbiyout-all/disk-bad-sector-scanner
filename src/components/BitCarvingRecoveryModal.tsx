@@ -14,7 +14,7 @@ import {
   DS_ExecuteBitCarvingRecovery,
   DSCarvedSectorResult
 } from '../utils/nativeDllBridge';
-import { isTauriDesktopRuntime, queryTauriRawSector } from '../utils/nativeDriveEngine';
+import { isNativeHardwareRuntime, queryTauriRawSector } from '../utils/nativeDriveEngine';
 import { DiskDrive } from '../types';
 
 interface BitCarvingRecoveryModalProps {
@@ -73,7 +73,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
       const sliceLen = Math.min(fileSize - offset, Math.max(secSize, result.carvedSizeBytes));
       const ab = await activeTargetFile.slice(offset, offset + sliceLen).arrayBuffer();
       blobPayload = new Uint8Array(ab);
-    } else if (drive?.id.startsWith('drive-tauri-physical-') && isTauriDesktopRuntime()) {
+    } else if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
       const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
       const exportBytes = Math.min(64 * 4096, Math.max(secSize, result.carvedSizeBytes));
       const rawTauriBytes = await queryTauriRawSector(driveIndex, targetLba, exportBytes);

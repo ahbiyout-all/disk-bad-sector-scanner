@@ -33,6 +33,9 @@ All notable changes to this project will be documented in this file. This projec
   - C++, Rust, Tauri, TypeScript 전 계층에 잔존하던 하드코딩 폴백과 난수 시뮬레이션을 제거하고 커널 Direct I/O, IOCTL 및 브라우저 실측 API(OPFS / File System Access / StorageManager)로 전면 교체(미지원 하드웨어 센서는 `N/A` 정직 표기).
 - **심층 코드 감사(Self-Reflection Audit) 및 결함 수정**:
   - `@types/d3` 엄격 타입 추론(`d3.max<Datum, number>`), TypeScript 리터럴 유니온 내로잉, 비동기 스캔 상태 정합성 보완, `.gitignore` + `git-push-auto.bat` 보안 스캔 정비.
+- **실제 물리 디스크(`PhysicalDrive0~31`) 감지 및 Win32 Native Bridge 연동 수정**:
+  - Tauri v2 전역 IPC(`"withGlobalTauri": true`) 및 관리자 권한 매니페스트(`app.manifest`) 누락 수정, `run_smart_self_test` / `get_smart_self_test_status` JSON 응답 필드 정합성 보완.
+  - 설치형 실행기(`DiskBadSectorScanner.exe` / `DiskSentinelLauncher.cs`)를 정적 번들 서빙 + UAC 승격 + C++ DLL / 순수 Win32 IOCTL 브릿지(`/api/native/*`)로 업그레이드하여 Tauri 외 설치형 EXE 환경에서도 실제 물리 디스크·볼륨·LBA 스캔·생 섹터 읽기 동작 지원.
 
 ---
 

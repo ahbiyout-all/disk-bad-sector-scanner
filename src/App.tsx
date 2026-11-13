@@ -56,6 +56,8 @@ import {
   executeRealZeroFillRepairBlock,
   rescanAllDrives,
   isTauriDesktopRuntime,
+  isNativeHardwareRuntime,
+  detectNativeBridgeAvailable,
   createEmptyResponseBuckets,
   classifyResponseBucket,
   buildScanBlockSequence,
@@ -217,6 +219,10 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         setDrives(allDrives);
         setSelectedDriveId(allDrives[0].id);
         setSelectedMethodId(getDefaultMethodForDrive(allDrives[0]));
+        if (isNativeHardwareRuntime() || allDrives.some(d => d.id.startsWith('drive-tauri-physical-'))) {
+          setIsNativeRuntime(true);
+          setIsThermalPolling(true);
+        }
       }
     }).catch(() => {
       createNativeHostDrive().then(nativeDrive => {
@@ -230,6 +236,14 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         }
       }).catch(() => {});
     });
+
+    detectNativeBridgeAvailable().then(bridgeOk => {
+      if (mounted && (bridgeOk || isTauriDesktopRuntime())) {
+        setIsNativeRuntime(true);
+        setIsThermalPolling(true);
+      }
+    }).catch(() => {});
+
     return () => {
       mounted = false;
     };
@@ -385,8 +399,9 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   activeTaskIdRef.current = activeTaskId;
 
   // Live Thermal Monitor & SMART Self-Test State
-  const isTauriRuntime = isTauriDesktopRuntime();
-  const [isThermalPolling, setIsThermalPolling] = useState<boolean>(() => isTauriDesktopRuntime());
+  const [isNativeRuntime, setIsNativeRuntime] = useState<boolean>(() => isNativeHardwareRuntime());
+  const isTauriRuntime = isNativeRuntime;
+  const [isThermalPolling, setIsThermalPolling] = useState<boolean>(() => isNativeHardwareRuntime());
   const [thermalHistoryByDrive, setThermalHistoryByDrive] = useState<Record<string, ThermalHistoryPoint[]>>({});
   const [smartSelfTestByDrive, setSmartSelfTestByDrive] = useState<Record<string, SmartSelfTestState>>({});
 

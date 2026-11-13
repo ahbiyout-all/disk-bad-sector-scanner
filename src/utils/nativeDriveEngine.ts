@@ -65,6 +65,93 @@ export function isTauriDesktopRuntime(): boolean {
   return typeof window !== 'undefined' && typeof (window as any).__TAURI__?.core?.invoke === 'function';
 }
 
+interface NativeBridgeStatus {
+  available: boolean;
+  elevated: boolean;
+  dllLoaded: boolean;
+  version?: string;
+}
+
+let cachedNativeBridgeStatus: NativeBridgeStatus | null = null;
+let nativeBridgeProbePromise: Promise<boolean> | null = null;
+let nativeBridgeHeartbeatTimer: number | null = null;
+
+export function isNativeBridgeRuntime(): boolean {
+  return cachedNativeBridgeStatus?.available === true;
+}
+
+export function isNativeHardwareRuntime(): boolean {
+  return isTauriDesktopRuntime() || isNativeBridgeRuntime();
+}
+
+export function getNativeBridgeDetails(): NativeBridgeStatus | null {
+  return cachedNativeBridgeStatus;
+}
+
+/**
+ * Probes the local Windows Desktop Host bridge (DiskSentinelLauncher.cs on http://127.0.0.1:<port>/api/native/status).
+ * Only attempts probing on localhost/127.0.0.1 so web sandboxes / remote origins resolve immediately with false.
+ */
+export async function detectNativeBridgeAvailable(): Promise<boolean> {
+  if (cachedNativeBridgeStatus !== null) {
+    return cachedNativeBridgeStatus.available;
+  }
+  if (typeof window === 'undefined') {
+    cachedNativeBridgeStatus = { available: false, elevated: false, dllLoaded: false };
+    return false;
+  }
+
+  const host = window.location.hostname;
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    cachedNativeBridgeStatus = { available: false, elevated: false, dllLoaded: false };
+    return false;
+  }
+
+  if (nativeBridgeProbePromise) {
+    return nativeBridgeProbePromise;
+  }
+
+  nativeBridgeProbePromise = (async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 700);
+      const res = await fetch('/api/native/status', {
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      window.clearTimeout(timeoutId);
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        cachedNativeBridgeStatus = { available: false, elevated: false, dllLoaded: false };
+        return false;
+      }
+
+      const data = await res.json();
+      const available = Boolean(data?.available === true && data?.host === 'win32-native-bridge');
+      cachedNativeBridgeStatus = {
+        available,
+        elevated: Boolean(data?.elevated),
+        dllLoaded: Boolean(data?.dllLoaded),
+        version: typeof data?.version === 'string' ? data.version : undefined
+      };
+
+      if (available && nativeBridgeHeartbeatTimer === null) {
+        nativeBridgeHeartbeatTimer = window.setInterval(() => {
+          fetch('/api/native/heartbeat', { method: 'POST', cache: 'no-store' }).catch(() => {});
+        }, 15000);
+      }
+
+      return available;
+    } catch {
+      cachedNativeBridgeStatus = { available: false, elevated: false, dllLoaded: false };
+      return false;
+    }
+  })();
+
+  return nativeBridgeProbePromise;
+}
+
 /**
  * Real Origin Private File System (OPFS) Disk I/O Benchmark Probe
  * Performs actual filesystem write, flush/close, and read-back verification in the browser sandbox.
@@ -262,171 +349,189 @@ export async function probeWebUsbDevices(): Promise<{
   return [];
 }
 
+function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
+  const driveIndex = typeof rd.driveIndex === 'number' ? rd.driveIndex : idx;
+  const capBytes = typeof rd.totalCapacityBytes === 'number' && rd.totalCapacityBytes > 0
+    ? rd.totalCapacityBytes
+    : (typeof rd.totalCapacityGb === 'number' && rd.totalCapacityGb > 0 ? rd.totalCapacityGb * 1024 * 1024 * 1024 : null);
+  const capGb = capBytes !== null
+    ? Number((capBytes / (1024 * 1024 * 1024)).toFixed(1))
+    : (typeof rd.totalCapacityGb === 'number' && rd.totalCapacityGb > 0 ? rd.totalCapacityGb : null);
+
+  const temp = typeof rd.temperatureC === 'number' && rd.temperatureC > 0 ? rd.temperatureC : null;
+  const reliability = typeof rd.reliabilityScore === 'number' ? Math.round(rd.reliabilityScore) : null;
+  const poh = typeof rd.powerOnHours === 'number' ? rd.powerOnHours : null;
+
+  const rawModel = (rd.model || '').trim() || `Physical Storage Device ${driveIndex}`;
+  const path = rd.devicePath || `\\\\.\\PhysicalDrive${driveIndex}`;
+  const secSize = rd.sectorSize || 512;
+  const physSecSize = rd.physicalSectorSize || secSize;
+  const serial = (rd.serialNumber || '').trim() || `PhysicalDrive${driveIndex}`;
+  const bus = (rd.busType || 'Unknown').trim();
+  const busUpper = bus.toUpperCase();
+  const isUsb = busUpper === 'USB' || !!rd.isExternal;
+  const isNvme = busUpper === 'NVME';
+
+  const rawPartitions: any[] = Array.isArray(rd.partitions) ? rd.partitions : [];
+  const mountPoints: string[] = Array.isArray(rd.mountPoints) ? rd.mountPoints : [];
+  const mountLabel = mountPoints.length > 0 ? mountPoints.join(', ') : '';
+
+  const typeIcon = isUsb ? '🔌' : isNvme ? '⚡' : rd.isSsd ? '💾' : '💽';
+  const mountPrefix = mountLabel ? `[${mountLabel}] ` : '';
+  const capLabel = capGb !== null ? `${Math.round(capGb)}GB` : '용량 미상';
+  const driveName = `${typeIcon} ${mountPrefix}${rawModel} (${capLabel}) - PhysicalDrive${driveIndex}`;
+
+  const nvme = rd.nvmeTelemetry;
+
+  const partitions: DiskVolumePartition[] = rawPartitions.map((vp) => {
+    const totalB = Number(vp.totalBytes || 0);
+    const usedB = Number(vp.usedBytes || 0);
+    const freeB = Number(vp.freeBytes || 0);
+    const totalG = totalB > 0 ? Number((totalB / (1024 * 1024 * 1024)).toFixed(1)) : Number(vp.totalGb || 0);
+    const usedG = usedB > 0 ? Number((usedB / (1024 * 1024 * 1024)).toFixed(1)) : Number(vp.usedGb || 0);
+    const freeG = freeB > 0 ? Number((freeB / (1024 * 1024 * 1024)).toFixed(1)) : Math.max(0, Number((totalG - usedG).toFixed(1)));
+    const pct = totalB > 0 ? Number(((usedB / totalB) * 100).toFixed(1)) : 0;
+    return {
+      letterOrMount: vp.driveLetter || '',
+      label: vp.label || 'Volume',
+      fileSystem: vp.filesystem || 'Unknown',
+      totalGb: totalG,
+      usedGb: usedG,
+      freeGb: freeG,
+      usedPercentage: pct
+    };
+  });
+
+  // Aggregate real volume usage if partitions are present
+  const totalVolGb = partitions.reduce((acc, p) => acc + p.totalGb, 0);
+  const totalVolUsedGb = partitions.reduce((acc, p) => acc + p.usedGb, 0);
+  const aggUsedPct = totalVolGb > 0 ? Number(((totalVolUsedGb / totalVolGb) * 100).toFixed(1)) : null;
+
+  const totalLba = capBytes !== null && secSize > 0 ? Math.floor(capBytes / secSize) : 0;
+
+  const smartAttributes: DriveSmartAttribute[] = Array.isArray(rd.smartAttributes)
+    ? rd.smartAttributes.map((sa: any) => ({
+        id: Number(sa.id),
+        name: String(sa.name || `Attribute 0x${Number(sa.id).toString(16).toUpperCase()}`),
+        current: Number(sa.current),
+        worst: Number(sa.worst),
+        threshold: Number(sa.threshold),
+        raw: String(sa.raw ?? '0'),
+        rawHex: typeof sa.rawHex === 'string' ? sa.rawHex : undefined,
+        status: sa.status === 'critical' || sa.status === 'warning' ? sa.status : 'good',
+        description: sa.description || 'Win32 커널 SMART IOCTL 직접 판독 속성'
+      }))
+    : [];
+
+  const hwSpecs: DiskHardwareSpecs = {
+    devicePhysicalPath: path,
+    vendorName: rawModel.split(' ')[0] || (isUsb ? 'USB Storage' : 'Physical Storage'),
+    modelNumber: rawModel,
+    serialNumber: serial,
+    firmwareRevision: (rd.firmware || '').trim() || 'N/A',
+    busType: isUsb ? 'USB' : isNvme ? 'NVMe' : busUpper === 'SATA' ? 'SATA' : (bus as any),
+    busInterfaceSpeed: isNvme ? 'NVMe PCIe Bus (Win32 IOCTL)' : isUsb ? 'USB Mass Storage Bus' : `${bus} Bus`,
+    formFactor: isNvme ? 'M.2 / NVMe Solid State' : isUsb ? 'External USB Storage' : (rd.isSsd ? 'Solid State Drive' : 'Mechanical HDD'),
+    controllerVendor: 'Win32 Native Storage Subsystem',
+    totalCapacityBytes: capBytes,
+    totalCapacityGb: capGb,
+    totalLbaSectors: totalLba > 0 ? totalLba : null,
+    logicalSectorSize: secSize,
+    physicalSectorSize: physSecSize,
+    isAdvancedFormat: physSecSize > secSize,
+    partitionStyle: 'GPT (GUID Partition Table)',
+    alignmentStatus: physSecSize >= secSize ? 'Aligned (4K sector boundary)' : 'N/A',
+    mediaType: isNvme || rd.isSsd ? 'SSD (Non-Volatile NAND Flash)' : 'Mechanical HDD (Magnetic Platter)',
+    rotationalSpeedRpm: isNvme || rd.isSsd ? 0 : null,
+    trimSupported: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
+    trimActive: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
+    smartSupported: smartAttributes.length > 0 || !!nvme,
+    smartActive: smartAttributes.length > 0 || !!nvme,
+    ncqSupported: isNvme || rd.isSsd ? true : null,
+    queueDepth: isNvme ? 64 : null,
+    volatileWriteCache: null,
+    writeCacheFlushSupported: null,
+    readLookAheadSupported: null,
+    apmAamSupported: !rd.isSsd,
+    hostReadsTb: nvme && typeof nvme.dataUnitsReadTb === 'number' ? Number(nvme.dataUnitsReadTb.toFixed(2)) : null,
+    hostWritesTb: nvme && typeof nvme.dataUnitsWrittenTb === 'number' ? Number(nvme.dataUnitsWrittenTb.toFixed(2)) : null,
+    percentageUsed: nvme && typeof nvme.percentageUsed === 'number' ? nvme.percentageUsed : null,
+    availableSparePercent: nvme && typeof nvme.availableSpare === 'number' ? nvme.availableSpare : null,
+    powerOnHours: poh,
+    powerCycles: nvme && nvme.powerCycles !== undefined ? Number(nvme.powerCycles) : null,
+    unsafeShutdowns: nvme && nvme.unsafeShutdowns !== undefined ? Number(nvme.unsafeShutdowns) : null,
+    mediaErrors: nvme && nvme.mediaErrors !== undefined ? Number(nvme.mediaErrors) : null,
+    currentTempC: temp,
+    maxTempRecordedC: null,
+    warningTempThresholdC: null,
+    nvmeLogAvailable: !!nvme,
+    measuredKernelLatencyUs: null,
+    measuredSequentialReadMbSec: null,
+    measuredSequentialWriteMbSec: null,
+    measuredRandom4kReadIops: null,
+    probeTimestamp: Date.now(),
+    probeMethod: 'Native Direct Win32 IOCTL',
+    partitions
+  };
+
+  const driveType: DiskDrive['type'] = isNvme ? 'NVMe' : isUsb ? 'USB' : (rd.isSsd ? 'SSD' : 'HDD');
+  const primaryFs = partitions[0]?.fileSystem;
+
+  return {
+    id: `drive-tauri-physical-${driveIndex}`,
+    name: driveName,
+    model: rawModel,
+    serialNumber: serial,
+    firmware: hwSpecs.firmwareRevision,
+    type: driveType,
+    isExternal: isUsb,
+    connectionType: isUsb ? 'usb' : 'internal',
+    capacityGb: capGb,
+    totalSectors: totalLba > 0 ? totalLba : 1000000,
+    interface: `Native Direct IOCTL (PhysicalDrive${driveIndex})`,
+    healthScore: reliability,
+    temperatureC: temp,
+    powerOnHours: poh,
+    usedPercentage: aggUsedPct,
+    mountPoint: mountLabel || path,
+    fileSystem: (primaryFs as any) || 'Unknown',
+    smartAttributes,
+    hardwareSpecs: hwSpecs
+  } as DiskDrive;
+}
+
 /**
- * Real Physical Storage Discovery via Tauri Core IPC (Native Desktop Runtime)
+ * Real Physical Storage Discovery via Tauri Core IPC or Windows Native Bridge (DiskBadSectorScanner.exe)
  * Queries raw physical drives (\\\\.\\PhysicalDrive0..31) from Windows Win32 IOCTL
  */
 export async function queryTauriPhysicalDrives(): Promise<DiskDrive[]> {
-  if (!isTauriDesktopRuntime()) return [];
-  const tauri = (window as any).__TAURI__;
-
-  try {
-    const rawDrives = await tauri.core.invoke('get_physical_drives');
-    if (Array.isArray(rawDrives) && rawDrives.length > 0) {
-      return rawDrives.map((rd: any, idx: number) => {
-        const driveIndex = typeof rd.driveIndex === 'number' ? rd.driveIndex : idx;
-        const capBytes = typeof rd.totalCapacityBytes === 'number' && rd.totalCapacityBytes > 0
-          ? rd.totalCapacityBytes
-          : (typeof rd.totalCapacityGb === 'number' && rd.totalCapacityGb > 0 ? rd.totalCapacityGb * 1024 * 1024 * 1024 : null);
-        const capGb = capBytes !== null
-          ? Number((capBytes / (1024 * 1024 * 1024)).toFixed(1))
-          : (typeof rd.totalCapacityGb === 'number' && rd.totalCapacityGb > 0 ? rd.totalCapacityGb : null);
-
-        const temp = typeof rd.temperatureC === 'number' && rd.temperatureC > 0 ? rd.temperatureC : null;
-        const reliability = typeof rd.reliabilityScore === 'number' ? Math.round(rd.reliabilityScore) : null;
-        const poh = typeof rd.powerOnHours === 'number' ? rd.powerOnHours : null;
-
-        const rawModel = (rd.model || '').trim() || `Physical Storage Device ${driveIndex}`;
-        const path = rd.devicePath || `\\\\.\\PhysicalDrive${driveIndex}`;
-        const secSize = rd.sectorSize || 512;
-        const physSecSize = rd.physicalSectorSize || secSize;
-        const serial = (rd.serialNumber || '').trim() || `PhysicalDrive${driveIndex}`;
-        const bus = (rd.busType || 'Unknown').trim();
-        const busUpper = bus.toUpperCase();
-        const isUsb = busUpper === 'USB' || !!rd.isExternal;
-        const isNvme = busUpper === 'NVME';
-
-        const rawPartitions: any[] = Array.isArray(rd.partitions) ? rd.partitions : [];
-        const mountPoints: string[] = Array.isArray(rd.mountPoints) ? rd.mountPoints : [];
-        const mountLabel = mountPoints.length > 0 ? mountPoints.join(', ') : '';
-
-        const typeIcon = isUsb ? '🔌' : isNvme ? '⚡' : rd.isSsd ? '💾' : '💽';
-        const mountPrefix = mountLabel ? `[${mountLabel}] ` : '';
-        const capLabel = capGb !== null ? `${Math.round(capGb)}GB` : '용량 미상';
-        const driveName = `${typeIcon} ${mountPrefix}${rawModel} (${capLabel}) - PhysicalDrive${driveIndex}`;
-
-        const nvme = rd.nvmeTelemetry;
-
-        const partitions: DiskVolumePartition[] = rawPartitions.map((vp) => {
-          const totalB = Number(vp.totalBytes || 0);
-          const usedB = Number(vp.usedBytes || 0);
-          const freeB = Number(vp.freeBytes || 0);
-          const totalG = totalB > 0 ? Number((totalB / (1024 * 1024 * 1024)).toFixed(1)) : Number(vp.totalGb || 0);
-          const usedG = usedB > 0 ? Number((usedB / (1024 * 1024 * 1024)).toFixed(1)) : Number(vp.usedGb || 0);
-          const freeG = freeB > 0 ? Number((freeB / (1024 * 1024 * 1024)).toFixed(1)) : Math.max(0, Number((totalG - usedG).toFixed(1)));
-          const pct = totalB > 0 ? Number(((usedB / totalB) * 100).toFixed(1)) : 0;
-          return {
-            letterOrMount: vp.driveLetter || '',
-            label: vp.label || 'Volume',
-            fileSystem: vp.filesystem || 'Unknown',
-            totalGb: totalG,
-            usedGb: usedG,
-            freeGb: freeG,
-            usedPercentage: pct
-          };
-        });
-
-        // Aggregate real volume usage if partitions are present
-        const totalVolGb = partitions.reduce((acc, p) => acc + p.totalGb, 0);
-        const totalVolUsedGb = partitions.reduce((acc, p) => acc + p.usedGb, 0);
-        const aggUsedPct = totalVolGb > 0 ? Number(((totalVolUsedGb / totalVolGb) * 100).toFixed(1)) : null;
-
-        const totalLba = capBytes !== null && secSize > 0 ? Math.floor(capBytes / secSize) : 0;
-
-        const smartAttributes: DriveSmartAttribute[] = Array.isArray(rd.smartAttributes)
-          ? rd.smartAttributes.map((sa: any) => ({
-              id: Number(sa.id),
-              name: String(sa.name || `Attribute 0x${Number(sa.id).toString(16).toUpperCase()}`),
-              current: Number(sa.current),
-              worst: Number(sa.worst),
-              threshold: Number(sa.threshold),
-              raw: String(sa.raw ?? '0'),
-              rawHex: typeof sa.rawHex === 'string' ? sa.rawHex : undefined,
-              status: sa.status === 'critical' || sa.status === 'warning' ? sa.status : 'good',
-              description: sa.description || 'Win32 커널 SMART IOCTL 직접 판독 속성'
-            }))
-          : [];
-
-        const hwSpecs: DiskHardwareSpecs = {
-          devicePhysicalPath: path,
-          vendorName: rawModel.split(' ')[0] || (isUsb ? 'USB Storage' : 'Physical Storage'),
-          modelNumber: rawModel,
-          serialNumber: serial,
-          firmwareRevision: (rd.firmware || '').trim() || 'N/A',
-          busType: isUsb ? 'USB' : isNvme ? 'NVMe' : busUpper === 'SATA' ? 'SATA' : (bus as any),
-          busInterfaceSpeed: isNvme ? 'NVMe PCIe Bus (Win32 IOCTL)' : isUsb ? 'USB Mass Storage Bus' : `${bus} Bus`,
-          formFactor: isNvme ? 'M.2 / NVMe Solid State' : isUsb ? 'External USB Storage' : (rd.isSsd ? 'Solid State Drive' : 'Mechanical HDD'),
-          controllerVendor: 'Win32 Native Storage Subsystem',
-          totalCapacityBytes: capBytes,
-          totalCapacityGb: capGb,
-          totalLbaSectors: totalLba > 0 ? totalLba : null,
-          logicalSectorSize: secSize,
-          physicalSectorSize: physSecSize,
-          isAdvancedFormat: physSecSize > secSize,
-          partitionStyle: 'GPT (GUID Partition Table)',
-          alignmentStatus: physSecSize >= secSize ? 'Aligned (4K sector boundary)' : 'N/A',
-          mediaType: isNvme || rd.isSsd ? 'SSD (Non-Volatile NAND Flash)' : 'Mechanical HDD (Magnetic Platter)',
-          rotationalSpeedRpm: isNvme || rd.isSsd ? 0 : null,
-          trimSupported: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
-          trimActive: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
-          smartSupported: smartAttributes.length > 0 || !!nvme,
-          smartActive: smartAttributes.length > 0 || !!nvme,
-          ncqSupported: isNvme || rd.isSsd ? true : null,
-          queueDepth: isNvme ? 64 : null,
-          volatileWriteCache: null,
-          writeCacheFlushSupported: null,
-          readLookAheadSupported: null,
-          apmAamSupported: !rd.isSsd,
-          hostReadsTb: nvme && typeof nvme.dataUnitsReadTb === 'number' ? Number(nvme.dataUnitsReadTb.toFixed(2)) : null,
-          hostWritesTb: nvme && typeof nvme.dataUnitsWrittenTb === 'number' ? Number(nvme.dataUnitsWrittenTb.toFixed(2)) : null,
-          percentageUsed: nvme && typeof nvme.percentageUsed === 'number' ? nvme.percentageUsed : null,
-          availableSparePercent: nvme && typeof nvme.availableSpare === 'number' ? nvme.availableSpare : null,
-          powerOnHours: poh,
-          powerCycles: nvme && nvme.powerCycles !== undefined ? Number(nvme.powerCycles) : null,
-          unsafeShutdowns: nvme && nvme.unsafeShutdowns !== undefined ? Number(nvme.unsafeShutdowns) : null,
-          mediaErrors: nvme && nvme.mediaErrors !== undefined ? Number(nvme.mediaErrors) : null,
-          currentTempC: temp,
-          maxTempRecordedC: null,
-          warningTempThresholdC: null,
-          nvmeLogAvailable: !!nvme,
-          measuredKernelLatencyUs: null,
-          measuredSequentialReadMbSec: null,
-          measuredSequentialWriteMbSec: null,
-          measuredRandom4kReadIops: null,
-          probeTimestamp: Date.now(),
-          probeMethod: 'Native Direct Win32 IOCTL',
-          partitions
-        };
-
-        const driveType: DiskDrive['type'] = isNvme ? 'NVMe' : isUsb ? 'USB' : (rd.isSsd ? 'SSD' : 'HDD');
-        const primaryFs = partitions[0]?.fileSystem;
-
-        return {
-          id: `drive-tauri-physical-${driveIndex}`,
-          name: driveName,
-          model: rawModel,
-          serialNumber: serial,
-          firmware: hwSpecs.firmwareRevision,
-          type: driveType,
-          isExternal: isUsb,
-          connectionType: isUsb ? 'usb' : 'internal',
-          capacityGb: capGb,
-          totalSectors: totalLba > 0 ? totalLba : 1000000,
-          interface: `Native Direct IOCTL (PhysicalDrive${driveIndex})`,
-          healthScore: reliability,
-          temperatureC: temp,
-          powerOnHours: poh,
-          usedPercentage: aggUsedPct,
-          mountPoint: mountLabel || path,
-          fileSystem: (primaryFs as any) || 'Unknown',
-          smartAttributes,
-          hardwareSpecs: hwSpecs
-        } as DiskDrive;
-      });
+  if (isTauriDesktopRuntime()) {
+    const tauri = (window as any).__TAURI__;
+    try {
+      const rawDrives = await tauri.core.invoke('get_physical_drives');
+      if (Array.isArray(rawDrives) && rawDrives.length > 0) {
+        return rawDrives.map((rd: any, idx: number) => mapRawPhysicalDriveDtoToDiskDrive(rd, idx));
+      }
+    } catch (err) {
+      console.warn('Tauri physical drives query skipped:', err);
     }
-  } catch (err) {
-    console.warn('Tauri physical drives query skipped:', err);
   }
+
+  const bridgeAvailable = await detectNativeBridgeAvailable();
+  if (bridgeAvailable) {
+    try {
+      const res = await fetch('/api/native/drives', { cache: 'no-store' });
+      if (res.ok) {
+        const rawDrives = await res.json();
+        if (Array.isArray(rawDrives) && rawDrives.length > 0) {
+          return rawDrives.map((rd: any, idx: number) => mapRawPhysicalDriveDtoToDiskDrive(rd, idx));
+        }
+      }
+    } catch (err) {
+      console.warn('Win32 Native Bridge drives query failed:', err);
+    }
+  }
+
   return [];
 }
 
@@ -1681,19 +1786,38 @@ export async function executeRealZeroFillRepairBlock(
 }
 
 /**
- * Real Raw Sector Reading via Tauri Core IPC
+ * Real Raw Sector Reading via Tauri Core IPC or Windows Native Bridge
  */
 export async function queryTauriRawSector(driveIndex: number, lba: number, size: number): Promise<Uint8Array | null> {
-  if (!isTauriDesktopRuntime()) return null;
-  try {
-    const bytes = await (window as any).__TAURI__.core.invoke('read_raw_sector', { driveIndex, lba, size });
-    if (bytes instanceof Uint8Array) return bytes;
-    if (Array.isArray(bytes)) return new Uint8Array(bytes);
-    return null;
-  } catch (err) {
-    console.warn('Tauri raw sector read failed:', err);
-    return null;
+  if (isTauriDesktopRuntime()) {
+    try {
+      const bytes = await (window as any).__TAURI__.core.invoke('read_raw_sector', { driveIndex, lba, size });
+      if (bytes instanceof Uint8Array) return bytes;
+      if (Array.isArray(bytes)) return new Uint8Array(bytes);
+    } catch (err) {
+      console.warn('Tauri raw sector read failed:', err);
+    }
   }
+
+  if (await detectNativeBridgeAvailable()) {
+    try {
+      const res = await fetch('/api/native/read-sector', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driveIndex, lba, size })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.ok && Array.isArray(data.bytes)) {
+          return new Uint8Array(data.bytes);
+        }
+      }
+    } catch (err) {
+      console.warn('Win32 bridge raw sector read failed:', err);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1748,30 +1872,67 @@ export async function queryTauriParallelScan(targets: any[]): Promise<any[] | nu
 }
 
 /**
- * Real Sector Repair via Tauri Core IPC
+ * Real Sector Repair via Tauri Core IPC or Windows Native Bridge
  */
 export async function queryTauriRepairSector(driveIndex: number, lba: number, count: number): Promise<boolean> {
-  if (!isTauriDesktopRuntime()) return false;
-  try {
-    const res = await (window as any).__TAURI__.core.invoke('attempt_sector_repair', { driveIndex, lba, count });
-    return !!res?.success;
-  } catch (err) {
-    console.warn('Tauri sector repair failed:', err);
-    return false;
+  if (isTauriDesktopRuntime()) {
+    try {
+      const res = await (window as any).__TAURI__.core.invoke('attempt_sector_repair', { driveIndex, lba, count });
+      return !!res?.success;
+    } catch (err) {
+      console.warn('Tauri sector repair failed:', err);
+      return false;
+    }
   }
+
+  if (await detectNativeBridgeAvailable()) {
+    try {
+      const res = await fetch('/api/native/repair-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driveIndex, lba, count })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return !!data?.success;
+      }
+    } catch (err) {
+      console.warn('Win32 bridge sector repair failed:', err);
+    }
+  }
+
+  return false;
 }
 
 /**
- * Real Sector Scanning via Tauri Core IPC
+ * Real Sector Scanning via Tauri Core IPC or Windows Native Bridge
  */
 export async function queryTauriScanBlock(driveIndex: number, lba: number, sectorCount: number): Promise<any | null> {
-  if (!isTauriDesktopRuntime()) return null;
-  try {
-    return await (window as any).__TAURI__.core.invoke('scan_lba_block', { driveIndex, lba, sectorCount });
-  } catch (err) {
-    console.warn('Tauri scan block failed:', err);
-    return null;
+  if (isTauriDesktopRuntime()) {
+    try {
+      return await (window as any).__TAURI__.core.invoke('scan_lba_block', { driveIndex, lba, sectorCount });
+    } catch (err) {
+      console.warn('Tauri scan block failed:', err);
+      return null;
+    }
   }
+
+  if (await detectNativeBridgeAvailable()) {
+    try {
+      const res = await fetch('/api/native/scan-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driveIndex, lba, sectorCount })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.warn('Win32 bridge scan block failed:', err);
+    }
+  }
+
+  return null;
 }
 
 export interface StorageRecognitionDiagnostics {
@@ -1800,6 +1961,8 @@ export interface StorageRecognitionDiagnostics {
  */
 export async function getStorageDeviceRecognitionSummary(): Promise<StorageRecognitionDiagnostics> {
   const isTauri = isTauriDesktopRuntime();
+  const isBridge = !isTauri && (await detectNativeBridgeAvailable());
+  const isNative = isTauri || isBridge;
   const physicalDrives = await queryTauriPhysicalDrives();
 
   const driveList = physicalDrives.map(d => {
@@ -1819,13 +1982,17 @@ export async function getStorageDeviceRecognitionSummary(): Promise<StorageRecog
   const mappedVolumes = driveList.flatMap(d => d.mountPoints).filter(m => m.endsWith(':'));
 
   return {
-    isDesktopNative: isTauri,
+    isDesktopNative: isNative,
     probedChannelRange: '\\\\.\\PhysicalDrive0 ~ \\\\.\\PhysicalDrive31',
     totalChannelsProbed: 32,
     discoveredPhysicalDrives: physicalDrives.length,
     mappedVolumeCount: mappedVolumes.length,
     sharingFlags: 'FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE',
-    accessModeFallback: 'GENERIC_READ | GENERIC_WRITE -> GENERIC_READ -> 0 (Query Access)',
+    accessModeFallback: isTauri
+      ? 'Tauri Win32 IOCTL (R/W -> Read-Only -> Query Access)'
+      : isBridge
+      ? `Win32 Native Bridge EXE${cachedNativeBridgeStatus?.elevated ? ' (Admin UAC)' : ' (Query Access)'}`
+      : 'Browser Sandbox OPFS Only (Raw \\\\.\\PhysicalDrive blocked by browser)',
     busTypesDetected: busTypes,
     driveList
   };
@@ -2170,16 +2337,34 @@ export async function executeHddScanBlockProbe(
 }
 
 /**
- * Hardware Surface Verify via Tauri Core IPC (`IOCTL_DISK_VERIFY` + Read fallback)
+ * Hardware Surface Verify via Tauri Core IPC or Windows Native Bridge (`IOCTL_DISK_VERIFY` + Read fallback)
  */
 export async function queryTauriVerifyBlock(driveIndex: number, lba: number, sectorCount: number): Promise<any | null> {
-  if (!isTauriDesktopRuntime()) return null;
-  try {
-    return await (window as any).__TAURI__.core.invoke('verify_lba_block', { driveIndex, lba, sectorCount });
-  } catch (err) {
-    console.warn('Tauri verify_lba_block failed:', err);
-    return null;
+  if (isTauriDesktopRuntime()) {
+    try {
+      return await (window as any).__TAURI__.core.invoke('verify_lba_block', { driveIndex, lba, sectorCount });
+    } catch (err) {
+      console.warn('Tauri verify_lba_block failed:', err);
+      return null;
+    }
   }
+
+  if (await detectNativeBridgeAvailable()) {
+    try {
+      const res = await fetch('/api/native/verify-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driveIndex, lba, sectorCount })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.warn('Win32 bridge verify_lba_block failed:', err);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -2198,7 +2383,9 @@ export async function queryTauriRunSmartSelfTest(
     return {
       supported: false,
       accepted: false,
-      statusText: '웹 브라우저 보안 샌드박스에서는 커널 SMART Self-Test 패스스루 명령을 전송할 수 없습니다. Windows 데스크톱(Tauri) 환경에서 실행하세요.'
+      statusText: isNativeBridgeRuntime()
+        ? 'Native Bridge 모드에서는 ATA Pass-Through SMART Self-Test가 제한됩니다. Tauri 관리자 앱에서 지원됩니다.'
+        : '웹 브라우저 보안 샌드박스에서는 커널 SMART Self-Test 패스스루 명령을 전송할 수 없습니다. Windows 데스크톱 관리자 권한에서 실행하세요.'
     };
   }
   try {
@@ -2234,7 +2421,9 @@ export async function queryTauriSmartSelfTestStatus(
       testType,
       progressPct: 0,
       executionCode: null,
-      statusText: '브라우저 샌드박스에서는 커널 S.M.A.R.T. Self-Test를 조회할 수 없습니다.',
+      statusText: isNativeBridgeRuntime()
+        ? 'Native Bridge 모드에서는 S.M.A.R.T. 상태 폴링이 지원되지 않습니다 (Tauri 관리자 앱 필요).'
+        : '브라우저 샌드박스에서는 커널 S.M.A.R.T. Self-Test를 조회할 수 없습니다.',
       reason: 'Tauri Windows 관리자 권한 필요'
     };
   }
@@ -2275,20 +2464,39 @@ export async function queryTauriSmartSelfTestStatus(
 }
 
 /**
- * Polls live OS hardware drive temperatures via Tauri Core IPC
+ * Polls live OS hardware drive temperatures via Tauri Core IPC or Windows Native Bridge
  */
 export async function queryTauriPollTemperatures(): Promise<{ driveIndex: number; temperatureC: number | null }[]> {
-  if (!isTauriDesktopRuntime()) return [];
-  try {
-    const res = await (window as any).__TAURI__.core.invoke('poll_drive_temperatures');
-    if (Array.isArray(res)) {
-      return res.map((r: any) => ({
-        driveIndex: Number(r.driveIndex),
-        temperatureC: typeof r.temperatureC === 'number' && r.temperatureC > 0 ? Number(r.temperatureC) : null
-      }));
+  if (isTauriDesktopRuntime()) {
+    try {
+      const res = await (window as any).__TAURI__.core.invoke('poll_drive_temperatures');
+      if (Array.isArray(res)) {
+        return res.map((r: any) => ({
+          driveIndex: Number(r.driveIndex),
+          temperatureC: typeof r.temperatureC === 'number' && r.temperatureC > 0 ? Number(r.temperatureC) : null
+        }));
+      }
+    } catch {
+      return [];
     }
-    return [];
-  } catch {
-    return [];
   }
+
+  if (await detectNativeBridgeAvailable()) {
+    try {
+      const res = await fetch('/api/native/temperatures', { cache: 'no-store' });
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          return list.map((r: any) => ({
+            driveIndex: Number(r.driveIndex),
+            temperatureC: typeof r.temperatureC === 'number' && r.temperatureC > 0 ? Number(r.temperatureC) : null
+          }));
+        }
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
 }

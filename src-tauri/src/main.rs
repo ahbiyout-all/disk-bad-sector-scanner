@@ -522,9 +522,11 @@ fn run_smart_self_test(drive_index: u32, test_type: String) -> Result<serde_json
     unsafe { DS_CloseDrive(handle) };
 
     Ok(serde_json::json!({
+        "supported": ok,
         "accepted": ok,
         "testType": test_type,
-        "code": code
+        "code": code,
+        "statusText": if ok { format!("SMART {} self-test command accepted by controller", test_type) } else { "Controller rejected or does not support SMART self-test pass-through".to_string() }
     }))
 }
 
@@ -546,7 +548,8 @@ fn get_smart_self_test_status(drive_index: u32) -> Result<serde_json::Value, Str
     }
 
     let nibble = (exec_code >> 4) & 0x0F;
-    let status = if nibble == 0x0F {
+    let in_progress = nibble == 0x0F;
+    let status = if in_progress {
         "running"
     } else if nibble == 0x00 {
         "completed"
@@ -557,9 +560,12 @@ fn get_smart_self_test_status(drive_index: u32) -> Result<serde_json::Value, Str
     };
 
     Ok(serde_json::json!({
+        "supported": true,
+        "inProgress": in_progress,
         "executionCode": exec_code,
         "progressPct": progress_pct,
-        "status": status
+        "status": status,
+        "statusText": format!("SMART Self-Test: {} ({}%)", status, progress_pct)
     }))
 }
 
@@ -627,5 +633,5 @@ fn main() {
             poll_drive_temperatures
         ])
         .run(tauri::generate_context!())
-        .expect("error while running DiskSentinel Pro tauri application");
+        .expect("error while running Disk Bad Sector Scanner tauri application");
 }

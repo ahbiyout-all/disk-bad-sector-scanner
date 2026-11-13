@@ -2,7 +2,7 @@ import React from 'react';
 import { DiskDrive, ScanTelemetry } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
 import { DS_GetNvmeDeepTelemetry } from '../utils/nativeDllBridge';
-import { isTauriDesktopRuntime } from '../utils/nativeDriveEngine';
+import { isNativeHardwareRuntime } from '../utils/nativeDriveEngine';
 import { Play, Pause, Square, RotateCcw, FileText, Zap, Clock, Activity, Gauge, Thermometer, Disc, Cpu, Share2, ShieldCheck } from 'lucide-react';
 
 interface TelemetryPanelProps {
@@ -53,7 +53,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
   // NVMe Deep Telemetry (Log Page 02h - null when kernel Log 02h unavailable)
   const nvmeTelemetry = DS_GetNvmeDeepTelemetry(drive);
-  const isTauri = isTauriDesktopRuntime();
+  const isTauri = isNativeHardwareRuntime() || drive.id.startsWith('drive-tauri-physical-');
 
   const tempPercent = vitals.temperatureC !== null ? Math.min(100, (vitals.temperatureC / 70) * 100) : 0;
   const powerPercent = vitals.powerWatts !== null ? Math.min(100, (vitals.powerWatts / 12) * 100) : 0;

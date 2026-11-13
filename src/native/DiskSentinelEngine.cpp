@@ -70,7 +70,7 @@ DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* o
     );
 
     if (hDevice == INVALID_HANDLE_VALUE) {
-        // Fallback to read-only if admin write rights are not elevated
+        // Fallback to read-only if write rights are not elevated
         hDevice = CreateFileW(
             devicePath,
             GENERIC_READ,
@@ -80,9 +80,23 @@ DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* o
             FILE_FLAG_NO_BUFFERING,
             NULL
         );
-        if (hDevice == INVALID_HANDLE_VALUE) {
-            return NULL;
-        }
+    }
+
+    if (hDevice == INVALID_HANDLE_VALUE) {
+        // Secondary fallback to Query Access (0) for metadata/geometry enumeration without elevation
+        hDevice = CreateFileW(
+            devicePath,
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
+    }
+
+    if (hDevice == INVALID_HANDLE_VALUE) {
+        return NULL;
     }
 
     DSDriveContext* ctx = (DSDriveContext*)malloc(sizeof(DSDriveContext));

@@ -1,11 +1,13 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DiskDrive } from '../types';
 import { 
   createNativeDriveFromDirectoryHandle, 
   createNativeDriveFromFolderFiles,
   createNativeDriveFromFile, 
   requestPhysicalWebUsbDevice, 
-  requestPhysicalWebSerialDevice 
+  requestPhysicalWebSerialDevice,
+  getStorageDeviceRecognitionSummary,
+  StorageRecognitionDiagnostics
 } from '../utils/nativeDriveEngine';
 import { 
   X, 
@@ -57,7 +59,21 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
   const [fsPickerError, setFsPickerError] = useState<string | null>(null);
   const [fsPickerLoading, setFsPickerLoading] = useState<boolean>(false);
   const [isRescanning, setIsRescanning] = useState<boolean>(false);
+  const [recognitionDiag, setRecognitionDiag] = useState<StorageRecognitionDiagnostics | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'probe32') return;
+    let active = true;
+    getStorageDeviceRecognitionSummary()
+      .then(diag => {
+        if (active) setRecognitionDiag(diag);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isOpen, activeTab, drives.length]);
 
   if (!isOpen) return null;
 
@@ -217,6 +233,8 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
     setIsRescanning(true);
     try {
       await onRescanDrives();
+      const diag = await getStorageDeviceRecognitionSummary().catch(() => null);
+      if (diag) setRecognitionDiag(diag);
       setEjectSuccessMsg('32개 네이티브 물리 드라이브 슬롯(PhysicalDrive0~31) 및 볼륨 문자 전수 재탐색 완료!');
       setTimeout(() => setEjectSuccessMsg(null), 3500);
     } finally {
@@ -472,10 +490,23 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                     IOCTL_STORAGE_GET_DEVICE_NUMBER (볼륨 문자 매핑)
                   </span>
                   <span className="px-2 py-0.5 rounded bg-purple-50 dark:bg-purple-950/60 border border-purple-500/30 text-purple-700 dark:text-purple-300 font-bold">
-                    권한 폴백: R/W ➔ Read-Only ➔ Query(0)
+                    백엔드: {recognitionDiag?.accessModeFallback || '확인 중...'}
                   </span>
                 </div>
               </div>
+
+              {recognitionDiag && !recognitionDiag.isDesktopNative && (
+                <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800/70 bg-amber-50/70 dark:bg-amber-950/30 flex items-start gap-2.5 text-xs">
+                  <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                    <div className="font-bold">현재 웹 브라우저 보안 샌드박스(OPFS 전용)에서 실행 중입니다</div>
+                    <p>
+                      Chrome/Edge 등 일반 웹 브라우저는 보안 정책상 OS의 <code className="font-mono font-bold">\\.\PhysicalDrive0~31</code> 직접 열기를 차단합니다.
+                      실제 장착된 SSD/HDD/USB 디스크 전체를 인식·검사하려면 Windows 설치 프로그램으로 배포된 <code className="font-mono font-bold">DiskBadSectorScanner.exe</code> 또는 Tauri 데스크톱 앱을 관리자 권한으로 실행하세요.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Active Discovered Drives in 32 Channels */}
               <div className="space-y-2">

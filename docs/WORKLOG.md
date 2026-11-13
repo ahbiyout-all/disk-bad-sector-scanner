@@ -14,6 +14,10 @@
   - 모바일(APK/iOS) 및 포터블 ZIP 패키징을 제거하고 GitHub Releases에는 오직 공식 Windows 인스톨러(`Output\DiskBadSectorScanner_Setup_v4.6.0.exe`)만 생성·첨부되도록 개편.
 - **저장소 `.gitignore` 전면 정비 및 `git-push-auto.bat` 생성**:
   - `git-push-auto.bat` 신규 작성(린트 검증, 개인 이메일/비밀정보 스캔, 핵심 소스 선별 스테이징, 자동 푸시) 및 `.gitignore` 내 `git-push-auto.bat` 자체 제외 규칙 확인.
+- **물리 디스크(`\\\\.\\PhysicalDrive0~31`) 미인식 근본 원인 해결**:
+  - `src-tauri/tauri.conf.json`에 `"withGlobalTauri": true` 활성화 및 `src-tauri/app.manifest`(`requireAdministrator` UAC 매니페스트) 임베딩, `src-tauri/src/main.rs` SMART Self-Test JSON 필드 정합성 수정.
+  - `src/native/DiskSentinelLauncher.cs`에 로컬 Win32 하드웨어 브릿지 서버(`http://127.0.0.1:<port>/api/native/*`), Vite 정적 에셋(`/assets/*`) 서빙, C++ 코어 DLL + Pure Win32 IOCTL 폴백 및 UAC 권한 승격 로직 탑재.
+  - `src/native/DiskSentinelEngine.cpp` `DS_OpenDriveDirect`에 비관리자 Query Access(`dwDesiredAccess = 0`) 폴백 추가 및 `src/utils/nativeDriveEngine.ts`/`nativeDllBridge.ts`/`App.tsx`의 Win32 브릿지 연동 완성.
 
 ### 2026-11-13 (v4.6.0 D3 Latency Histogram, 32-Drive IOCTL/WMI Enumeration, Zero-Dummy Audit & SMART Alerts)
 - **D3.js 기반 실시간 섹터별 읽기 속도 및 I/O 레이턴시 분포 히스토그램 구축 (`LatencyHistogramDashboard.tsx`)**:
