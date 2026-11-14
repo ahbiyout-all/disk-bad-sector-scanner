@@ -254,7 +254,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                실제 쓰기 핸들(Tauri Win32 PhysicalDrive 또는 OPFS) 검증 기반 제로필(0x00) 수복 엔진
+                Tauri Win32 PhysicalDrive 직접 쓰기 핸들 검증 기반 제로필(0x00) 수복 엔진
               </p>
             </div>
           </div>
@@ -304,7 +304,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                   <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
                     {isSafetyLocked
                       ? 'S.M.A.R.T. 제로필 작업은 해당 LBA 섹터의 데이터를 0x00으로 덮어씁니다. 수복을 실행하려면 우측 버튼으로 잠금을 해제하세요.'
-                      : '주의: 안전 잠금이 해제되었습니다. 쓰기 권한이 허용된 드라이브/OPFS에 한해 실제 0x00 기록 및 검증을 수행합니다.'}
+                      : '주의: 안전 잠금이 해제되었습니다. 쓰기 권한이 허용된 비시스템 물리 드라이브에 한해 실제 0x00 기록 및 검증을 수행합니다.'}
                   </p>
                   {showLockWarning && (
                     <div className="mt-2 p-2 rounded bg-rose-900/90 border border-rose-400 text-rose-100 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
@@ -467,11 +467,11 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300">
               <div className="flex items-start gap-1.5">
                 <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-                <span><strong>실제 스토리지 쓰기 검증</strong>: Win32 PhysicalDrive 또는 OPFS 스토리지에 실제로 0x00 블록을 기록하고 재판독 일치 여부를 검증합니다.</span>
+                <span><strong>실제 스토리지 쓰기 검증</strong>: Win32 PhysicalDrive 직접 핸들로 실제 0x00 블록을 기록하고 재판독 일치 여부를 검증합니다.</span>
               </div>
               <div className="flex items-start gap-1.5">
                 <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-                <span><strong>권한 미충족 시 가짜 처리 금지</strong>: 읽기 전용 파일/USB 핸들에서는 거짓 수복 완료 처리를 하지 않고 거부 사유를 반환합니다.</span>
+                <span><strong>권한 미충족 시 가짜 처리 금지</strong>: OS 보호 영역이나 권한 없는 핸들에서는 거짓 수복 완료 처리를 하지 않고 거부 사유를 반환합니다.</span>
               </div>
             </div>
           </div>

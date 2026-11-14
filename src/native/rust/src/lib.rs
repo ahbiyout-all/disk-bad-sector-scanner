@@ -289,12 +289,33 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
         if ok != 0 && bytes_returned >= std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() as u32 {
             let desc = &*(buffer.as_ptr() as *const STORAGE_DEVICE_DESCRIPTOR);
 
-            if desc.ProductIdOffset > 0 && (desc.ProductIdOffset as usize) < buffer.len() {
-                let model_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.ProductIdOffset as usize) as *const i8)
-                    .to_string_lossy().trim().to_string();
-                if !model_str.is_empty() {
-                    copy_str_to_fixed_bytes(&model_str, &mut detail.model);
+            let vendor_str = if desc.VendorIdOffset > 0 && (desc.VendorIdOffset as usize) < buffer.len() {
+                std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.VendorIdOffset as usize) as *const i8)
+                    .to_string_lossy().trim().to_string()
+            } else {
+                String::new()
+            };
+            let product_str = if desc.ProductIdOffset > 0 && (desc.ProductIdOffset as usize) < buffer.len() {
+                std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.ProductIdOffset as usize) as *const i8)
+                    .to_string_lossy().trim().to_string()
+            } else {
+                String::new()
+            };
+
+            let combined_model = if !vendor_str.is_empty() && !product_str.is_empty() {
+                if product_str.to_lowercase().starts_with(&vendor_str.to_lowercase()) {
+                    product_str
+                } else {
+                    format!("{} {}", vendor_str, product_str)
                 }
+            } else if !product_str.is_empty() {
+                product_str
+            } else {
+                vendor_str
+            };
+
+            if !combined_model.is_empty() {
+                copy_str_to_fixed_bytes(&combined_model, &mut detail.model);
             }
             if desc.SerialNumberOffset > 0 && (desc.SerialNumberOffset as usize) < buffer.len() {
                 let serial_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.SerialNumberOffset as usize) as *const i8)
@@ -309,12 +330,22 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
                 }
             }
 
-            match desc.BusType {
-                BusTypeNvme => { copy_str_to_fixed_bytes("NVMe", &mut detail.bus_type); detail.is_ssd = true; },
-                BusTypeSata => copy_str_to_fixed_bytes("SATA", &mut detail.bus_type),
-                BusTypeUsb => copy_str_to_fixed_bytes("USB", &mut detail.bus_type),
-                BusTypeScsi | BusTypeSas => copy_str_to_fixed_bytes("SCSI/SAS", &mut detail.bus_type),
-                _ => copy_str_to_fixed_bytes("Standard Storage", &mut detail.bus_type),
+            match desc.BusType as i32 {
+                17 => { copy_str_to_fixed_bytes("NVMe", &mut detail.bus_type); detail.is_ssd = true; },
+                11 => copy_str_to_fixed_bytes("SATA", &mut detail.bus_type),
+                7 => copy_str_to_fixed_bytes("USB", &mut detail.bus_type),
+                8 => copy_str_to_fixed_bytes("RAID", &mut detail.bus_type),
+                3 => copy_str_to_fixed_bytes("ATA", &mut detail.bus_type),
+                1 | 10 => copy_str_to_fixed_bytes("SCSI/SAS", &mut detail.bus_type),
+                12 => { copy_str_to_fixed_bytes("SD", &mut detail.bus_type); detail.is_ssd = true; },
+                13 => { copy_str_to_fixed_bytes("MMC", &mut detail.bus_type); detail.is_ssd = true; },
+                16 => copy_str_to_fixed_bytes("Storage Spaces", &mut detail.bus_type),
+                18 => { copy_str_to_fixed_bytes("SCM", &mut detail.bus_type); detail.is_ssd = true; },
+                19 => { copy_str_to_fixed_bytes("UFS", &mut detail.bus_type); detail.is_ssd = true; },
+                _ => {
+                    let _ = (BusTypeNvme, BusTypeSata, BusTypeUsb, BusTypeScsi, BusTypeSas);
+                    copy_str_to_fixed_bytes("Standard Storage", &mut detail.bus_type);
+                },
             }
         }
 

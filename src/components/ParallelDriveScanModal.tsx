@@ -163,7 +163,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                실제 Win32 스레드 풀 / 병렬 File.slice &amp; OPFS 검증으로 연결된 다중 드라이브를 동시 검사합니다
+                Tauri 네이티브 Rust 스레드 풀 및 Win32 PhysicalDrive 직접 I/O로 연결된 다중 물리 드라이브를 동시 검사합니다
               </p>
             </div>
           </div>

@@ -29,8 +29,7 @@ import {
   Activity, 
   ArrowRight,
   Gauge,
-  Sparkles,
-  FolderOpen
+  Sparkles
 } from 'lucide-react';
 
 interface ScanMethodSelectorProps {
@@ -40,7 +39,6 @@ interface ScanMethodSelectorProps {
   isScanning: boolean;
   blocks?: SectorBlock[];
   onRepairSectors?: (driveId: string, repairedBlockIds: number[]) => void;
-  onOpenFilePicker?: () => void;
   onOpenRemapModal?: () => void;
 }
 
@@ -51,7 +49,6 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
   isScanning,
   blocks = [],
   onRepairSectors,
-  onOpenFilePicker,
   onOpenRemapModal
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -119,18 +116,6 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
 
         {/* Action Buttons */}
         <div className="w-full md:w-auto flex items-center justify-end gap-1.5 sm:gap-2 flex-wrap pt-1 sm:pt-0 border-t border-slate-200/60 dark:border-slate-800/60 md:border-t-0">
-          {/* Real File Direct Open Button */}
-          {onOpenFilePicker && (
-            <button
-              onClick={onOpenFilePicker}
-              className="inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition-colors cursor-pointer min-h-[34px]"
-              title="실제 파일(.img, .iso, .vhd, 모든 파일)을 선택하여 바이트 단위 직접 검사를 수행합니다."
-            >
-              <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">실제 파일 열기</span>
-              <span className="sm:hidden">파일</span>
-            </button>
-          )}
 
           {/* S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine Button */}
           <button

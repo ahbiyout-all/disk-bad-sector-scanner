@@ -869,7 +869,7 @@ namespace DiskSentinel
                 // Pure Win32 API fallback (works even if DiskSentinelNativeCore.dll is absent)
                 if (!found)
                 {
-                    found = ProbeDriveViaWin32(i, ref model, ref serial, ref firmware, ref bus, ref capBytes, ref secSize, ref isSsd);
+                    found = ProbeDriveViaWin32(i, ref model, ref serial, ref firmware, ref bus, ref capBytes, ref secSize, ref isSsd, ref isTrim, ref tempC);
                 }
 
                 if (!found) continue;
@@ -879,7 +879,9 @@ namespace DiskSentinel
 
                 if (string.IsNullOrEmpty(model)) model = string.Format("Physical Storage Drive {0}", i);
                 if (string.IsNullOrEmpty(firmware)) firmware = "N/A";
-                bool isExternal = bus.ToLowerInvariant().Contains("usb");
+                bool isSdOrMmc = string.Equals(bus, "SD", StringComparison.OrdinalIgnoreCase) || string.Equals(bus, "MMC", StringComparison.OrdinalIgnoreCase);
+                bool isExternal = bus.ToLowerInvariant().Contains("usb") || isSdOrMmc;
+                string connType = isSdOrMmc ? "sd_card" : (isExternal ? "usb" : "internal");
 
                 List<VolumePartitionInfo> vols = volumeMap.ContainsKey(i) ? volumeMap[i] : new List<VolumePartitionInfo>();
                 StringBuilder mountSb = new StringBuilder();
@@ -920,7 +922,7 @@ namespace DiskSentinel
                     isSsd ? "true" : "false",
                     isTrim ? "true" : "false",
                     isExternal ? "true" : "false",
-                    isExternal ? "usb" : "internal",
+                    connType,
                     mountSb.ToString(),
                     partSb.ToString(),
                     capBytes,
@@ -947,7 +949,9 @@ namespace DiskSentinel
             ref string bus,
             ref ulong capBytes,
             ref uint secSize,
-            ref bool isSsd)
+            ref bool isSsd,
+            ref bool isTrim,
+            ref int tempC)
         {
             string devPath = string.Format("\\\\.\\PhysicalDrive{0}", driveIdx);
             IntPtr h = CreateFileW(devPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
@@ -981,7 +985,7 @@ namespace DiskSentinel
                     Marshal.FreeHGlobal(lenPtr);
                 }
 
-                // 2. Model, Serial, BusType via IOCTL_STORAGE_QUERY_PROPERTY (StorageDeviceProperty = 0)
+                // 2. Vendor, Model, Serial, BusType via IOCTL_STORAGE_QUERY_PROPERTY (StorageDeviceProperty = 0)
                 int qSize = 12;
                 IntPtr qPtr = Marshal.AllocHGlobal(qSize);
                 for (int b = 0; b < qSize; b++) Marshal.WriteByte(qPtr, b, 0);
@@ -990,10 +994,37 @@ namespace DiskSentinel
                     bytesRet >= Marshal.SizeOf(typeof(STORAGE_DEVICE_DESCRIPTOR)))
                 {
                     STORAGE_DEVICE_DESCRIPTOR desc = (STORAGE_DEVICE_DESCRIPTOR)Marshal.PtrToStructure(descBuf, typeof(STORAGE_DEVICE_DESCRIPTOR));
+                    string vendorStr = "";
+                    string prodStr = "";
+                    if (desc.VendorIdOffset > 0 && desc.VendorIdOffset < bytesRet)
+                    {
+                        vendorStr = ReadAnsiZ(descBuf, (int)desc.VendorIdOffset, (int)bytesRet).Trim();
+                    }
                     if (desc.ProductIdOffset > 0 && desc.ProductIdOffset < bytesRet)
                     {
-                        model = ReadAnsiZ(descBuf, (int)desc.ProductIdOffset, (int)bytesRet).Trim();
+                        prodStr = ReadAnsiZ(descBuf, (int)desc.ProductIdOffset, (int)bytesRet).Trim();
                     }
+
+                    if (!string.IsNullOrEmpty(vendorStr) && !string.IsNullOrEmpty(prodStr))
+                    {
+                        if (prodStr.StartsWith(vendorStr, StringComparison.OrdinalIgnoreCase))
+                        {
+                            model = prodStr;
+                        }
+                        else
+                        {
+                            model = vendorStr + " " + prodStr;
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(prodStr))
+                    {
+                        model = prodStr;
+                    }
+                    else if (!string.IsNullOrEmpty(vendorStr))
+                    {
+                        model = vendorStr;
+                    }
+
                     if (desc.SerialNumberOffset > 0 && desc.SerialNumberOffset < bytesRet)
                     {
                         serial = ReadAnsiZ(descBuf, (int)desc.SerialNumberOffset, (int)bytesRet).Trim();
@@ -1002,27 +1033,62 @@ namespace DiskSentinel
                     {
                         firmware = ReadAnsiZ(descBuf, (int)desc.ProductRevisionOffset, (int)bytesRet).Trim();
                     }
+
                     switch (desc.BusType)
                     {
                         case 17: bus = "NVMe"; isSsd = true; break;
                         case 11: bus = "SATA"; break;
                         case 7: bus = "USB"; break;
+                        case 8: bus = "RAID"; break;
+                        case 3: bus = "ATA"; break;
                         case 1:
                         case 10: bus = "SCSI/SAS"; break;
+                        case 12: bus = "SD"; isSsd = true; break;
+                        case 13: bus = "MMC"; isSsd = true; break;
+                        case 16: bus = "Storage Spaces"; break;
+                        case 18: bus = "SCM"; isSsd = true; break;
+                        case 19: bus = "UFS"; isSsd = true; break;
                         default: bus = "Standard Storage"; break;
                     }
                 }
                 Marshal.FreeHGlobal(descBuf);
 
-                // 3. Seek Penalty (StorageDeviceSeekPenaltyProperty = 7)
+                // 3. Seek Penalty (StorageDeviceSeekPenaltyProperty = 7; offset 8 is BOOLEAN IncursSeekPenalty)
                 Marshal.WriteInt32(qPtr, 0, 7);
                 IntPtr seekBuf = Marshal.AllocHGlobal(16);
-                if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, qPtr, (uint)qSize, seekBuf, 16, out bytesRet, IntPtr.Zero) && bytesRet >= 8)
+                if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, qPtr, (uint)qSize, seekBuf, 16, out bytesRet, IntPtr.Zero) && bytesRet >= 9)
                 {
-                    byte incursSeekPenalty = Marshal.ReadByte(seekBuf, 4);
+                    byte incursSeekPenalty = Marshal.ReadByte(seekBuf, 8);
                     isSsd = (incursSeekPenalty == 0);
                 }
                 Marshal.FreeHGlobal(seekBuf);
+
+                // 4. TRIM Support (StorageDeviceTrimProperty = 8; offset 8 is BOOLEAN TrimEnabled)
+                Marshal.WriteInt32(qPtr, 0, 8);
+                IntPtr trimBuf = Marshal.AllocHGlobal(16);
+                if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, qPtr, (uint)qSize, trimBuf, 16, out bytesRet, IntPtr.Zero) && bytesRet >= 9)
+                {
+                    byte trimEnabled = Marshal.ReadByte(trimBuf, 8);
+                    isTrim = (trimEnabled != 0);
+                }
+                Marshal.FreeHGlobal(trimBuf);
+
+                // 5. Native OS Hardware Temperature (StorageDeviceTemperatureProperty = 14)
+                Marshal.WriteInt32(qPtr, 0, 14);
+                IntPtr tempBuf = Marshal.AllocHGlobal(128);
+                if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, qPtr, (uint)qSize, tempBuf, 128, out bytesRet, IntPtr.Zero) && bytesRet >= 28)
+                {
+                    short infoCount = Marshal.ReadInt16(tempBuf, 12);
+                    if (infoCount > 0)
+                    {
+                        short tVal = Marshal.ReadInt16(tempBuf, 26);
+                        if (tVal > 0 && tVal < 150)
+                        {
+                            tempC = tVal;
+                        }
+                    }
+                }
+                Marshal.FreeHGlobal(tempBuf);
                 Marshal.FreeHGlobal(qPtr);
 
                 return true;
@@ -1074,6 +1140,48 @@ namespace DiskSentinel
                         i,
                         tempC > 0 ? tempC.ToString(CultureInfo.InvariantCulture) : "null"
                     );
+                }
+            }
+            else
+            {
+                IntPtr qPtr = Marshal.AllocHGlobal(12);
+                for (int b = 0; b < 12; b++) Marshal.WriteByte(qPtr, b, 0);
+                Marshal.WriteInt32(qPtr, 0, 14);
+                IntPtr tempBuf = Marshal.AllocHGlobal(128);
+                try
+                {
+                    for (uint i = 0; i < 32; i++)
+                    {
+                        string devPath = string.Format("\\\\.\\PhysicalDrive{0}", i);
+                        IntPtr h = CreateFileW(devPath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+                        if (h == INVALID_HANDLE_VALUE) continue;
+                        int tempC = 0;
+                        uint bytesRet = 0;
+                        if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, qPtr, 12, tempBuf, 128, out bytesRet, IntPtr.Zero) && bytesRet >= 28)
+                        {
+                            short infoCount = Marshal.ReadInt16(tempBuf, 12);
+                            if (infoCount > 0)
+                            {
+                                short tVal = Marshal.ReadInt16(tempBuf, 26);
+                                if (tVal > 0 && tVal < 150) tempC = tVal;
+                            }
+                        }
+                        CloseHandle(h);
+
+                        if (!first) sb.Append(",");
+                        first = false;
+                        sb.AppendFormat(
+                            CultureInfo.InvariantCulture,
+                            "{{\"driveIndex\":{0},\"temperatureC\":{1}}}",
+                            i,
+                            tempC > 0 ? tempC.ToString(CultureInfo.InvariantCulture) : "null"
+                        );
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(tempBuf);
+                    Marshal.FreeHGlobal(qPtr);
                 }
             }
             sb.Append("]");

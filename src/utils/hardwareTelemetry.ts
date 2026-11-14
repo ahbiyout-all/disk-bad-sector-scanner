@@ -41,15 +41,13 @@ export function calculateHardwareVitals(
   const specRpm = drive.hardwareSpecs?.rotationalSpeedRpm ?? null;
   let rpmValue: number | null = null;
   let rpmDisplay = 'N/A (커널 RPM 미제공)';
-  let rpmSubtext = '브라우저 샌드박스에서는 ATA 스핀들 센서 조회가 제한됩니다';
+  let rpmSubtext = 'Tauri 데스크톱 네이티브 커널 RPM 센서 대기 중';
 
   if (!isMechanicalHdd) {
     rpmValue = 0;
     rpmDisplay = '0 RPM (솔리드 스테이트 / NAND Flash)';
     if (drive.type === 'NVMe') {
       rpmSubtext = drive.interface || 'PCIe NVMe Controller';
-    } else if (drive.attachedFile || drive.attachedFileHandle) {
-      rpmSubtext = 'W3C File / OPFS Sandbox Storage';
     } else if (drive.isExternal) {
       rpmSubtext = drive.usbProtocol || 'USB Solid-State Flash';
     } else {

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file. This projec
 
 ---
 
+## [v4.6.1] - 2026-11-14
+### Changed & Removed
+- **브라우저 기반 디스크 인식 방식 전면 제거 및 Tauri 데스크톱 네이티브 IPC 전용 전환**:
+  - OPFS 스토리지 프로브, 폴더/파일(`webkitdirectory`, `showDirectoryPicker`, `.img`/`.iso` `File.slice`) 마운트, WebUSB, Web Serial 기반 디스크 인식 및 비트 카빙/제로필 우회 경로를 모두 제거.
+  - 실제 장착된 내·외장 물리 디스크(`\\.\PhysicalDrive0~31`) 탐색과 Verify·Read·Butterfly·Erase 4종 표면검사를 Tauri 데스크톱 네이티브 IPC(`__TAURI__` -> Rust/Win32 IOCTL) 전용으로 일원화.
+  - 일반 웹 브라우저 단독 실행 시 가짜·샌드박스 드라이브를 표시하지 않고 연결 상태 진단 스트립과 Tauri 데스크톱 앱 / 로컬 브릿지 실행 안내 및 `[네이티브 엔진 연결 재확인]` 빈 상태 화면을 제공.
+
+---
+
 ## [v4.6.0] - 2026-11-13
 ### Added
 - **공식 앱 브랜드 통합 (`Disk Bad Sector Scanner`) 및 예측 장애 분석(Z-Score)**:
@@ -24,8 +33,14 @@ All notable changes to this project will be documented in this file. This projec
   - 핵심 S.M.A.R.T. 속성이 제조사 한계 임계값(Threshold)을 초과하거나 근접 시 경고 배지, 행 하이라이트, 상세 툴팁으로 즉각 알림.
 - **Windows IOCTL/WMI 네이티브 32-드라이브 다중 탐색 및 JSON 데이터 마이그레이션**:
   - `\\.\PhysicalDrive0` ~ `PhysicalDrive31` 전수 조사 및 볼륨 매핑 구현, 사용자 설정·검사 이력 JSON 내보내기/복원 추가.
+  - `NVMe/SATA/USB` 외 `SCSI/SAS`, `ATA`, `SD`, `MMC`, `UFS`, `Storage Spaces`, `SCM` 버스 규격과 `VendorId+ProductId` 모델명 정규화를 지원하고, 표면 검사 패널 내 대상 디스크 드롭다운·`재검색`·`볼륨/폴더` 마운트·`외장` 퀵 버튼을 통합해 **Verify / Read / Butterfly / Erase** 4종 검사를 즉시 수행 가능.
+- **차세대 제조사·신규 모델 자동 인식 및 표준 프로토콜 분류 엔진 (`vendorDiagnostics.ts`)**:
+  - Solidigm, Lexar, Corsair, Sabrent, ADATA, PNY, TeamGroup, Biwin, YMTC, Nextorage, MSI, ASUS 등 19종 제조사 및 최신 USB4/NVMe 인클로저 VID 매핑 지원.
+  - 향후 출시되는 미확인 신모델도 SKU 프리픽스 및 PCIe Gen5/NVMe 2.0/USB4/UASP/SATA/SDXC/UFS 표준 프로토콜 규칙으로 자동 분류·진단(`classifyFutureDriveStandards`).
 
 ### Changed & Fixed
+- **Pure Win32 SSD/TRIM/온도 폴백 오프셋 수정 (`DiskSentinelLauncher.cs`)**:
+  - `DEVICE_SEEK_PENALTY_DESCRIPTOR` 오프셋 오류(`4`→`8`)를 바로잡아 DLL 미로드 환경에서도 SSD 판별(`isSsd`)이 왜곡되지 않도록 수정하고, `StorageDeviceTrimProperty(8)` 및 `StorageDeviceTemperatureProperty(14)` Win32 직접 조회를 추가.
 - **GitHub Actions Node.js 22 LTS / 24 전환 및 인스톨러 단일 릴리스 전환**:
   - Node.js 20 EOL 대응을 위해 CI/CD 워크플로(`ci.yml`, `release.yml`)를 Node.js 22 LTS / 24 (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`)로 업그레이드.
   - 물리 디스크 직접 진단이 불가능한 모바일(APK/iOS) 및 불필요한 포터블 ZIP 배포를 제거하고 공식 Windows 인스톨러(`.exe`)만 GitHub Releases 에셋으로 업로드하도록 개편.

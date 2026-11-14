@@ -288,8 +288,8 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           </div>
           <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
             <span className="inline-flex items-center gap-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${vitals.isSensorAvailable ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`}></span>
-              {vitals.isSensorAvailable ? '커널 센서 실시간 수신 중' : '커널 센서 N/A (샌드박스)'}
+              <span className={`w-1.5 h-1.5 rounded-full ${vitals.isSensorAvailable ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+              {vitals.isSensorAvailable ? '커널 센서 실시간 수신 중' : '커널 센서 N/A'}
             </span>
             <span>•</span>
             <span className="truncate max-w-[200px]">{drive.model}</span>
@@ -451,18 +451,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         {/* Drive Interface Hardware Telemetry Banner */}
         <div className="mt-2.5 p-2 sm:p-2.5 rounded-lg border bg-slate-50/90 dark:bg-slate-950/80 border-slate-200 dark:border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2 flex-wrap">
-            {drive.attachedFile ? (
-              <>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
-                  Direct File I/O
-                </span>
-                <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
-                  실제 파일: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.attachedFile.name}</b> &nbsp;|&nbsp;
-                  전체 크기: <b className="font-mono text-indigo-600 dark:text-indigo-400">{(drive.attachedFile.size / (1024 * 1024)).toFixed(2)} MB</b> &nbsp;|&nbsp;
-                  포맷: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.attachedFile.type || 'Raw Binary Stream'}</b>
-                </span>
-              </>
-            ) : drive.type === 'NVMe' ? (
+            {drive.type === 'NVMe' ? (
               <>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-100 dark:bg-cyan-950/80 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30">
                   NVMe Log 02h
@@ -493,7 +482,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             ) : drive.type === 'SSD' || drive.type === 'EXTERNAL_SSD' ? (
               <>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-teal-100 dark:bg-teal-950/80 text-teal-700 dark:text-teal-400 border border-teal-500/30">
-                  {isTauri ? 'SATA AHCI / IOCTL' : 'W3C OPFS / Storage API'}
+                  {isTauri ? 'SATA AHCI / IOCTL' : 'SATA / NAND Flash'}
                 </span>
                 <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
                   플래시 마모율: <b className="font-mono text-emerald-600 dark:text-emerald-400">
@@ -525,10 +514,10 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 dark:text-slate-400 shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            <span className={`w-1.5 h-1.5 rounded-full ${isTauri ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
             <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
               <ShieldCheck className="w-3 h-3 text-emerald-500" />
-              {isTauri ? 'Win32 Direct IOCTL' : drive.attachedFile ? 'File.slice Direct I/O' : 'OPFS Real I/O'}
+              {isTauri ? 'Tauri Win32 Direct IOCTL' : 'Tauri IPC 대기 중'}
             </span>
           </div>
         </div>

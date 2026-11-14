@@ -1132,8 +1132,50 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
         if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), descBuffer, sizeof(descBuffer), &bytesReturned, NULL)) {
             STORAGE_DEVICE_DESCRIPTOR* pDesc = (STORAGE_DEVICE_DESCRIPTOR*)descBuffer;
 
+            char vendorStr[64] = {0};
+            char productStr[64] = {0};
+            if (pDesc->VendorIdOffset != 0 && pDesc->VendorIdOffset < sizeof(descBuffer)) {
+                safe_strncpy(vendorStr, (char*)(descBuffer + pDesc->VendorIdOffset), sizeof(vendorStr));
+            }
             if (pDesc->ProductIdOffset != 0 && pDesc->ProductIdOffset < sizeof(descBuffer)) {
-                safe_strncpy(detail->model, (char*)(descBuffer + pDesc->ProductIdOffset), sizeof(detail->model));
+                safe_strncpy(productStr, (char*)(descBuffer + pDesc->ProductIdOffset), sizeof(productStr));
+            }
+
+            auto trimStr = [](char* s) {
+                size_t len = strlen(s);
+                while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' || s[len - 1] == '\n')) {
+                    s[--len] = '\0';
+                }
+                size_t start = 0;
+                while (s[start] == ' ' || s[start] == '\t') start++;
+                if (start > 0) memmove(s, s + start, strlen(s + start) + 1);
+            };
+            trimStr(vendorStr);
+            trimStr(productStr);
+
+            if (vendorStr[0] != '\0' && productStr[0] != '\0') {
+                bool startsWithVendor = true;
+                size_t vLen = strlen(vendorStr);
+                if (strlen(productStr) < vLen) {
+                    startsWithVendor = false;
+                } else {
+                    for (size_t k = 0; k < vLen; ++k) {
+                        char a = vendorStr[k];
+                        char b = productStr[k];
+                        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                        if (a != b) { startsWithVendor = false; break; }
+                    }
+                }
+                if (startsWithVendor) {
+                    safe_strncpy(detail->model, productStr, sizeof(detail->model));
+                } else {
+                    snprintf(detail->model, sizeof(detail->model), "%s %s", vendorStr, productStr);
+                }
+            } else if (productStr[0] != '\0') {
+                safe_strncpy(detail->model, productStr, sizeof(detail->model));
+            } else if (vendorStr[0] != '\0') {
+                safe_strncpy(detail->model, vendorStr, sizeof(detail->model));
             } else {
                 safe_strncpy(detail->model, "Physical Storage Drive", sizeof(detail->model));
             }
@@ -1150,21 +1192,46 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
                 safe_strncpy(detail->firmwareRev, "N/A", sizeof(detail->firmwareRev));
             }
 
-            // Bus type detection
-            switch (pDesc->BusType) {
-                case BusTypeNvme:
+            // Future-proof Windows STORAGE_BUS_TYPE detection (0..19)
+            switch ((int)pDesc->BusType) {
+                case 17: // BusTypeNvme
                     safe_strncpy(detail->busType, "NVMe", sizeof(detail->busType));
                     detail->isSsd = true;
                     break;
-                case BusTypeSata:
+                case 11: // BusTypeSata
                     safe_strncpy(detail->busType, "SATA", sizeof(detail->busType));
                     break;
-                case BusTypeUsb:
+                case 7: // BusTypeUsb
                     safe_strncpy(detail->busType, "USB", sizeof(detail->busType));
                     break;
-                case BusTypeScsi:
-                case BusTypeSas:
+                case 8: // BusTypeRaid
+                    safe_strncpy(detail->busType, "RAID", sizeof(detail->busType));
+                    break;
+                case 3: // BusTypeAta
+                    safe_strncpy(detail->busType, "ATA", sizeof(detail->busType));
+                    break;
+                case 1: // BusTypeScsi
+                case 10: // BusTypeSas
                     safe_strncpy(detail->busType, "SCSI/SAS", sizeof(detail->busType));
+                    break;
+                case 12: // BusTypeSd
+                    safe_strncpy(detail->busType, "SD", sizeof(detail->busType));
+                    detail->isSsd = true;
+                    break;
+                case 13: // BusTypeMmc
+                    safe_strncpy(detail->busType, "MMC", sizeof(detail->busType));
+                    detail->isSsd = true;
+                    break;
+                case 16: // BusTypeSpaces
+                    safe_strncpy(detail->busType, "Storage Spaces", sizeof(detail->busType));
+                    break;
+                case 18: // BusTypeScm
+                    safe_strncpy(detail->busType, "SCM", sizeof(detail->busType));
+                    detail->isSsd = true;
+                    break;
+                case 19: // BusTypeUfs
+                    safe_strncpy(detail->busType, "UFS", sizeof(detail->busType));
+                    detail->isSsd = true;
                     break;
                 default:
                     safe_strncpy(detail->busType, "Standard Storage", sizeof(detail->busType));

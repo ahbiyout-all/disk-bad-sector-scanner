@@ -21,8 +21,6 @@ import {
   Layers,
   Shield,
   Binary,
-  FolderOpen,
-  FileText,
   Sliders,
   HelpCircle,
   RefreshCw,
@@ -63,8 +61,6 @@ export interface NavbarProps {
   onOpenParallelScanModal?: () => void;
   onOpenTrayGuardianModal?: () => void;
   onOpenBitCarvingModal?: () => void;
-  onPickDirectoryVolume?: () => void;
-  onOpenRealFile?: () => void;
   onOpenHardwareDetails?: () => void;
   onRescanDrives?: () => Promise<void>;
   isRescanning?: boolean;
@@ -106,8 +102,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenParallelScanModal,
   onOpenTrayGuardianModal,
   onOpenBitCarvingModal,
-  onPickDirectoryVolume,
-  onOpenRealFile,
   onOpenHardwareDetails,
   onRescanDrives,
   isRescanning = false,
@@ -153,10 +147,6 @@ export const Navbar: React.FC<NavbarProps> = ({
       setActiveMenu(menu);
     }
   };
-
-  // Categorize drives: real host/physical storage and mounted files/volumes
-  const realHostDrives = drives.filter(d => !d.attachedFile && !d.attachedFileHandle);
-  const realFileAndVolumeDrives = drives.filter(d => Boolean(d.attachedFile || d.attachedFileHandle));
 
   // Active drive metadata
   const currentDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
@@ -220,40 +210,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 {activeMenu === 'file' && (
                   <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
                     <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      스토리지 파일 및 볼륨
+                      물리 장치 및 진단 제어
                     </div>
-
-                    {onPickDirectoryVolume && (
-                      <button
-                        onClick={() => {
-                          setActiveMenu(null);
-                          onPickDirectoryVolume();
-                        }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
-                      >
-                        <div className="flex items-center gap-2">
-                          <FolderOpen className="w-4 h-4 text-emerald-500" />
-                          <span>실제 로컬 볼륨 마운트...</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">Ctrl+O</span>
-                      </button>
-                    )}
-
-                    {onOpenRealFile && (
-                      <button
-                        onClick={() => {
-                          setActiveMenu(null);
-                          onOpenRealFile();
-                        }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
-                      >
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-blue-500" />
-                          <span>실물 디스크 파일 열기...</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">Ctrl+F</span>
-                      </button>
-                    )}
 
                     {onRescanDrives && (
                       <button
@@ -512,7 +470,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <Shield className="w-4 h-4 text-emerald-500" />
                           <span>시스템 트레이 가디언</span>
                         </div>
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-semibold">ACTIVE</span>
                       </button>
                     )}
 
@@ -802,27 +760,25 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="hidden sm:inline">Drive:</span>
               </div>
               <select
-                value={selectedDriveId}
+                value={drives.length > 0 ? selectedDriveId : ''}
+                disabled={drives.length === 0}
                 onChange={(e) => onSelectDrive(e.target.value)}
-                className="bg-transparent text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer truncate max-w-[170px] sm:max-w-[220px]"
+                className="bg-transparent text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer disabled:text-slate-400 disabled:cursor-not-allowed truncate max-w-[190px] sm:max-w-[280px]"
                 aria-label="대상 드라이브 선택"
               >
-                {realFileAndVolumeDrives.length > 0 && (
-                  <optgroup label="📂 마운트된 로컬 볼륨 & 파일 (Direct I/O)" className="bg-white dark:bg-slate-900 text-emerald-600 font-bold">
-                    {realFileAndVolumeDrives.map((d) => (
+                {drives.length === 0 ? (
+                  <option value="" className="bg-white dark:bg-slate-900 text-slate-500">
+                    네이티브 장치 미연결 (Tauri IPC 필요)
+                  </option>
+                ) : (
+                  <optgroup label="내·외장 물리 저장장치 (Tauri IPC)" className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold">
+                    {drives.map((d) => (
                       <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                        [📂 파일] {d.name} ({d.capacityGb !== null ? `${d.capacityGb}GB` : '용량 N/A'})
+                        [{d.hardwareSpecs?.busType || d.type} {d.isExternal ? '외장' : '내장'} {d.mountPoint || ''}] {d.model} ({d.capacityGb !== null ? `${d.capacityGb}GB` : 'N/A'})
                       </option>
                     ))}
                   </optgroup>
                 )}
-                <optgroup label="🖥️ 호스트 / 물리 저장장치 (Hardware)" className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold">
-                  {realHostDrives.map((d) => (
-                    <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                      [{d.type} {d.mountPoint || ''}] {d.name} ({d.capacityGb !== null ? `${d.capacityGb}GB` : 'N/A'})
-                    </option>
-                  ))}
-                </optgroup>
               </select>
 
               {onRescanDrives && (

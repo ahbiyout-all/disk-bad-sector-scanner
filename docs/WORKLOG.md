@@ -1,5 +1,24 @@
 # Disk Bad Sector Scanner - Developer Work Log (작업 로그)
 
+### 2026-11-14 (v4.6.1 브라우저 디스크 인식 방식 전면 제거 및 Tauri 데스크톱 네이티브 IPC 전용 전환)
+- **브라우저 기반 가상/샌드박스 디스크 인식 코드 완전 제거 (`types.ts`, `nativeDriveEngine.ts`, `nativeDllBridge.ts`, `hardwareTelemetry.ts`)**:
+  - OPFS(`navigator.storage.getDirectory`), File System Access(`showDirectoryPicker`/`showSaveFilePicker`), HTML5 폴더/파일 마운트(`webkitdirectory`/`File.slice`), WebUSB(`navigator.usb`), Web Serial(`navigator.serial`) 기반의 드라이브 생성·I/O·복구 경로를 전면 삭제.
+  - `DiskDrive` 타입에서 `OPFS`, `Browser File API`, `attachedFile*` 필드를 제거하고 `probeMethod`를 `'Native Direct Win32 IOCTL' | 'Tauri Desktop Native IPC'`로 단일화.
+  - Erase 안전 가드(`isSafeEraseTarget`)가 OS 부팅/시스템 파티션(`C:`, `PhysicalDrive0`)은 엄격히 차단하고 비시스템·외장 Tauri 물리 디스크(`PhysicalDrive1~31`)만 쓰기 검증 대상으로 허용하도록 전환.
+- **Tauri IPC 전용 물리 드라이브 탐색 및 브라우저 단독 실행 빈 상태 안내 UI 구축 (`App.tsx`, `ExternalDeviceModal.tsx`, `Navbar.tsx`, `ScanMethodSelector.tsx`, `TelemetryPanel.tsx`, `DiskHardwareDetailsModal.tsx`, `BitCarvingRecoveryModal.tsx`)**:
+  - 웹 브라우저 단독 실행 시 `drives = []` 빈 상태로 유지하고 `Tauri 데스크톱 앱(DiskBadSectorScanner.exe)` 관리자 권한 실행 및 `npm run tauri:dev` 로컬 브릿지 실행 안내와 실시간 연결 진단 스트립(`Tauri IPC`, `로컬 Win32 브릿지(127.0.0.1)`, `[네이티브 엔진 연결 재확인]`)을 제공.
+  - `ExternalDeviceModal`에서 `'실제 하드웨어 & 로컬 미디어 마운트'` 탭을 제거하고 32채널 물리 슬롯(`PhysicalDrive0~31`) 탐색 및 USB 2.0 진단 가이드로 단순화.
+
+### 2026-11-14 (v4.6.0 실제 물리/외장 디스크 4종 표면검사 선택 UI, Win32 SeekPenalty·버스 확장 & 차세대 제조사/신모델 표준 분류 엔진)
+- **Win32/C++/Rust/Tauri 물리·외장 저장장치 감지 정확도 및 버스 규격 확장**:
+  - `src/native/DiskSentinelLauncher.cs`의 `ProbeDriveViaWin32`에서 `DEVICE_SEEK_PENALTY_DESCRIPTOR` 오프셋 오류(`4`→`8`)를 수정해 Pure Win32 폴백 시에도 NVMe/SATA SSD를 정확히 `isSsd=true`로 판별하고, `StorageDeviceTrimProperty(8)` 및 `StorageDeviceTemperatureProperty(14)` 직접 IOCTL 쿼리를 추가.
+  - `DiskSentinelEngine.cpp`, `src/native/rust/src/lib.rs`, `DiskSentinelLauncher.cs`, `src-tauri/src/main.rs`에서 `VendorIdOffset`+`ProductIdOffset` 중복 제거 결합 및 확장 버스 타입(`NVMe(17)`, `SATA(11)`, `USB(7)`, `RAID(8)`, `ATA(3)`, `SCSI/SAS(1,10)`, `SD(12)`, `MMC(13)`, `Storage Spaces(16)`, `SCM(18)`, `UFS(19)`) 매핑 반영.
+- **차세대 제조사 및 미출시 신모델 자동 인식·프로토콜 분류 엔진 (`src/utils/vendorDiagnostics.ts`, `src/utils/nativeDriveEngine.ts`)**:
+  - `StorageVendor`를 19종(Solidigm, Lexar, Corsair, Sabrent, ADATA, PNY, TeamGroup, Biwin, YMTC, Nextorage, MSI, ASUS 포함)으로 확장하고, 모델/SKU 프리픽스(`MZ-`, `PM9`, `9100 PRO`, `ST`, `WD/SN`, `SDSS`, `SHGP/PC`, `CT/T705`, `SKC/KC`, `LNM/NM`, `CSSD/MP`, `SB-RKT`, `TiPlus` 등) 정규식 및 신규 USB4/NVMe 인클로저 VID 테이블을 보강.
+  - 미확인/신규 출시 모델도 `classifyFutureDriveStandards()`를 통해 NVMe 2.0/PCIe Gen5/Gen4, USB4/Thunderbolt, UASP, SATA III, SDXC, UFS, RAID 표준 규격과 컨트롤러 계층을 자동 분류해 진단 및 `VendorDiagnosticsModal`/`DiskHardwareDetailsModal`에 반영.
+- **표면 검사 패널 직접 디스크 선택 및 로컬 볼륨/외장 테스트 연동 (`src/App.tsx`, `src/components/Navbar.tsx`)**:
+  - `표면 검사 구성 (Surface Test)` 헤더에 대상 물리 디스크(`\\.\PhysicalDrive0~31`) 및 마운트 파일/폴더 즉시 선택 드롭다운, `재검색`, `볼륨/폴더`, `외장` 퀵 액션, 1줄 프로토콜 분류 배너를 배치해 Verify·Read·Butterfly·Erase 4종 검사를 바로 선택·실행(Erase는 OPFS/테스트 파일 안전 격리 가드 유지).
+
 ### 2026-11-13 (v4.6.0 브랜드 일원화, Inno Setup 폴더 풀림 인스톨러, GitHub Actions Node 24 전환 및 저장소 정비)
 - **공식 앱 명칭 `Disk Bad Sector Scanner` 일원화 및 메타데이터/자동 업데이터 정합성 확보**:
   - `setup.iss`, `build.bat`, `build-dll.bat`, `build-rust.bat`, `scripts/package-cross-platform.mjs`, `src/utils/updater.ts`, `src/native/DiskSentinelLauncher.cs/.cpp`, `src/native/rust/Cargo.toml`, `src-tauri/Cargo.toml`, `README.md`, `docs/` 전반의 구형 브랜드 잔재를 `Disk Bad Sector Scanner` 및 실행 파일 `DiskBadSectorScanner.exe`로 통합.

@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Binary,
-  FileText,
   Sparkles,
   RefreshCw
 } from 'lucide-react';
@@ -36,21 +35,16 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   const [clusterSpan, setClusterSpan] = useState<number>(8);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [result, setResult] = useState<DSCarvedSectorResult | null>(null);
-  const [customFile, setCustomFile] = useState<File | null>(drive?.attachedFile || null);
 
   useEffect(() => {
     if (isOpen) {
       setTargetLba(initialLba);
       setResult(null);
-      setCustomFile(drive?.attachedFile || null);
     }
-  }, [isOpen, initialLba, drive?.id, drive?.attachedFile]);
+  }, [isOpen, initialLba, drive?.id]);
 
-  const activeTargetFile = customFile || drive?.attachedFile;
   const secSize = drive?.hardwareSpecs?.logicalSectorSize || 512;
-  const effectiveDriveModel = activeTargetFile
-    ? `[실제 파일] ${activeTargetFile.name} (${(activeTargetFile.size / (1024 * 1024)).toFixed(1)}MB)`
-    : (drive?.model || drive?.name || driveModel || 'Local Storage Drive');
+  const effectiveDriveModel = drive?.model || drive?.name || driveModel || '물리 디스크 미선택';
 
   if (!isOpen) return null;
 
@@ -58,7 +52,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     setIsProcessing(true);
     setResult(null);
 
-    const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, activeTargetFile, drive);
+    const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, drive);
     setResult(carved);
     setIsProcessing(false);
   };
@@ -67,13 +61,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     if (!result || !result.isSalvaged) return;
 
     let blobPayload: Uint8Array | null = null;
-    if (activeTargetFile && activeTargetFile.size > 0) {
-      const fileSize = activeTargetFile.size;
-      const offset = fileSize > secSize ? (targetLba * secSize) % Math.max(1, fileSize - secSize) : 0;
-      const sliceLen = Math.min(fileSize - offset, Math.max(secSize, result.carvedSizeBytes));
-      const ab = await activeTargetFile.slice(offset, offset + sliceLen).arrayBuffer();
-      blobPayload = new Uint8Array(ab);
-    } else if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
+    if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
       const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
       const exportBytes = Math.min(64 * 4096, Math.max(secSize, result.carvedSizeBytes));
       const rawTauriBytes = await queryTauriRawSector(driveIndex, targetLba, exportBytes);
@@ -126,7 +114,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                실제 디스크 물리 섹터 또는 마운트된 파일 바이너리에서 매직 바이트 시그니처를 직접 판독하여 복구합니다
+                Tauri 데스크톱 네이티브 IPC를 통해 물리 디스크 Raw LBA 섹터에서 매직 바이트 시그니처를 직접 판독하여 복구합니다
               </p>
             </div>
           </div>
@@ -149,39 +137,10 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 <Wrench className="w-3.5 h-3.5 text-indigo-500" />
                 수복 대상 물리 섹터 (Physical LBA) 및 탐색 클러스터 범위
               </div>
-              <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 text-[11px] font-bold cursor-pointer transition-colors shadow-2xs">
-                <FileText className="w-3.5 h-3.5" />
-                <span>{activeTargetFile ? '다른 로컬 파일 선택' : '실제 로컬 파일 열기'}</span>
-                <input
-                  type="file"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setCustomFile(f);
-                      setTargetLba(0);
-                      setResult(null);
-                    }
-                  }}
-                />
-              </label>
+              <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 font-semibold">
+                {isNativeHardwareRuntime() ? 'Tauri Win32 Raw LBA Active' : 'Tauri IPC 연결 필요'}
+              </span>
             </div>
-
-            {activeTargetFile && (
-              <div className="flex items-center justify-between px-2.5 py-1.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-[11px] text-indigo-700 dark:text-indigo-300 font-mono">
-                <div className="flex items-center gap-1.5 truncate">
-                  <span className="font-bold">📂 실제 로컬 파일 로드됨:</span>
-                  <span className="truncate">{activeTargetFile.name} ({(activeTargetFile.size / (1024 * 1024)).toFixed(2)} MB, {activeTargetFile.size.toLocaleString()} Bytes)</span>
-                </div>
-                <button
-                  onClick={() => { setCustomFile(null); setResult(null); }}
-                  className="text-slate-400 hover:text-red-500 shrink-0 ml-2 cursor-pointer"
-                  title="파일 연결 해제"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
@@ -308,13 +267,13 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
           {/* Informational Guidelines */}
           <div className="p-3 rounded-lg border bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-[11px] space-y-1">
             <div className="font-semibold text-slate-700 dark:text-slate-300">
-              💡 비트 카빙(Bit Carving) 동작 기준 안내
+              비트 카빙(Bit Carving) 동작 기준 안내
             </div>
             <p>
-              1. <strong>실제 바이트 스트림 기반 스캐닝</strong>: 상단에서 실제 로컬 이미지/덤프 파일(.img, .bin 등)을 선택하거나 Windows 데스크톱(Tauri) 관리자 권한으로 물리 디스크에 연결하면 해당 LBA 오프셋의 실제 바이트를 직접 판독하여 JPEG, PNG, PDF, ZIP, MP4, NTFS 부트 시그니처를 식별합니다.
+              1. <strong>물리 Raw LBA 직독</strong>: Windows 관리자 권한의 Tauri 데스크톱 앱에서 물리 디스크(<code className="font-mono">\\.\PhysicalDriveN</code>)의 지정된 LBA 오프셋 바이트를 직접 판독하여 JPEG, PNG, PDF, ZIP, MP4, NTFS 부트 시그니처를 식별합니다.
             </p>
             <p>
-              2. <strong>무가공 원칙</strong>: 물리 핸들 또는 첨부 파일이 없는 브라우저 샌드박스에서는 임의의 가짜 섹터 Hex 데이터를 생성하지 않고 권한 필요 상태를 명확히 보고합니다.
+              2. <strong>무가공 원칙</strong>: Tauri 네이티브 IPC 연결이 없는 웹 브라우저 환경에서는 가짜 섹터 Hex 데이터를 생성하지 않고 네이티브 권한 필요 상태를 명확히 보고합니다.
             </p>
           </div>
         </div>

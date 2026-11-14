@@ -263,7 +263,9 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
                 })
             }).collect();
 
-            let is_external = bus.eq_ignore_ascii_case("USB") || bus.to_lowercase().contains("usb");
+            let is_sd_or_mmc = bus.eq_ignore_ascii_case("SD") || bus.eq_ignore_ascii_case("MMC");
+            let is_external = bus.eq_ignore_ascii_case("USB") || bus.to_lowercase().contains("usb") || is_sd_or_mmc;
+            let connection_type = if is_sd_or_mmc { "sd_card" } else if is_external { "usb" } else { "internal" };
 
             let resolved_temp: Option<u32> = if has_nvme_log && nvme_log.temperature_celsius > 0 {
                 Some(nvme_log.temperature_celsius as u32)
@@ -309,7 +311,7 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
                 "isSsd": detail.is_ssd,
                 "isTrimSupported": detail.is_trim_supported,
                 "isExternal": is_external,
-                "connectionType": if is_external { "usb" } else { "internal" },
+                "connectionType": connection_type,
                 "mountPoints": mount_points,
                 "partitions": partitions_json,
                 "totalCapacityBytes": detail.total_capacity_bytes,

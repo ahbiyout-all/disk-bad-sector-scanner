@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { DiskDrive, DiskHardwareSpecs } from '../types';
-import { probeNativeSystemStorage, NativeSystemStorageInfo } from '../utils/nativeDriveEngine';
+import { measureNativeDriveIoBenchmark, NativeIoBenchmarkResult } from '../utils/nativeDriveEngine';
+import { classifyFutureDriveStandards } from '../utils/vendorDiagnostics';
 import {
   X,
   Cpu,
@@ -32,12 +33,12 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
   const [isRescanning, setIsRescanning] = useState<boolean>(false);
   const [isBenchmarking, setIsBenchmarking] = useState<boolean>(false);
   const [rescanSuccess, setRescanSuccess] = useState<string | null>(null);
-  const [liveBenchmark, setLiveBenchmark] = useState<NativeSystemStorageInfo | null>(null);
+  const [liveBenchmark, setLiveBenchmark] = useState<NativeIoBenchmarkResult | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
     let mounted = true;
-    probeNativeSystemStorage().then(info => {
+    measureNativeDriveIoBenchmark(drive).then(info => {
       if (mounted) {
         setLiveBenchmark(info);
       }
@@ -48,6 +49,8 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
   }, [isOpen, drive.id]);
 
   if (!isOpen) return null;
+
+  const futureClass = classifyFutureDriveStandards(drive);
 
   const getSmartRawNullable = (id: number): number | null => {
     const attr = drive.smartAttributes.find(a => a.id === id);
@@ -61,19 +64,10 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
   const realReadsTb = rawReadsVal !== null ? Number((rawReadsVal / 2048 / 1024).toFixed(2)) : null;
   const realWritesTb = rawWritesVal !== null ? Number((rawWritesVal / 2048 / 1024).toFixed(2)) : null;
 
-  const isFileDrive = Boolean(drive.attachedFile);
-  const measuredLatencyUs = isFileDrive
-    ? (drive.hardwareSpecs?.measuredKernelLatencyUs ?? null)
-    : (liveBenchmark?.measuredLatencyUs ?? drive.hardwareSpecs?.measuredKernelLatencyUs ?? null);
-  const measuredReadMbSec = isFileDrive
-    ? (drive.hardwareSpecs?.measuredSequentialReadMbSec ?? null)
-    : (liveBenchmark?.benchmarkReadMbSec ?? drive.hardwareSpecs?.measuredSequentialReadMbSec ?? null);
-  const measuredWriteMbSec = isFileDrive
-    ? (drive.hardwareSpecs?.measuredSequentialWriteMbSec ?? null)
-    : (liveBenchmark?.benchmarkWriteMbSec ?? drive.hardwareSpecs?.measuredSequentialWriteMbSec ?? null);
-  const measuredIops = isFileDrive
-    ? (drive.hardwareSpecs?.measuredRandom4kReadIops ?? null)
-    : (liveBenchmark?.measuredRandom4kIops ?? drive.hardwareSpecs?.measuredRandom4kReadIops ?? null);
+  const measuredLatencyUs = liveBenchmark?.measuredLatencyUs ?? drive.hardwareSpecs?.measuredKernelLatencyUs ?? null;
+  const measuredReadMbSec = liveBenchmark?.benchmarkReadMbSec ?? drive.hardwareSpecs?.measuredSequentialReadMbSec ?? null;
+  const measuredWriteMbSec = liveBenchmark?.benchmarkWriteMbSec ?? drive.hardwareSpecs?.measuredSequentialWriteMbSec ?? null;
+  const measuredIops = liveBenchmark?.measuredRandom4kIops ?? drive.hardwareSpecs?.measuredRandom4kReadIops ?? null;
 
   const specs: DiskHardwareSpecs = drive.hardwareSpecs ? {
     ...drive.hardwareSpecs,
@@ -99,9 +93,11 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     logicalSectorSize: 512,
     physicalSectorSize: 4096,
     isAdvancedFormat: true,
-    partitionStyle: 'N/A (Sandbox)',
+    partitionStyle: 'Unknown',
     alignmentStatus: 'N/A',
-    mediaType: drive.type === 'HDD' ? 'Mechanical HDD (Magnetic Platter)' : 'Sandbox Storage (OPFS / File API)',
+    mediaType: drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD'
+      ? 'Mechanical HDD (Magnetic Platter)'
+      : 'SSD (Non-Volatile NAND Flash)',
     rotationalSpeedRpm: drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD' ? null : 0,
     trimSupported: null,
     trimActive: null,
@@ -129,7 +125,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     measuredSequentialWriteMbSec: measuredWriteMbSec,
     measuredRandom4kReadIops: measuredIops,
     probeTimestamp: Date.now(),
-    probeMethod: 'W3C OPFS & StorageManager Probe'
+    probeMethod: 'Tauri Desktop Native IPC'
   };
 
   const handleRescanClick = async () => {
@@ -138,11 +134,11 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     setRescanSuccess(null);
     try {
       const [newBench] = await Promise.all([
-        probeNativeSystemStorage(),
+        measureNativeDriveIoBenchmark(drive),
         onRescanHardware ? onRescanHardware() : Promise.resolve()
       ]);
       setLiveBenchmark(newBench);
-      setRescanSuccess('디스크 장치 하드웨어 정보 및 실시간 I/O 프로브가 갱신되었습니다.');
+      setRescanSuccess('디스크 장치 하드웨어 정보 및 실시간 Win32 IOCTL 프로브가 갱신되었습니다.');
       setTimeout(() => setRescanSuccess(null), 3000);
     } catch {
       setRescanSuccess('하드웨어 재탐색 중 오류가 발생했습니다.');
@@ -156,13 +152,9 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     setIsBenchmarking(true);
     setRescanSuccess(null);
     try {
-      const result = await probeNativeSystemStorage();
+      const result = await measureNativeDriveIoBenchmark(drive);
       setLiveBenchmark(result);
-      setRescanSuccess(
-        result.opfsSupported
-          ? '실시간 OPFS 디스크 쓰기/플러시/읽기 벤치마크가 완료되었습니다.'
-          : '현재 브라우저 컨텍스트에서 OPFS 직접 쓰기 벤치마크가 제한되어 있습니다.'
-      );
+      setRescanSuccess(result.probeNote);
       setTimeout(() => setRescanSuccess(null), 3500);
     } catch {
       setRescanSuccess('실측 벤치마크 실행 중 오류가 발생했습니다.');
@@ -362,6 +354,12 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">스토리지 미디어 타입</span>
                     <span className="font-semibold text-emerald-600 dark:text-emerald-400">{specs.mediaType}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
+                    <span className="text-slate-500">자동 프로토콜 분류 ({futureClass.recognitionSource})</span>
+                    <span className="font-mono text-indigo-600 dark:text-indigo-400 truncate max-w-[230px]" title={futureClass.adaptiveNote}>
+                      {futureClass.protocolStandard}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -594,10 +592,10 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   <div>
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
                       <Activity className="w-4 h-4 text-indigo-500" />
-                      <span>실시간 OPFS / Direct File I/O 실측 대역폭</span>
+                      <span>Tauri Win32 Direct IOCTL 실측 대역폭</span>
                     </h3>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      실제 512KB W3C OPFS 디스크 쓰기·플러시·읽기 검증 및 4KB 랜덤 슬라이스 레이턴시를 직접 계측한 결과입니다.
+                      실제 물리 디스크 LBA 버스트 읽기(64KB) 커널 응답 지연율 및 전송 대역폭을 직접 계측한 결과입니다.
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -605,7 +603,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                       onClick={handleRunLiveBenchmark}
                       disabled={isBenchmarking || isRescanning}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
-                      title="실제 OPFS 디스크 I/O 실측 벤치마크 즉시 수행"
+                      title="물리 디스크 Win32 IOCTL 읽기 지연율 즉시 계측"
                     >
                       <Play className={`w-3.5 h-3.5 ${isBenchmarking ? 'animate-spin' : 'fill-current'}`} />
                       <span>{isBenchmarking ? '실시간 계측 중...' : '실측 벤치마크 즉시 실행'}</span>
@@ -635,11 +633,11 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                         <span className="text-slate-400">N/A</span>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">512KB Real Storage Read</div>
+                    <div className="text-[10px] text-slate-400 mt-1">64KB Raw LBA Burst Read</div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
-                    <div className="text-[10px] text-slate-400 uppercase font-semibold">실측 순차 쓰기 전송률</div>
+                    <div className="text-[10px] text-slate-400 uppercase font-semibold">비파괴 쓰기 대역폭</div>
                     <div className="text-2xl font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
                       {specs.measuredSequentialWriteMbSec !== null ? (
                         <>
@@ -649,7 +647,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                         <span className="text-slate-400">N/A</span>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">OPFS Writable Flush Stream</div>
+                    <div className="text-[10px] text-slate-400 mt-1">Read-Only Non-Destructive Mode</div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">

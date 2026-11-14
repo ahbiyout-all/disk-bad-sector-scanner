@@ -85,11 +85,8 @@ export interface DiskDrive {
   isUsb2?: boolean;
   bridgeChipset?: string;
   mountPoint?: string;
-  fileSystem?: 'NTFS' | 'exFAT' | 'FAT32' | 'APFS' | 'ext4' | 'f2fs' | 'OPFS' | 'Browser File API' | 'Unknown';
+  fileSystem?: 'NTFS' | 'exFAT' | 'FAT32' | 'APFS' | 'ext4' | 'f2fs' | 'Unknown';
   isEjected?: boolean;
-  attachedFile?: File;
-  attachedFiles?: File[];
-  attachedFileHandle?: any;
   hardwareSpecs?: DiskHardwareSpecs;
 }
 
@@ -105,12 +102,27 @@ export interface DiskVolumePartition {
 
 export interface DiskHardwareSpecs {
   // Identification & Controller
-  devicePhysicalPath?: string; // e.g. '\\\\.\\PhysicalDrive0', 'OPFS://origin'
+  devicePhysicalPath?: string; // e.g. '\\\\.\\PhysicalDrive0'
   vendorName: string;
   modelNumber: string;
   serialNumber: string;
   firmwareRevision: string;
-  busType: 'NVMe' | 'SATA' | 'USB' | 'PCIe' | 'SCSI' | 'ATAPI' | 'RAID' | 'Unknown';
+  busType:
+    | 'NVMe'
+    | 'SATA'
+    | 'USB'
+    | 'PCIe'
+    | 'SCSI'
+    | 'SCSI/SAS'
+    | 'ATAPI'
+    | 'ATA'
+    | 'RAID'
+    | 'SD'
+    | 'MMC'
+    | 'UFS'
+    | 'Storage Spaces'
+    | 'SCM'
+    | 'Unknown';
   busInterfaceSpeed: string;
   formFactor: string;
   controllerVendor?: string;
@@ -122,11 +134,11 @@ export interface DiskHardwareSpecs {
   logicalSectorSize: number; // 512 or 4096
   physicalSectorSize: number; // 4096
   isAdvancedFormat: boolean;
-  partitionStyle: 'GPT (GUID Partition Table)' | 'MBR (Master Boot Record)' | 'N/A (Sandbox)';
+  partitionStyle: 'GPT (GUID Partition Table)' | 'MBR (Master Boot Record)' | 'Unknown';
   alignmentStatus: 'Aligned (4K sector boundary)' | 'Misaligned' | 'N/A';
 
   // Protocols & Capabilities
-  mediaType: 'SSD (Non-Volatile NAND Flash)' | 'Mechanical HDD (Magnetic Platter)' | 'Flash Memory Card / USB BOT' | 'Sandbox Storage (OPFS / File API)' | 'Direct Hardware Peripheral';
+  mediaType: 'SSD (Non-Volatile NAND Flash)' | 'Mechanical HDD (Magnetic Platter)' | 'Flash Memory Card / USB BOT' | 'Direct Hardware Peripheral' | 'Unknown';
   rotationalSpeedRpm: number | null;
   trimSupported: boolean | null;
   trimActive: boolean | null;
@@ -161,11 +173,7 @@ export interface DiskHardwareSpecs {
   probeTimestamp: number;
   probeMethod:
     | 'Native Direct Win32 IOCTL'
-    | 'W3C OPFS & StorageManager Probe'
-    | 'WebUSB Device Descriptor'
-    | 'Web Serial Port Link'
-    | 'Real File Slice Direct IO'
-    | 'HTML5 Directory File Slicing & Storage Probe';
+    | 'Tauri Desktop Native IPC';
 
   // Optional Real USB Descriptor Metadata
   usbDeviceInfo?: {

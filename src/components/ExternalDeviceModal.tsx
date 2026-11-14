@@ -1,30 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DiskDrive } from '../types';
-import { 
-  createNativeDriveFromDirectoryHandle, 
-  createNativeDriveFromFolderFiles,
-  createNativeDriveFromFile, 
-  requestPhysicalWebUsbDevice, 
-  requestPhysicalWebSerialDevice,
+import {
   getStorageDeviceRecognitionSummary,
   StorageRecognitionDiagnostics
 } from '../utils/nativeDriveEngine';
-import { 
-  X, 
-  Usb, 
-  HardDrive, 
-  Plus, 
-  Check, 
-  Zap, 
-  ShieldCheck, 
-  FolderOpen, 
-  ExternalLink, 
-  AlertCircle,
+import {
+  X,
+  Usb,
+  HardDrive,
+  Check,
+  Zap,
+  Lock,
   Info,
   Cpu,
-  Trash2,
-  Lock,
-  ArrowRight,
   AlertTriangle,
   BatteryWarning,
   Gauge,
@@ -39,7 +27,6 @@ interface ExternalDeviceModalProps {
   drives: DiskDrive[];
   selectedDriveId: string;
   onSelectDrive: (id: string) => void;
-  onAddDrive: (newDrive: DiskDrive) => void;
   onEjectDrive: (id: string) => void;
   onRescanDrives?: () => void;
 }
@@ -50,17 +37,13 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
   drives,
   selectedDriveId,
   onSelectDrive,
-  onAddDrive,
   onEjectDrive,
   onRescanDrives
 }) => {
-  const [activeTab, setActiveTab] = useState<'connected' | 'probe32' | 'mount' | 'usb2guide'>('connected');
+  const [activeTab, setActiveTab] = useState<'connected' | 'probe32' | 'usb2guide'>('connected');
   const [ejectSuccessMsg, setEjectSuccessMsg] = useState<string | null>(null);
-  const [fsPickerError, setFsPickerError] = useState<string | null>(null);
-  const [fsPickerLoading, setFsPickerLoading] = useState<boolean>(false);
   const [isRescanning, setIsRescanning] = useState<boolean>(false);
   const [recognitionDiag, setRecognitionDiag] = useState<StorageRecognitionDiagnostics | null>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isOpen || activeTab !== 'probe32') return;
@@ -84,147 +67,6 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
     onEjectDrive(drive.id);
     setEjectSuccessMsg(`[${drive.mountPoint || 'USB'}] ${drive.name} 안전 제거 완료 (캐시 플러시 정상 처리)`);
     setTimeout(() => setEjectSuccessMsg(null), 3500);
-  };
-
-  // Handle Web File System Access API (Actual USB / External Storage selection)
-  const handlePickLocalDirectory = async () => {
-    setFsPickerError(null);
-    setFsPickerLoading(true);
-
-    const isInIframe = (() => {
-      try {
-        return window.self !== window.top;
-      } catch {
-        return true;
-      }
-    })();
-
-    // In cross-origin iframes (like web sandboxes), showDirectoryPicker is forbidden.
-    // Immediately open standard HTML5 directory input safely without throwing SecurityError.
-    if (isInIframe) {
-      setFsPickerLoading(false);
-      folderInputRef.current?.click();
-      return;
-    }
-
-    if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
-      try {
-        // @ts-expect-error - standard browser API
-        const dirHandle = await window.showDirectoryPicker({
-          id: 'external-storage-picker',
-          mode: 'readwrite'
-        });
-
-        const newDrive = await createNativeDriveFromDirectoryHandle(dirHandle);
-
-        onAddDrive(newDrive);
-        onSelectDrive(newDrive.id);
-        setEjectSuccessMsg(`실제 외장 볼륨 [${dirHandle.name || 'Local'}]이(가) 검사 장치로 마운트되었습니다!`);
-        setTimeout(() => setEjectSuccessMsg(null), 3500);
-        setActiveTab('connected');
-        return;
-      } catch (err: any) {
-        if (err?.name === 'AbortError') {
-          return;
-        }
-        // Graceful fallback to standard directory input
-        folderInputRef.current?.click();
-      } finally {
-        setFsPickerLoading(false);
-      }
-    } else {
-      setFsPickerLoading(false);
-      folderInputRef.current?.click();
-    }
-  };
-
-  // Handle standard folder files selection (works reliably in all browsers and iframes)
-  const handleFolderFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    setFsPickerError(null);
-    setFsPickerLoading(true);
-    try {
-      const newDrive = await createNativeDriveFromFolderFiles(files);
-      onAddDrive(newDrive);
-      onSelectDrive(newDrive.id);
-      setEjectSuccessMsg(`로컬 디렉토리 [${newDrive.name}]이(가) 마운트되었습니다!`);
-      setTimeout(() => setEjectSuccessMsg(null), 3500);
-      setActiveTab('connected');
-    } catch (err: any) {
-      setFsPickerError(`디렉토리 볼륨 마운트 실패: ${err?.message || '알 수 없는 오류'}`);
-    } finally {
-      setFsPickerLoading(false);
-      e.target.value = '';
-    }
-  };
-
-  // Handle Real File Selection (Universal support across PC browsers & native host)
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setFsPickerError(null);
-    setFsPickerLoading(true);
-    try {
-      const newDrive = await createNativeDriveFromFile(file);
-      onAddDrive(newDrive);
-      onSelectDrive(newDrive.id);
-      setEjectSuccessMsg(`실제 파일 [${file.name}]이(가) 바이트 단위 직접 검사 드라이브로 마운트되었습니다!`);
-      setTimeout(() => setEjectSuccessMsg(null), 3500);
-      setActiveTab('connected');
-    } catch (err: any) {
-      setFsPickerError(`파일 마운트 실패: ${err?.message || '알 수 없는 오류'}`);
-    } finally {
-      setFsPickerLoading(false);
-      // Reset input value so same file can be reselected
-      e.target.value = '';
-    }
-  };
-
-  // Handle Real WebUSB Device Direct Pairing
-  const handlePairWebUsb = async () => {
-    setFsPickerError(null);
-    setFsPickerLoading(true);
-    try {
-      const newDrive = await requestPhysicalWebUsbDevice();
-      if (newDrive) {
-        onAddDrive(newDrive);
-        onSelectDrive(newDrive.id);
-        setEjectSuccessMsg(`물리 USB 기기 [${newDrive.name}] 하드웨어 연결 성공!`);
-        setTimeout(() => setEjectSuccessMsg(null), 3500);
-        setActiveTab('connected');
-      }
-    } catch (err: any) {
-      if (err.name !== 'AbortError' && err.name !== 'NotFoundError') {
-        setFsPickerError(`WebUSB 연결 오류: ${err?.message || '지원되지 않는 장치'}`);
-      }
-    } finally {
-      setFsPickerLoading(false);
-    }
-  };
-
-  // Handle Real Web Serial Device Direct Pairing
-  const handlePairWebSerial = async () => {
-    setFsPickerError(null);
-    setFsPickerLoading(true);
-    try {
-      const newDrive = await requestPhysicalWebSerialDevice();
-      if (newDrive) {
-        onAddDrive(newDrive);
-        onSelectDrive(newDrive.id);
-        setEjectSuccessMsg(`물리 시리얼 기기 [${newDrive.name}] 통신 연결 완료!`);
-        setTimeout(() => setEjectSuccessMsg(null), 3500);
-        setActiveTab('connected');
-      }
-    } catch (err: any) {
-      if (err.name !== 'AbortError' && err.name !== 'NotFoundError') {
-        setFsPickerError(`Web Serial 연결 오류: ${err?.message || '지원되지 않는 포트'}`);
-      }
-    } finally {
-      setFsPickerLoading(false);
-    }
   };
 
   // Handle Force Rescan of 32 PhysicalDrive slots
@@ -302,18 +144,6 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
           </button>
 
           <button
-            onClick={() => setActiveTab('mount')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'mount'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
-            }`}
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-indigo-500" />
-            실제 하드웨어 & 로컬 미디어 마운트
-          </button>
-
-          <button
             onClick={() => setActiveTab('usb2guide')}
             className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
               activeTab === 'usb2guide'
@@ -343,15 +173,25 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                   <Usb className="w-9 h-9 mx-auto text-slate-500" />
                   <div>
                     <p className="font-semibold text-slate-700 dark:text-slate-300">현재 연결된 외장 저장장치가 없습니다.</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">PC에 연결된 실제 USB 메모리, 외장 하드/SSD, 볼륨 또는 가상 디스크 이미지를 마운트하세요.</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      USB 외장 SSD/HDD/메모리를 PC에 연결한 뒤 Tauri 데스크톱 네이티브 IPC로 32개 물리 슬롯을 재검색하세요.
+                    </p>
                   </div>
                   <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
                     <button
-                      onClick={() => setActiveTab('mount')}
-                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs cursor-pointer flex items-center gap-1.5"
+                      onClick={() => void handleForceRescan()}
+                      disabled={isRescanning || !onRescanDrives}
+                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                     >
-                      <FolderOpen className="w-3.5 h-3.5" />
-                      <span>실제 외장 볼륨 / USB 마운트</span>
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
+                      <span>32개 물리 슬롯 재검색</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('probe32')}
+                      className="px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>32채널 슬롯 상태 보기</span>
                     </button>
                   </div>
                 </div>
@@ -499,10 +339,10 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                 <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800/70 bg-amber-50/70 dark:bg-amber-950/30 flex items-start gap-2.5 text-xs">
                   <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                   <div className="space-y-1 text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
-                    <div className="font-bold">현재 웹 브라우저 보안 샌드박스(OPFS 전용)에서 실행 중입니다</div>
+                    <div className="font-bold">Tauri 데스크톱 네이티브 IPC 연결 대기 상태입니다</div>
                     <p>
-                      Chrome/Edge 등 일반 웹 브라우저는 보안 정책상 OS의 <code className="font-mono font-bold">\\.\PhysicalDrive0~31</code> 직접 열기를 차단합니다.
-                      실제 장착된 SSD/HDD/USB 디스크 전체를 인식·검사하려면 Windows 설치 프로그램으로 배포된 <code className="font-mono font-bold">DiskBadSectorScanner.exe</code> 또는 Tauri 데스크톱 앱을 관리자 권한으로 실행하세요.
+                      일반 웹 브라우저에서는 브라우저 기반 가상/샌드박스 디스크 인식이 비활성화되어 OS의 <code className="font-mono font-bold">\\.\PhysicalDrive0~31</code>에 직접 접근할 수 없습니다.
+                      실제 장착된 SSD/HDD/USB 디스크 전체를 인식·검사하려면 Tauri 데스크톱 앱 또는 <code className="font-mono font-bold">DiskBadSectorScanner.exe</code>를 관리자 권한으로 실행하세요.
                     </p>
                   </div>
                 </div>
@@ -515,13 +355,13 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                     <HardDrive className="w-4 h-4 text-indigo-500" />
                     <span>인식된 물리 스토리지 채널 목록</span>
                   </div>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    인식됨: {drives.filter(d => !d.attachedFile && !d.attachedFileHandle).length}개 드라이브
+                  <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                    인식됨: {drives.length}개 드라이브
                   </span>
                 </div>
 
                 <div className="space-y-2">
-                  {drives.filter(d => !d.attachedFile && !d.attachedFileHandle).map((drive) => {
+                  {drives.map((drive) => {
                     const isSelected = drive.id === selectedDriveId;
                     const path = drive.hardwareSpecs?.devicePhysicalPath || drive.mountPoint || drive.interface;
                     const volumeList = drive.hardwareSpecs?.partitions?.map(p => p.letterOrMount).filter(Boolean) || [drive.mountPoint || 'C:'];
@@ -623,7 +463,6 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                     const matchedDrive = drives.find(d => {
                       if (d.id === `drive-tauri-physical-${i}`) return true;
                       if (d.hardwareSpecs?.devicePhysicalPath?.endsWith(`PhysicalDrive${i}`)) return true;
-                      if (i === 0 && d.id === 'drive-native-host-real') return true;
                       return false;
                     });
                     const isOccupied = !!matchedDrive;
@@ -744,135 +583,6 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
             </div>
           )}
 
-          {/* Tab 4: Native Real Hardware & Storage Mount */}
-          {activeTab === 'mount' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg border border-indigo-200 dark:border-indigo-900/40 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-2">
-                <h3 className="text-sm font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-indigo-500" />
-                  실제 물리 하드웨어 & 로컬 미디어 직접 마운트
-                </h3>
-                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                  브라우저의 최신 표준 API(File System Access, HTML5 File API, WebUSB, Web Serial)를 통하여 실제 외장 드라이브, 대용량 파일(.img, .iso 등), USB 기기를 직접 연결하여 바이트 단위로 검사합니다.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* 1. Real File Picker */}
-                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-2.5">
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 text-xs">
-                      <HardDrive className="w-4 h-4 text-emerald-500" />
-                      실제 파일 / 디스크 이미지 열기
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                      PC 및 워크스테이션의 모든 파일(.iso, .img, .vhd, 압축파일 등)을 선택하여 바이트 단위 I/O 속도와 체크섬 무결성을 직접 스캔합니다.
-                    </p>
-                  </div>
-                  <label className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs cursor-pointer transition-colors">
-                    <HardDrive className="w-3.5 h-3.5" />
-                    <span>실제 파일 선택 (.iso, .img 등)</span>
-                    <input 
-                      type="file" 
-                      className="hidden" 
-                      onChange={handleFileChange} 
-                    />
-                  </label>
-                </div>
-
-                {/* 2. Real Directory / Volume Picker */}
-                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-2.5">
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 text-xs">
-                      <FolderOpen className="w-4 h-4 text-indigo-500" />
-                      로컬 드라이브 / 폴더 볼륨 마운트
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                      File System Access API로 외장 하드 루트(E:\, F:\) 또는 폴더를 선택하여 색인 지연 및 I/O 권한을 진단합니다.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handlePickLocalDirectory}
-                    disabled={fsPickerLoading}
-                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-xs cursor-pointer transition-colors"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5" />
-                    <span>{fsPickerLoading ? '선택창 대기 중...' : '로컬 폴더 / 볼륨 열기'}</span>
-                  </button>
-                  <input
-                    type="file"
-                    ref={folderInputRef}
-                    {...({ webkitdirectory: '', directory: '' } as any)}
-                    multiple
-                    className="hidden"
-                    onChange={handleFolderFilesChange}
-                  />
-                </div>
-
-                {/* 3. Real WebUSB Direct Pairing */}
-                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-2.5">
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 text-xs">
-                      <Usb className="w-4 h-4 text-cyan-500" />
-                      물리 USB 저장장치 직접 페어링
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                      WebUSB를 통해 컴퓨터에 연결된 USB 플래시 메모리, 외장 SSD, SD 카드 리더기의 물리 디스크립터를 직접 조회합니다.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handlePairWebUsb}
-                    disabled={fsPickerLoading}
-                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs shadow-xs cursor-pointer transition-colors"
-                  >
-                    <Usb className="w-3.5 h-3.5" />
-                    <span>실제 USB 장치 검색 (WebUSB)</span>
-                  </button>
-                </div>
-
-                {/* 4. Real Web Serial Direct Pairing */}
-                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between space-y-2.5">
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 text-xs">
-                      <Zap className="w-4 h-4 text-amber-500" />
-                      물리 COM / 시리얼 포트 연결
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                      Web Serial API로 아두이노, 임베디드 스토리지 컨트롤러, USB-UART 직렬 통신 포트를 직접 페어링합니다.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handlePairWebSerial}
-                    disabled={fsPickerLoading}
-                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs shadow-xs cursor-pointer transition-colors"
-                  >
-                    <Zap className="w-3.5 h-3.5" />
-                    <span>시리얼 포트 검색 (Web Serial)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Mobile Devices Notice */}
-              <div className="p-3 rounded-lg bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 text-xs flex items-start gap-2.5">
-                <Info className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
-                <div className="space-y-0.5">
-                  <div className="font-semibold text-slate-700 dark:text-slate-300">
-                    스마트폰 및 모바일 기기 내부 저장소 안내
-                  </div>
-                  <p className="text-[11px] leading-relaxed">
-                    스마트폰·태블릿(Android/iOS) 내부 저장소(UFS/eMMC)는 OS 보안 및 MTP(미디어 전송 프로토콜) 구조상 PC에서 물리 LBA 블록 및 S.M.A.R.T. 센서에 직접 접근할 수 없습니다. 본 소프트웨어는 순수 PC 전용 물리 저장장치(내장 NVMe, SATA SSD, HDD, 외장 USB 드라이브, SD 카드) 진단 전용입니다.
-                  </p>
-                </div>
-              </div>
-
-              {fsPickerError && (
-                <div className="p-3 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{fsPickerError}</span>
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Footer */}

@@ -49,10 +49,6 @@ import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
 import { SCAN_METHOD_DEFINITIONS, getDefaultMethodForDrive } from './utils/scanProfiles';
 import {
-  createNativeHostDrive,
-  createNativeDriveFromFile,
-  createNativeDriveFromDirectoryHandle,
-  createNativeDriveFromFolderFiles,
   executeRealZeroFillRepairBlock,
   rescanAllDrives,
   isTauriDesktopRuntime,
@@ -62,13 +58,13 @@ import {
   classifyResponseBucket,
   buildScanBlockSequence,
   isSafeEraseTarget,
-  provisionSafeEraseTargetFile,
   executeHddScanBlockProbe,
   queryTauriRunSmartSelfTest,
   queryTauriSmartSelfTestStatus,
   queryTauriPollTemperatures
 } from './utils/nativeDriveEngine';
 import { calculateHardwareVitals } from './utils/hardwareTelemetry';
+import { classifyFutureDriveStandards } from './utils/vendorDiagnostics';
 import { safeStorage } from './utils/safeStorage';
 import { DiskSentinelMigrationBundle, mergeScanRecords } from './utils/dataMigration';
 import { ContiguousDegradationZone, PredictiveFailureReport, analyzePredictiveFailure } from './utils/predictiveFailureAnalysis';
@@ -88,8 +84,8 @@ import {
   ShieldAlert,
   Play,
   Layers,
-  FilePlus2,
-  SlidersHorizontal
+  SlidersHorizontal,
+  RefreshCw
 } from 'lucide-react';
 
 export default function App() {
@@ -182,200 +178,36 @@ export default function App() {
     }
   }, [notificationsEnabled]);
 
-const INITIAL_PROBING_DRIVE: DiskDrive = {
-  id: 'drive-native-host-real',
-  name: '스토리지 장치 탐색 중...',
-  model: 'Probing Host Storage Hardware...',
-  serialNumber: 'PROBING',
-  firmware: 'N/A',
-  type: 'SSD',
-  isExternal: false,
-  connectionType: 'internal',
-  capacityGb: null,
-  totalSectors: 0,
-  interface: 'OPFS / Win32 IOCTL Probing',
-  healthScore: null,
-  temperatureC: null,
-  powerOnHours: null,
-  mountPoint: '...',
-  fileSystem: 'Unknown',
-  smartAttributes: []
-};
-
-  // Drive Selection & Management
-  const [drives, setDrives] = useState<DiskDrive[]>([INITIAL_PROBING_DRIVE]);
-  const [selectedDriveId, setSelectedDriveId] = useState<string>('drive-native-host-real');
+  // Drive Selection & Management (Tauri Native IPC Exclusive)
+  const [drives, setDrives] = useState<DiskDrive[]>([]);
+  const [selectedDriveId, setSelectedDriveId] = useState<string>('');
+  const [isInitialProbing, setIsInitialProbing] = useState<boolean>(true);
   const [isExternalModalOpen, setIsExternalModalOpen] = useState<boolean>(false);
-  const activeDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
+  const [bridgeDiagnostics, setBridgeDiagnostics] = useState<{
+    tauriAvailable: boolean;
+    bridgeReachable: boolean;
+    bridgeElevated: boolean;
+    checkedAt: number | null;
+    checking: boolean;
+  }>(() => ({
+    tauriAvailable: isTauriDesktopRuntime(),
+    bridgeReachable: false,
+    bridgeElevated: false,
+    checkedAt: null,
+    checking: true
+  }));
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-
-  // Probe Real Native OS Hardware Storage on Mount (All 32 PhysicalDrive channels)
-  useEffect(() => {
-    let mounted = true;
-    rescanAllDrives([]).then(allDrives => {
-      if (mounted && allDrives.length > 0) {
-        setDrives(allDrives);
-        setSelectedDriveId(allDrives[0].id);
-        setSelectedMethodId(getDefaultMethodForDrive(allDrives[0]));
-        if (isNativeHardwareRuntime() || allDrives.some(d => d.id.startsWith('drive-tauri-physical-'))) {
-          setIsNativeRuntime(true);
-          setIsThermalPolling(true);
-        }
-      }
-    }).catch(() => {
-      createNativeHostDrive().then(nativeDrive => {
-        if (mounted) {
-          setDrives(prev => {
-            const nonHostDrives = prev.filter(d => d.id !== 'drive-native-host-real' && d.id !== nativeDrive.id);
-            return [nativeDrive, ...nonHostDrives];
-          });
-          setSelectedDriveId(nativeDrive.id);
-          setSelectedMethodId(getDefaultMethodForDrive(nativeDrive));
-        }
-      }).catch(() => {});
-    });
-
-    detectNativeBridgeAvailable().then(bridgeOk => {
-      if (mounted && (bridgeOk || isTauriDesktopRuntime())) {
-        setIsNativeRuntime(true);
-        setIsThermalPolling(true);
-      }
-    }).catch(() => {});
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const handlePickDirectoryVolume = async () => {
-    // Check if running inside cross-origin iframe (e.g. AI Studio preview)
-    const isCrossOriginIframe = (() => {
-      try {
-        return window.self !== window.top;
-      } catch {
-        return true;
-      }
-    })();
-
-    // In cross-origin subframes, window.showDirectoryPicker is forbidden by browser security policy.
-    // Trigger standard HTML5 folder or file picker directly to prevent SecurityError.
-    if (isCrossOriginIframe) {
-      if (folderInputRef.current) {
-        folderInputRef.current.click();
-      } else {
-        fileInputRef.current?.click();
-      }
-      return;
-    }
-
-    if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
-      try {
-        // @ts-expect-error - W3C File System Access API
-        const dirHandle = await window.showDirectoryPicker({
-          id: 'disk-sentinel-volume-mount',
-          mode: 'readwrite'
-        });
-        const realDrive = await createNativeDriveFromDirectoryHandle(dirHandle);
-        handleAddDrive(realDrive);
-        dispatchNotification('실제 로컬 볼륨 마운트 완료', `[${dirHandle.name}] 볼륨이 검사 장치로 마운트되었습니다.`);
-      } catch (err: any) {
-        if (err?.name === 'AbortError') {
-          return;
-        }
-        // Graceful fallback without throwing uncaught SecurityError
-        if (folderInputRef.current) {
-          folderInputRef.current.click();
-        } else {
-          fileInputRef.current?.click();
-        }
-      }
-    } else {
-      if (folderInputRef.current) {
-        folderInputRef.current.click();
-      } else {
-        fileInputRef.current?.click();
-      }
-    }
-  };
-
-  const handleAddDrive = useCallback((newDrive: DiskDrive) => {
-    setDrives(prev => {
-      const exists = prev.some(d => d.id === newDrive.id);
-      if (exists) return prev;
-      return [newDrive, ...prev];
-    });
-    setSelectedDriveId(newDrive.id);
-    setSelectedMethodId(getDefaultMethodForDrive(newDrive));
-  }, []);
-
-  // Real local file selection handler
-  const handleSelectRealFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const realDrive = await createNativeDriveFromFile(file);
-      handleAddDrive(realDrive);
-      dispatchNotification('실제 파일 마운트 완료', `${file.name} (${(file.size / (1024 * 1024)).toFixed(1)}MB) 파일이 로드되었습니다.`);
-    } catch (err: any) {
-      console.error('File load error:', err);
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  // Real local directory files selection handler (works inside cross-origin iframes)
-  const handleSelectFolderFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    try {
-      const realDrive = await createNativeDriveFromFolderFiles(files);
-      handleAddDrive(realDrive);
-      dispatchNotification('실제 디렉토리 볼륨 마운트 완료', `${realDrive.name}이(가) 로드되었습니다.`);
-    } catch (err: any) {
-      console.error('Folder load error:', err);
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  const handleEjectDrive = useCallback((ejectDriveId: string) => {
-    setDrives(prev => {
-      const remaining = prev.filter(d => d.id !== ejectDriveId);
-      if (selectedDriveId === ejectDriveId && remaining.length > 0) {
-        setSelectedDriveId(remaining[0].id);
-      }
-      return remaining;
-    });
-  }, [selectedDriveId]);
+  const activeDrive: DiskDrive | undefined = drives.find(d => d.id === selectedDriveId) || drives[0];
 
   // Hardware Details & Live Rescan State
   const [isHardwareDetailsOpen, setIsHardwareDetailsOpen] = useState<boolean>(false);
   const [isRescanningDrives, setIsRescanningDrives] = useState<boolean>(false);
 
-  const handleRescanDrives = useCallback(async () => {
-    setIsRescanningDrives(true);
-    try {
-      const updated = await rescanAllDrives(drives);
-      setDrives(updated);
-      if (!updated.some(d => d.id === selectedDriveId)) {
-        setSelectedDriveId(updated[0].id);
-      }
-      soundManager.playClick();
-      dispatchNotification('디스크 장치 재검색 완료', '로컬 스토리지 하드웨어 및 I/O 실측 프로브가 갱신되었습니다.');
-    } catch (err) {
-      console.error('Error rescanning drives:', err);
-    } finally {
-      setIsRescanningDrives(false);
-    }
-  }, [drives, selectedDriveId, dispatchNotification]);
-
   // Active Tab: 'scan' | 'logs' | 'health' | 'smart' | 'history'
   const [activeTab, setActiveTab] = useState<MainAppTab>('scan');
 
   // Storage Media Tailored Inspection Method State
-  const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>(() => getDefaultMethodForDrive(INITIAL_PROBING_DRIVE));
+  const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>('nvme_multiqueue_direct');
 
   // HDDScan Diagnostic Configuration State
   const [selectedTestType, setSelectedTestType] = useState<SurfaceTestType>('verify');
@@ -383,7 +215,6 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const [rangeEndPct, setRangeEndPct] = useState<number>(100);
   const [scanViewMode, setScanViewMode] = useState<'split' | 'graph' | 'map'>('split');
   const [activeBucketFilter, setActiveBucketFilter] = useState<BucketKey | null>(null);
-  const [isProvisioningErase, setIsProvisioningErase] = useState<boolean>(false);
 
   // Blank preview blocks for idle selected drive (before a task is started)
   const [idleBlocks, setIdleBlocks] = useState<SectorBlock[]>([]);
@@ -405,6 +236,87 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const [thermalHistoryByDrive, setThermalHistoryByDrive] = useState<Record<string, ThermalHistoryPoint[]>>({});
   const [smartSelfTestByDrive, setSmartSelfTestByDrive] = useState<Record<string, SmartSelfTestState>>({});
 
+  const checkNativeEngineConnection = useCallback(async () => {
+    setBridgeDiagnostics(prev => ({ ...prev, checking: true }));
+    try {
+      const [allDrives, bridgeOk] = await Promise.all([
+        rescanAllDrives([]),
+        detectNativeBridgeAvailable(true)
+      ]);
+      const tauriOk = isTauriDesktopRuntime();
+
+      setDrives(allDrives);
+      if (allDrives.length > 0) {
+        setSelectedDriveId(prevId =>
+          allDrives.some(d => d.id === prevId) ? prevId : allDrives[0].id
+        );
+        setSelectedMethodId(getDefaultMethodForDrive(allDrives[0]));
+      } else {
+        setSelectedDriveId('');
+      }
+
+      const nativeActive =
+        tauriOk ||
+        isNativeHardwareRuntime() ||
+        allDrives.some(d => d.id.startsWith('drive-tauri-physical-'));
+
+      setIsNativeRuntime(nativeActive || bridgeOk);
+      if (nativeActive || bridgeOk) {
+        setIsThermalPolling(true);
+      }
+
+      setBridgeDiagnostics({
+        tauriAvailable: tauriOk,
+        bridgeReachable: bridgeOk,
+        bridgeElevated: bridgeOk || nativeActive,
+        checkedAt: Date.now(),
+        checking: false
+      });
+      return allDrives;
+    } catch {
+      setBridgeDiagnostics({
+        tauriAvailable: isTauriDesktopRuntime(),
+        bridgeReachable: false,
+        bridgeElevated: false,
+        checkedAt: Date.now(),
+        checking: false
+      });
+      return [] as DiskDrive[];
+    } finally {
+      setIsInitialProbing(false);
+    }
+  }, []);
+
+  // Probe Real Native OS Hardware Storage on Mount (Tauri Desktop IPC)
+  useEffect(() => {
+    void checkNativeEngineConnection();
+  }, [checkNativeEngineConnection]);
+
+  const handleEjectDrive = useCallback((ejectDriveId: string) => {
+    setDrives(prev => {
+      const remaining = prev.filter(d => d.id !== ejectDriveId);
+      if (selectedDriveId === ejectDriveId) {
+        setSelectedDriveId(remaining[0]?.id ?? '');
+      }
+      return remaining;
+    });
+  }, [selectedDriveId]);
+
+  const handleRescanDrives = useCallback(async () => {
+    setIsRescanningDrives(true);
+    try {
+      const updated = await checkNativeEngineConnection();
+      soundManager.playClick();
+      if (updated.length > 0) {
+        dispatchNotification('디스크 장치 재검색 완료', `물리 스토리지 ${updated.length}대가 Tauri 네이티브 엔진에 인식되었습니다.`);
+      }
+    } catch (err) {
+      console.error('Error rescanning drives:', err);
+    } finally {
+      setIsRescanningDrives(false);
+    }
+  }, [checkNativeEngineConnection, dispatchNotification]);
+
   // Initialize blank blocks preview when drive changes
   const initDriveBlocks = useCallback((drive: DiskDrive) => {
     const { blocks: initialBlocks } = generateBlocksForDrive(drive, TOTAL_SCAN_BLOCKS);
@@ -415,12 +327,13 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
   // Focused task for active drive & inspector stage
   const activeTask = useMemo(() => {
+    if (!activeDrive) return null;
     const exact = tasks.find(t => t.id === activeTaskId);
     if (exact && exact.driveId === activeDrive.id) return exact;
     const runningForDrive = tasks.find(t => t.driveId === activeDrive.id && t.status === 'running');
     if (runningForDrive) return runningForDrive;
     return tasks.find(t => t.driveId === activeDrive.id) || null;
-  }, [tasks, activeTaskId, activeDrive.id]);
+  }, [tasks, activeTaskId, activeDrive]);
 
   const blocks = useMemo(
     () => (activeTask ? activeTask.blocks : idleBlocks),
@@ -535,6 +448,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const handleDegradationWarning = useCallback(
     (zone: ContiguousDegradationZone, report: PredictiveFailureReport) => {
       const currentDrive = activeDriveRef.current;
+      if (!currentDrive) return;
       const scopedKey = `${currentDrive.id}:${zone.warningKey}`;
       if (emittedDegradationKeysRef.current.has(scopedKey)) {
         return;
@@ -704,7 +618,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const scanLoopRef = useRef<NodeJS.Timeout | null>(null);
   const timerLoopRef = useRef<NodeJS.Timeout | null>(null);
   const inFlightDrivesRef = useRef<Set<string>>(new Set());
-  const activeDriveRef = useRef<DiskDrive>(activeDrive);
+  const activeDriveRef = useRef<DiskDrive | undefined>(activeDrive);
   activeDriveRef.current = activeDrive;
   const drivesRef = useRef<DiskDrive[]>(drives);
   drivesRef.current = drives;
@@ -722,6 +636,12 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
   // Initialize blank blocks on drive change or capacity update
   useEffect(() => {
+    if (!activeDrive) {
+      setIdleBlocks([]);
+      setSelectedBlock(null);
+      lastInitializedDriveRef.current = null;
+      return;
+    }
     const last = lastInitializedDriveRef.current;
     const driveChanged = !last || last.id !== activeDrive.id;
     const capacityUpdatedWhileIdle =
@@ -771,8 +691,8 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   };
 
   // Real-time Hardware Vitals (strictly nullable when sensors unavailable)
-  const vitals = calculateHardwareVitals(activeDrive, telemetry, scanSpeedMultiplier);
-  const currentTemp = vitals.temperatureC;
+  const vitals = activeDrive ? calculateHardwareVitals(activeDrive, telemetry, scanSpeedMultiplier) : null;
+  const currentTemp = vitals ? vitals.temperatureC : null;
 
   const notifiedOverheatRef = useRef<boolean>(false);
 
@@ -813,12 +733,13 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   }, [currentTemp]);
 
   // Dynamic health score calculation (null until hardware health or scan samples exist)
-  const calculatedHealth: number | null =
-    activeDrive.healthScore !== null
-      ? Math.max(10, Math.round(activeDrive.healthScore - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
-      : totalScanned > 0
-      ? Math.max(10, Math.round(100 - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
-      : null;
+  const calculatedHealth: number | null = !activeDrive
+    ? null
+    : activeDrive.healthScore !== null
+    ? Math.max(10, Math.round(activeDrive.healthScore - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
+    : totalScanned > 0
+    ? Math.max(10, Math.round(100 - (badCount * 12) - (criticalCount * 2) - (slowCount * 0.4)))
+    : null;
 
   // Poll OS Physical Drive Temperatures every 4s in Tauri Desktop runtime
   const handlePollTemperatures = useCallback(async () => {
@@ -873,8 +794,8 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
   // S.M.A.R.T. Self-Test Runner & Polling
   const handlePollSmartSelfTest = useCallback(async (targetDriveId?: string) => {
-    const driveIdToPoll = targetDriveId || activeDriveRef.current.id;
-    if (!driveIdToPoll.startsWith('drive-tauri-physical-')) return;
+    const driveIdToPoll = targetDriveId || activeDriveRef.current?.id;
+    if (!driveIdToPoll || !driveIdToPoll.startsWith('drive-tauri-physical-')) return;
     const driveIndex = parseInt(driveIdToPoll.replace('drive-tauri-physical-', ''), 10);
     const existingType = smartSelfTestByDrive[driveIdToPoll]?.testType || null;
     const status = await queryTauriSmartSelfTestStatus(driveIndex, driveIdToPoll, existingType);
@@ -886,7 +807,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
   const handleRunSmartSelfTest = useCallback(async (testType: SmartSelfTestType | 'abort') => {
     const target = activeDriveRef.current;
-    if (!target.id.startsWith('drive-tauri-physical-')) return;
+    if (!target || !target.id.startsWith('drive-tauri-physical-')) return;
     const driveIndex = parseInt(target.id.replace('drive-tauri-physical-', ''), 10);
     const res = await queryTauriRunSmartSelfTest(driveIndex, testType);
 
@@ -1192,6 +1113,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const createAndEnqueueTask = useCallback(
     (startImmediately = true, forcedTestType?: SurfaceTestType) => {
       const targetDrive = activeDriveRef.current;
+      if (!targetDrive) return;
       const testTypeToRun = forcedTestType || selectedTestType;
 
       if (testTypeToRun === 'erase') {
@@ -1260,40 +1182,6 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
     [selectedTestType, rangeStartPct, rangeEndPct, scanMode, selectedMethodId, scanSpeedMultiplier]
   );
 
-  const handleProvisionSafeEraseTarget = useCallback(async () => {
-    setIsProvisioningErase(true);
-    try {
-      const { drive: safeDrive, createdType } = await provisionSafeEraseTargetFile();
-      setDrives(prev => {
-        const filtered = prev.filter(d => d.id !== safeDrive.id);
-        return [safeDrive, ...filtered];
-      });
-      setSelectedDriveId(safeDrive.id);
-      setSelectedMethodId(getDefaultMethodForDrive(safeDrive));
-      dispatchNotification(
-        '안전한 Erase 테스트 영역 준비 완료',
-        createdType === 'file_handle'
-          ? `쓰기 가능한 로컬 테스트 파일(${safeDrive.model})이 준비되었습니다.`
-          : '격리된 브라우저 OPFS 샌드박스 4MB 테스트 파일이 준비되었습니다.'
-      );
-    } catch (err: any) {
-      const warnLog: ErrorLogItem = {
-        id: `erase-provision-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-        blockIndex: 0,
-        lba: 0,
-        status: 'slow',
-        latencyMs: 0,
-        errorCode: 'ERASE_PROVISION_CANCELLED',
-        description: err?.message || '테스트 파일 준비가 취소되었거나 지원되지 않습니다.',
-        methodContext: 'Safe Erase Guard'
-      };
-      setErrorLogs(prev => [warnLog, ...prev]);
-    } finally {
-      setIsProvisioningErase(false);
-    }
-  }, [dispatchNotification]);
-
   const handlePauseTask = useCallback((taskId: string) => {
     setTasks(prev =>
       prev.map(t => (t.id === taskId && t.status === 'running' ? { ...t, status: 'paused' } : t))
@@ -1360,7 +1248,11 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
     setActiveBucketFilter(null);
     setLatestBadLba(undefined);
     emittedDegradationKeysRef.current.clear();
-    initDriveBlocks(activeDrive);
+    if (activeDrive) {
+      initDriveBlocks(activeDrive);
+    } else {
+      setIdleBlocks([]);
+    }
     setErrorLogs([]);
     setAlertBannerVisible(false);
   };
@@ -1368,7 +1260,9 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
   const handleDriveChange = (driveId: string) => {
     setSelectedDriveId(driveId);
     const nextDrive = drives.find(d => d.id === driveId) || drives[0];
-    setSelectedMethodId(getDefaultMethodForDrive(nextDrive));
+    if (nextDrive) {
+      setSelectedMethodId(getDefaultMethodForDrive(nextDrive));
+    }
     const existingTaskForDrive =
       tasks.find(t => t.driveId === driveId && t.status === 'running') ||
       tasks.find(t => t.driveId === driveId);
@@ -1393,6 +1287,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
   // Open Current Live Diagnostic Report
   const handleOpenCurrentReport = () => {
+    if (!activeDrive) return;
     const record = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
     setActiveReportRecord(record);
   };
@@ -1402,6 +1297,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
     if (record) {
       setExportTargetRecord(record);
     } else {
+      if (!activeDrive) return;
       const current = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
       setExportTargetRecord(current);
     }
@@ -1426,21 +1322,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       // F5: Hardware Rescan
       if (e.key === 'F5') {
         e.preventDefault();
-        handleRescanDrives();
-        return;
-      }
-
-      // Ctrl + O: Mount Volume
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
-        e.preventDefault();
-        handlePickDirectoryVolume();
-        return;
-      }
-
-      // Ctrl + F: Open File
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-        e.preventDefault();
-        fileInputRef.current?.click();
+        void handleRescanDrives();
         return;
       }
 
@@ -1454,6 +1336,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       // Space: Start/Pause Scan
       if (e.code === 'Space') {
         e.preventDefault();
+        if (!activeDriveRef.current) return;
         if (scanStatus === 'scanning') {
           handlePauseScan();
         } else if (scanStatus === 'paused') {
@@ -1467,6 +1350,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       // R: Reset
       if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
+        if (!activeDriveRef.current) return;
         handleResetScan();
         return;
       }
@@ -1481,26 +1365,10 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
     window.addEventListener('keydown', handleDesktopKeyDown);
     return () => window.removeEventListener('keydown', handleDesktopKeyDown);
-  }, [scanStatus, handleRescanDrives, handlePickDirectoryVolume]);
+  }, [scanStatus, handleRescanDrives]);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-150">
-      {/* Hidden Real File & Directory Inputs (Always available across all tabs & iframes) */}
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleSelectRealFile} 
-        className="hidden" 
-      />
-      <input 
-        type="file" 
-        ref={folderInputRef} 
-        {...({ webkitdirectory: '', directory: '' } as any)}
-        multiple 
-        onChange={handleSelectFolderFiles} 
-        className="hidden" 
-      />
-
       {/* Top Navigation */}
       <Navbar
         drives={drives}
@@ -1524,18 +1392,17 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         onOpenAboutModal={() => setIsAboutModalOpen(true)}
         onOpenDllDocs={() => setIsDllDocsOpen(true)}
         onOpenExternalDevicesModal={() => setIsExternalModalOpen(true)}
-        onOpenVendorDiagnostics={() => setIsVendorModalOpen(true)}
+        onOpenVendorDiagnostics={() => { if (activeDrive) setIsVendorModalOpen(true); }}
         onOpenSupportedCatalog={() => setIsCatalogModalOpen(true)}
         onOpenParallelScanModal={() => setIsParallelScanOpen(true)}
         onOpenTrayGuardianModal={() => setIsTrayGuardianOpen(true)}
         onOpenBitCarvingModal={() => {
+          if (!activeDrive) return;
           const badLba = latestBadLba ?? (blocks.find(b => b.status === 'bad')?.lba) ?? (blocks[0]?.lba ?? 0);
           setBitCarvingTargetLba(badLba);
           setIsBitCarvingOpen(true);
         }}
-        onPickDirectoryVolume={handlePickDirectoryVolume}
-        onOpenRealFile={() => fileInputRef.current?.click()}
-        onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
+        onOpenHardwareDetails={() => { if (activeDrive) setIsHardwareDetailsOpen(true); }}
         onRescanDrives={handleRescanDrives}
         isRescanning={isRescanningDrives}
         onOpenOptionsModal={() => setIsOptionsModalOpen(true)}
@@ -1654,8 +1521,134 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
           </button>
         </div>
 
+        {/* Browser Empty State & Native Tauri / Local Bridge Launch Guide when no physical disk is attached */}
+        {activeTab !== 'history' && !activeDrive && (
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-7 space-y-5">
+            {isInitialProbing ? (
+              <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
+                <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin" />
+                <div className="space-y-1">
+                  <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    Tauri 데스크톱 네이티브 스토리지 엔진 확인 중...
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    시스템 물리 드라이브(<code className="font-mono">\\.\PhysicalDrive0~31</code>) 연결 상태를 조회하고 있습니다.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-amber-600 dark:text-amber-400 font-semibold">
+                      <ShieldAlert className="w-4 h-4 shrink-0" />
+                      <span>Tauri Desktop Native IPC Required</span>
+                    </div>
+                    <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+                      웹 브라우저 단독 실행에서는 물리 디스크를 직접 인식할 수 없습니다
+                    </h2>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-3xl leading-relaxed">
+                      정확한 물리 섹터 및 하드웨어 모델 진단을 위해 브라우저 기반 가상/샌드박스 디스크 인식을 제거했습니다.
+                      실제 장착된 내·외장 SSD, HDD, USB 저장장치(<code className="font-mono text-slate-800 dark:text-slate-200">\\.\PhysicalDrive0~31</code>)를
+                      선택해 Verify·Read·Butterfly·Erase 표면검사를 수행하려면 Tauri 데스크톱 앱 또는 관리자 권한 네이티브 브릿지로 실행하세요.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void checkNativeEngineConnection()}
+                      disabled={bridgeDiagnostics.checking}
+                      className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${bridgeDiagnostics.checking ? 'animate-spin' : ''}`} />
+                      <span>네이티브 엔진 연결 재확인</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsExternalModalOpen(true)}
+                      className="px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>32채널 진단 슬롯 보기</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Runtime Connection Diagnostic Strip */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 border border-slate-200 dark:border-slate-800 rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-slate-200 dark:divide-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
+                  <div className="p-3.5 space-y-1">
+                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Tauri 데스크톱 IPC</div>
+                    <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                      {bridgeDiagnostics.tauriAvailable ? '연결됨 (__TAURI__)' : '미감지 (웹 브라우저)'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 space-y-1">
+                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">로컬 Win32 브릿지 (127.0.0.1)</div>
+                    <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                      {bridgeDiagnostics.bridgeReachable ? '응답 확인됨' : '미연결'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 space-y-1">
+                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">마지막 연결 확인</div>
+                    <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                      {bridgeDiagnostics.checkedAt
+                        ? new Date(bridgeDiagnostics.checkedAt).toLocaleTimeString('ko-KR', { hour12: false })
+                        : '확인 중'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2-Step Native Desktop & Bridge Launch Instructions */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">01</span>
+                      <span>설치형 Tauri 데스크톱 앱 실행 (권장)</span>
+                    </div>
+                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Windows용 <code className="font-mono font-semibold text-slate-800 dark:text-slate-200">DiskBadSectorScanner.exe</code>를
+                      <strong className="text-slate-800 dark:text-slate-200"> 관리자 권한</strong>으로 실행하면 Rust Win32 IOCTL 엔진이
+                      <code className="font-mono"> PhysicalDrive0~31</code>과 S.M.A.R.T.·NVMe 센서를 즉시 로드합니다.
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">02</span>
+                      <span>개발 환경에서 로컬 Tauri 브릿지 실행</span>
+                    </div>
+                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                      소스 환경에서 직접 테스트할 경우 터미널에서 아래 명령으로 Tauri 데스크톱 컨테이너를 시작한 뒤 연결을 재확인하세요.
+                    </p>
+                    <pre className="mt-1 px-2.5 py-1.5 rounded bg-slate-900 text-slate-100 font-mono text-[11px] overflow-x-auto">
+                      npm run tauri:dev
+                    </pre>
+                  </div>
+                </div>
+
+                {scanRecords.length > 0 && (
+                  <div className="pt-2 flex items-center justify-between border-t border-slate-200 dark:border-slate-800 text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      이전 데스크톱 진단 세션에서 저장된 검사 기록 <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">{scanRecords.length}건</strong>이 있습니다.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('history')}
+                      className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                    >
+                      <span>저장된 검사 기록 보기</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
         {/* Tab 1: Live Surface Scan View — Compact Instrument Console */}
-        {activeTab === 'scan' && (
+        {activeTab === 'scan' && activeDrive && (
           <div className="flex flex-col lg:flex-row gap-3 items-start">
             {/* Left Instrument Config & Queue Rail (~330px on lg+) */}
             <aside className="w-full lg:w-[330px] shrink-0 space-y-2.5">
@@ -1669,9 +1662,62 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
                     </span>
                   </div>
                   <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                    {activeDrive.type}
+                    {activeDrive.hardwareSpecs?.busType || activeDrive.type}
                   </span>
                 </div>
+
+                {/* Target Internal / External Drive Quick Selector */}
+                {(() => {
+                  const stdClass = classifyFutureDriveStandards(activeDrive);
+                  return (
+                    <div className="space-y-1.5 pb-1.5 border-b border-slate-200 dark:border-slate-800">
+                      <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 dark:text-slate-400">
+                        <span className="font-semibold uppercase tracking-wider">대상 디스크 ({drives.length}대)</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void handleRescanDrives()}
+                            disabled={isRescanningDrives}
+                            className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[10px] font-medium flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                            title="내·외장 물리 디스크(PhysicalDrive0~31) 재검색"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${isRescanningDrives ? 'animate-spin' : ''}`} />
+                            <span>재검색</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsExternalModalOpen(true)}
+                            className="px-1.5 py-0.5 rounded border border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-[10px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            title="외부 장치 & 32채널 탐색 진단 열기"
+                          >
+                            <Usb className="w-2.5 h-2.5" />
+                            <span>외장</span>
+                          </button>
+                        </div>
+                      </div>
+                      <select
+                        value={selectedDriveId}
+                        onChange={e => handleDriveChange(e.target.value)}
+                        aria-label="표면 검사 대상 디스크 선택"
+                        className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-[11px] font-mono font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                      >
+                        {drives.map(d => (
+                          <option key={d.id} value={d.id}>
+                            [{d.isExternal ? '외장' : '내장'} · {d.hardwareSpecs?.busType || d.type}] {d.model} ({d.capacityGb !== null ? `${d.capacityGb}GB` : 'N/A'})
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                        <span className="truncate" title={stdClass.adaptiveNote}>
+                          {stdClass.vendorDisplayName} · {stdClass.protocolStandard}
+                        </span>
+                        <span className="shrink-0 text-indigo-600 dark:text-indigo-400 font-semibold">
+                          {stdClass.recognitionSource === 'Standard Protocol Classifier' ? '표준 추론' : '모델 인식'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* 4-Mode HDDScan Surface Test Selector */}
                 <div className="grid grid-cols-2 gap-1.5">
@@ -1770,29 +1816,18 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
                   const guard = isSafeEraseTarget(activeDrive);
                   return (
                     <div
-                      className={`p-2 rounded border text-[10px] space-y-1.5 ${
+                      className={`p-2 rounded border text-[10px] space-y-1 ${
                         guard.allowed
                           ? 'border-emerald-500/40 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300'
                           : 'border-amber-500/50 bg-amber-50/80 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200'
                       }`}
                     >
                       <div className="font-bold flex items-center justify-between gap-1">
-                        <span>{guard.allowed ? '안전 쓰기 대상 확인됨' : 'Erase 안전 가드 활성'}</span>
+                        <span>{guard.allowed ? '비시스템 물리 드라이브 쓰기 검증 허용됨' : 'OS 시스템 디스크 Erase 보호 가드'}</span>
                         <span className="font-mono text-[9px] truncate max-w-[130px]">{guard.targetLabel}</span>
                       </div>
                       {!guard.allowed && (
-                        <>
-                          <p className="leading-snug">{guard.reason}</p>
-                          <button
-                            type="button"
-                            disabled={isProvisioningErase}
-                            onClick={() => void handleProvisionSafeEraseTarget()}
-                            className="w-full py-1 px-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
-                          >
-                            <FilePlus2 className="w-3 h-3" />
-                            <span>{isProvisioningErase ? '테스트 영역 준비 중...' : '안전한 OPFS / 쓰기 테스트 파일 준비'}</span>
-                          </button>
-                        </>
+                        <p className="leading-snug">{guard.reason}</p>
                       )}
                     </div>
                   );
@@ -1861,7 +1896,6 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
                 isScanning={scanStatus === 'scanning'}
                 blocks={blocks}
                 onRepairSectors={handleRepairSectors}
-                onOpenFilePicker={() => fileInputRef.current?.click()}
                 onOpenRemapModal={() => setIsSmartRemapOpen(true)}
               />
 
@@ -1994,7 +2028,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         )}
 
         {/* Tab 2: Error Logs & Activity Stream View */}
-        {activeTab === 'logs' && (
+        {activeTab === 'logs' && activeDrive && (
           <div className="space-y-3">
             <ErrorLogStream
               logs={errorLogs}
@@ -2042,7 +2076,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         )}
 
         {/* Tab 3: Health Summary & Temperature Trend Dashboard */}
-        {activeTab === 'health' && (
+        {activeTab === 'health' && activeDrive && (
           <HealthSummaryDashboard
             drive={activeDrive}
             telemetry={telemetry}
@@ -2069,7 +2103,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         )}
 
         {/* Tab 4: S.M.A.R.T. Attributes & Hardware Self-Test View */}
-        {activeTab === 'smart' && (
+        {activeTab === 'smart' && activeDrive && (
           <div className="space-y-3">
             <HealthSummaryDashboard
               drive={activeDrive}
@@ -2185,14 +2219,13 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
           drives={drives}
           selectedDriveId={selectedDriveId}
           onSelectDrive={handleDriveChange}
-          onAddDrive={handleAddDrive}
           onEjectDrive={handleEjectDrive}
           onRescanDrives={handleRescanDrives}
         />
       )}
 
       {/* Vendor & Media Tailored Diagnostics Hub Modal */}
-      {isVendorModalOpen && (
+      {isVendorModalOpen && activeDrive && (
         <VendorDiagnosticsModal
           isOpen={isVendorModalOpen}
           onClose={() => setIsVendorModalOpen(false)}
@@ -2251,7 +2284,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       )}
 
       {/* Bit Carving & ECC Parity Recovery Engine Modal */}
-      {isBitCarvingOpen && (
+      {isBitCarvingOpen && activeDrive && (
         <BitCarvingRecoveryModal
           isOpen={isBitCarvingOpen}
           onClose={() => setIsBitCarvingOpen(false)}
@@ -2262,7 +2295,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       )}
 
       {/* Advanced Disk Hardware Specification & Deep Diagnostics Modal */}
-      {isHardwareDetailsOpen && (
+      {isHardwareDetailsOpen && activeDrive && (
         <DiskHardwareDetailsModal
           isOpen={isHardwareDetailsOpen}
           onClose={() => setIsHardwareDetailsOpen(false)}
@@ -2272,13 +2305,15 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
       )}
 
       {/* S.M.A.R.T. Sector Remapping & Zero-Fill Repair Center Modal (Root level so accessible from all tabs) */}
-      <SmartRemapModal
-        isOpen={isSmartRemapOpen}
-        onClose={() => setIsSmartRemapOpen(false)}
-        activeDrive={activeDrive}
-        blocks={blocks}
-        onRepairSectors={handleRepairSectors}
-      />
+      {activeDrive && (
+        <SmartRemapModal
+          isOpen={isSmartRemapOpen}
+          onClose={() => setIsSmartRemapOpen(false)}
+          activeDrive={activeDrive}
+          blocks={blocks}
+          onRepairSectors={handleRepairSectors}
+        />
+      )}
 
       {/* Program Options & Preferences Modal */}
       {isOptionsModalOpen && (
@@ -2370,16 +2405,18 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
           {/* Right: Trigger Update Check, DLL Docs, External Diagnostics */}
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsHardwareDetailsOpen(true)}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 font-medium transition-colors cursor-pointer"
+              onClick={() => { if (activeDrive) setIsHardwareDetailsOpen(true); }}
+              disabled={!activeDrive}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               title="디스크 장치 상세 스펙 및 하드웨어 텔레메트리"
             >
               <Cpu className="w-3 h-3 text-indigo-500" />
               <span>장치 스펙</span>
             </button>
             <button
-              onClick={() => setIsVendorModalOpen(true)}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-50/40 dark:bg-blue-950/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 font-medium transition-colors cursor-pointer"
+              onClick={() => { if (activeDrive) setIsVendorModalOpen(true); }}
+              disabled={!activeDrive}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-50/40 dark:bg-blue-950/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               title="제조사 및 내/외부 매체 특성 진단 센터"
             >
               <Cpu className="w-3 h-3 text-blue-500" />
@@ -2423,6 +2460,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${
+              !activeDrive ? 'bg-amber-500' :
               scanStatus === 'scanning' ? 'bg-indigo-500 animate-ping' :
               scanStatus === 'paused' ? 'bg-amber-500' :
               scanStatus === 'completed' ? 'bg-emerald-500' :
@@ -2430,6 +2468,7 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
             }`} />
             <span className="font-semibold text-slate-700 dark:text-slate-200 font-sans">
               {
+                !activeDrive ? '네이티브 엔진 대기 (Tauri IPC 미감지)' :
                 scanStatus === 'scanning' ? `검사 진행 중 (${scannedPercentage.toFixed(1)}%)` :
                 scanStatus === 'paused' ? '일시 정지됨' :
                 scanStatus === 'completed' ? '검사 완료 (정상)' :
@@ -2440,15 +2479,26 @@ const INITIAL_PROBING_DRIVE: DiskDrive = {
 
           <span className="text-slate-300 dark:text-slate-700">|</span>
           <span className="truncate max-w-[240px]">
-            [{activeDrive.mountPoint || 'Host'}] {activeDrive.name} ({activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : '용량 N/A'})
+            {activeDrive
+              ? `[${activeDrive.mountPoint || 'Physical'}] ${activeDrive.name} (${activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : '용량 N/A'})`
+              : '연결된 물리 디스크 없음'}
           </span>
 
-          <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
-          <span className="hidden sm:inline">LBA: 0 ~ {(activeDrive.totalSectors || 0).toLocaleString()}</span>
+          {activeDrive && (
+            <>
+              <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
+              <span className="hidden sm:inline">LBA: 0 ~ {(activeDrive.totalSectors || 0).toLocaleString()}</span>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
-          <span className="hidden md:inline">I/O 채널: <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">{activeDrive.hardwareSpecs?.probeMethod || 'Direct I/O'}</strong></span>
+          <span className="hidden md:inline">
+            I/O 채널:{' '}
+            <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">
+              {activeDrive?.hardwareSpecs?.probeMethod || 'Tauri Desktop Native IPC'}
+            </strong>
+          </span>
           <span className="text-slate-300 dark:text-slate-700 hidden md:inline">|</span>
           <span>건강: <strong className={calculatedHealth === null ? 'text-slate-400' : calculatedHealth >= 80 ? 'text-emerald-500' : 'text-red-500'}>{calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}</strong></span>
           <span className="text-slate-300 dark:text-slate-700">|</span>
@@ -2477,7 +2527,7 @@ function BackgroundTelemetryRefresher({
   isActive: boolean 
 }) {
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || drives.length === 0) return;
 
     const interval = setInterval(async () => {
       try {

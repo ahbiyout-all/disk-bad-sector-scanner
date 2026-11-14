@@ -5,6 +5,7 @@ import {
   getVendorProfile, 
   getDriveMediaAnalysis, 
   getTailoredActionMethods,
+  classifyFutureDriveStandards,
   StorageVendor,
   VendorProfileInfo
 } from '../utils/vendorDiagnostics';
@@ -49,9 +50,16 @@ const ALL_VENDORS: StorageVendor[] = [
   'wd',
   'sandisk',
   'sk_hynix',
+  'solidigm',
   'crucial',
+  'toshiba',
+  'kingston',
+  'lexar',
+  'corsair',
+  'sabrent',
+  'adata',
   'apple',
-  'toshiba'
+  'generic'
 ];
 
 export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
@@ -71,6 +79,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
 
   const currentVendorKey = detectVendor(activeDrive);
   const currentVendorProfile = getVendorProfile(currentVendorKey);
+  const futureClassification = classifyFutureDriveStandards(activeDrive);
   const mediaAnalysis = getDriveMediaAnalysis(activeDrive);
   const tailoredActions = getTailoredActionMethods(activeDrive, telemetry);
 
@@ -183,16 +192,19 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
           {/* TAB 1: TAILORED ACTION METHODS */}
           {activeTab === 'actions' && (
             <div className="space-y-3.5">
-              <div className="p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/50 dark:bg-indigo-950/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div className="space-y-1">
+              <div className="p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/50 dark:bg-indigo-950/20 flex flex-col gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-bold text-indigo-900 dark:text-indigo-200 text-xs flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
-                    <span>[{currentVendorProfile.nameKo}] 맞춤 분석 기반 단계별 해결책</span>
+                    <span>[{currentVendorProfile.nameKo}] 맞춤 분석 & 차세대 표준 분류</span>
                   </div>
-                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                    현재 연결된 <strong>{activeDrive.model}</strong>의 인터페이스({activeDrive.interface}), 전력 상태, 그리고 S.M.A.R.T. 건강도에 기반한 가장 효과적인 차별화 조치 방법입니다.
-                  </p>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-500/30 bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-300">
+                    {futureClassification.recognitionSource}
+                  </span>
                 </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  <strong>{activeDrive.model}</strong> · 규격: <span className="font-mono">{futureClassification.protocolStandard}</span> ({futureClassification.busGeneration})
+                </p>
               </div>
 
               {/* Action Cards List */}

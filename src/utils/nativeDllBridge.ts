@@ -1,18 +1,15 @@
 /**
  * @file nativeDllBridge.ts
- * @brief TypeScript Bridge for DiskSentinelNativeCore Engine (Win32 IOCTL / Tauri IPC / Real File & OPFS)
+ * @brief TypeScript Bridge for DiskSentinelNativeCore Engine (Win32 IOCTL / Tauri Desktop Native IPC)
  * @license Apache-2.0
  */
 
 import { DiskDrive } from '../types';
 import {
   isTauriDesktopRuntime,
-  isNativeHardwareRuntime,
-  detectNativeBridgeAvailable,
   queryTauriBitCarving,
   queryTauriParallelScan,
   queryTauriRawSector,
-  queryTauriScanBlock,
   queryTauriTrayGuardianCheck
 } from './nativeDriveEngine';
 
@@ -316,11 +313,7 @@ export interface DSMultiDriveScanSummary {
 }
 
 /**
- * Multi-Drive Parallel Scan:
- * - Physical Tauri drives: invokes Win32/Rust rayon parallel worker threads
- * - Mounted File/Folder drives: executes concurrent real File.slice() I/O verification
- * - Host OPFS drive: executes real OPFS storage reads
- * - WebUSB/Descriptor-only drives: marks unsupported honestly without synthetic loops
+ * Multi-Drive Parallel Scan via Tauri Desktop Native IPC (Rust rayon + Win32 IOCTL worker threads).
  */
 export async function DS_ScanMultipleDrivesParallel(
   targets: DSMultiDriveScanTarget[],
@@ -328,11 +321,10 @@ export async function DS_ScanMultipleDrivesParallel(
   drives?: DiskDrive[]
 ): Promise<DSMultiDriveScanSummary[]> {
   const isTauri = isTauriDesktopRuntime();
-  const isBridge = !isTauri && (await detectNativeBridgeAvailable());
-  const physicalTargets = (isTauri || isBridge)
+  const physicalTargets = isTauri
     ? targets.filter(t => t.driveId.startsWith('drive-tauri-physical-'))
     : [];
-  const nonTauriTargets = (isTauri || isBridge)
+  const unsupportedTargets = isTauri
     ? targets.filter(t => !t.driveId.startsWith('drive-tauri-physical-'))
     : targets;
 
@@ -372,58 +364,6 @@ export async function DS_ScanMultipleDrivesParallel(
         });
       }
     }
-  } else if (physicalTargets.length > 0 && isBridge) {
-    const bridgeResults = await Promise.all(
-      physicalTargets.map(async (target): Promise<DSMultiDriveScanSummary> => {
-        const tStart = performance.now();
-        const steps = 10;
-        const matchedDrive = drives?.find(d => d.id === target.driveId);
-        const secBytes = matchedDrive?.hardwareSpecs?.logicalSectorSize || 512;
-        const stepSectors = BigInt(Math.max(128, Number(target.burstStep || 128)));
-        let scannedSectors = 0n;
-        let badCount = 0;
-        let slowCount = 0;
-        let totalLatency = 0;
-
-        for (let i = 0; i < steps; i++) {
-          const probeLba = Number(target.startLba) + i * Number(stepSectors);
-          const res = await queryTauriScanBlock(target.driveIndex, probeLba, 128);
-          if (res) {
-            scannedSectors += 128n;
-            const ms = Number(res.latencyMs || 0);
-            totalLatency += ms;
-            if (Number(res.statusCode) >= 4) badCount++;
-            else if (Number(res.statusCode) >= 2 || ms > 50) slowCount++;
-          } else {
-            badCount++;
-          }
-          if (onProgressUpdate) {
-            onProgressUpdate(target.driveId, Math.round(((i + 1) / steps) * 100), badCount);
-          }
-        }
-
-        const elapsedMs = Math.max(0.1, performance.now() - tStart);
-        const avgLatencyMs = Number((totalLatency / steps).toFixed(3));
-        const throughputMbSec = scannedSectors > 0n && totalLatency > 0
-          ? Number((((Number(scannedSectors) * secBytes) / (1024 * 1024)) / (totalLatency / 1000)).toFixed(1))
-          : null;
-
-        return {
-          driveIndex: target.driveIndex,
-          driveId: target.driveId,
-          driveName: target.driveName,
-          totalSectorsScanned: scannedSectors,
-          badSectorsFound: badCount,
-          slowSectorsFound: slowCount,
-          elapsedMs,
-          avgLatencyMs,
-          throughputMbSec,
-          isCompleted: scannedSectors > 0n,
-          statusCode: badCount > 0 ? 4 : slowCount > 0 ? 2 : 0
-        };
-      })
-    );
-    summaries.push(...bridgeResults);
   }
 
   for (const target of physicalTargets) {
@@ -448,144 +388,27 @@ export async function DS_ScanMultipleDrivesParallel(
     }
   }
 
-  const nonTauriPromises = nonTauriTargets.map(async (target): Promise<DSMultiDriveScanSummary> => {
-    const startTime = performance.now();
-    const matchedDrive = drives?.find(d => d.id === target.driveId);
-    const attachedFile = matchedDrive?.attachedFile;
-
-    // Host OPFS File probe
-    if (!attachedFile && matchedDrive?.id === 'drive-native-host-real' && typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
-      try {
-        const root = await navigator.storage.getDirectory();
-        const fh = await root.getFileHandle('__disksentinel_io_probe__.bin', { create: true });
-        let opfsFile = await fh.getFile();
-        if (opfsFile.size < 128 * 1024) {
-          const w = await fh.createWritable();
-          await w.write(new Uint8Array(128 * 1024));
-          await w.close();
-          opfsFile = await fh.getFile();
-        }
-
-        const steps = 16;
-        let totalProbeMs = 0;
-        let totalBytesProcessed = 0;
-        let slowCount = 0;
-        let badCount = 0;
-
-        for (let step = 1; step <= steps; step++) {
-          const t0 = performance.now();
-          try {
-            const chunk = 64 * 1024;
-            const offset = ((step * 4096) % Math.max(1, opfsFile.size - chunk));
-            const buf = await opfsFile.slice(offset, offset + chunk).arrayBuffer();
-            totalBytesProcessed += buf.byteLength;
-          } catch {
-            badCount++;
-          }
-          const dt = Math.max(0.02, performance.now() - t0);
-          totalProbeMs += dt;
-          if (dt > 100) slowCount++;
-          if (onProgressUpdate) onProgressUpdate(target.driveId, Math.round((step / steps) * 100), badCount);
-        }
-
-        const elapsed = Math.max(0.1, performance.now() - startTime);
-        return {
-          driveIndex: target.driveIndex,
-          driveId: target.driveId,
-          driveName: target.driveName,
-          totalSectorsScanned: BigInt(Math.floor(totalBytesProcessed / 512)),
-          badSectorsFound: badCount,
-          slowSectorsFound: slowCount,
-          elapsedMs: elapsed,
-          avgLatencyMs: Number((totalProbeMs / steps).toFixed(3)),
-          throughputMbSec: Number(((totalBytesProcessed / (1024 * 1024)) / (totalProbeMs / 1000)).toFixed(1)),
-          isCompleted: true,
-          statusCode: badCount > 0 ? 4 : 0
-        };
-      } catch (err: any) {
-        if (onProgressUpdate) onProgressUpdate(target.driveId, 100, 0);
-        return {
-          driveIndex: target.driveIndex,
-          driveId: target.driveId,
-          driveName: target.driveName,
-          totalSectorsScanned: 0n,
-          badSectorsFound: 0,
-          slowSectorsFound: 0,
-          elapsedMs: performance.now() - startTime,
-          avgLatencyMs: 0,
-          throughputMbSec: null,
-          isCompleted: false,
-          statusCode: DSSectorStatus.DS_STATUS_ABORTED,
-          unsupportedReason: err?.message || 'OPFS 접근 불가'
-        };
-      }
+  for (const target of unsupportedTargets) {
+    if (onProgressUpdate) {
+      onProgressUpdate(target.driveId, 100, 0);
     }
-
-    if (!attachedFile) {
-      if (onProgressUpdate) onProgressUpdate(target.driveId, 100, 0);
-      return {
-        driveIndex: target.driveIndex,
-        driveId: target.driveId,
-        driveName: target.driveName,
-        totalSectorsScanned: 0n,
-        badSectorsFound: 0,
-        slowSectorsFound: 0,
-        elapsedMs: 0,
-        avgLatencyMs: 0,
-        throughputMbSec: null,
-        isCompleted: false,
-        statusCode: DSSectorStatus.DS_STATUS_ABORTED,
-        unsupportedReason: '브라우저에서 Raw LBA 블록 핸들에 직접 접근할 수 없습니다 (로컬 파일 마운트 또는 Tauri 앱 필요)'
-      };
-    }
-
-    // Real Concurrent File.slice() Verification
-    const steps = 20;
-    const chunkSize = Math.min(256 * 1024, Math.max(512, Math.floor(attachedFile.size / steps) || attachedFile.size));
-    let totalProbeMs = 0;
-    let totalBytesProcessed = 0;
-    let badCount = 0;
-    let slowCount = 0;
-
-    for (let step = 1; step <= steps; step++) {
-      const t0 = performance.now();
-      try {
-        const offset = Math.min(
-          Math.max(0, attachedFile.size - chunkSize),
-          Math.floor(((step - 1) / steps) * attachedFile.size)
-        );
-        const slice = attachedFile.slice(offset, Math.min(attachedFile.size, offset + chunkSize));
-        const buf = await slice.arrayBuffer();
-        totalBytesProcessed += buf.byteLength;
-      } catch {
-        badCount++;
-      }
-      const probeLatency = Math.max(0.01, performance.now() - t0);
-      totalProbeMs += probeLatency;
-      if (probeLatency > 100) slowCount++;
-      if (onProgressUpdate) {
-        onProgressUpdate(target.driveId, Math.min(100, Math.round((step / steps) * 100)), badCount);
-      }
-    }
-
-    const elapsed = Math.max(0.1, performance.now() - startTime);
-    return {
+    summaries.push({
       driveIndex: target.driveIndex,
       driveId: target.driveId,
       driveName: target.driveName,
-      totalSectorsScanned: BigInt(Math.max(1, Math.floor(totalBytesProcessed / 512))),
-      badSectorsFound: badCount,
-      slowSectorsFound: slowCount,
-      elapsedMs: elapsed,
-      avgLatencyMs: Number((totalProbeMs / steps).toFixed(3)),
-      throughputMbSec: Number(((totalBytesProcessed / (1024 * 1024)) / (totalProbeMs / 1000)).toFixed(1)),
-      isCompleted: true,
-      statusCode: badCount > 0 ? 4 : 0
-    };
-  });
+      totalSectorsScanned: 0n,
+      badSectorsFound: 0,
+      slowSectorsFound: 0,
+      elapsedMs: 0,
+      avgLatencyMs: 0,
+      throughputMbSec: null,
+      isCompleted: false,
+      statusCode: DSSectorStatus.DS_STATUS_ABORTED,
+      unsupportedReason: 'Tauri 데스크톱 네이티브 IPC 환경에서만 물리 드라이브 병렬 스캔을 실행할 수 있습니다.'
+    });
+  }
 
-  const nonTauriResults = await Promise.all(nonTauriPromises);
-  return [...summaries, ...nonTauriResults];
+  return summaries;
 }
 
 // ---------------------------------------------------------------------------
@@ -654,7 +477,9 @@ export function DS_RunTrayGuardianCheck(
   let alertCode = 0;
   let message = temp !== null
     ? `전체 ${monitoredDriveCount}대 모니터링 드라이브 정상 작동 중 (최고 온도 ${Math.round(temp)}°C)`
-    : `모니터링 드라이브 ${monitoredDriveCount}대 연결됨 (하드웨어 온도 센서 N/A — 브라우저 샌드박스 또는 센서 미지원)`;
+    : monitoredDriveCount > 0
+    ? `모니터링 드라이브 ${monitoredDriveCount}대 연결됨 (하드웨어 온도 센서 N/A)`
+    : '연결된 물리 디스크 없음 (Tauri 데스크톱 네이티브 IPC 연결 필요)';
 
   if (isCriticalTemp && temp !== null) {
     alertCode = 2;
@@ -770,74 +595,19 @@ function formatHexAndAscii(bytes: Uint8Array): { hexPreview: string; rawAsciiPre
 
 /**
  * Heuristic Bit Carving & Raw Sector Reader:
- * Reads ONLY genuine bytes from Attached File, Tauri Win32 PhysicalDrive, or OPFS file.
- * Returns isSalvaged: false when raw handle access is unavailable (zero synthetic hex).
+ * Reads ONLY genuine bytes via Tauri Desktop Native IPC (Win32 PhysicalDrive).
+ * Returns isSalvaged: false when outside Tauri Desktop runtime (zero synthetic hex).
  */
 export async function DS_ExecuteBitCarvingRecovery(
   targetLba: number,
   clusterSpan: number = 8,
-  attachedFile?: File,
   drive?: DiskDrive
 ): Promise<DSCarvedSectorResult> {
   const span = Math.min(64, Math.max(1, clusterSpan));
-  const targetFile = attachedFile || drive?.attachedFile;
 
-  // 1. Real File Slice Read
-  if (targetFile) {
-    try {
-      const fileSize = targetFile.size;
-      if (fileSize === 0) {
-        return {
-          sourceLba: targetLba,
-          signatureType: 0,
-          signatureName: `빈 파일 (${targetFile.name})`,
-          carvedSizeBytes: 0,
-          eccRecoveredBits: 0,
-          isSalvaged: false,
-          hexPreview: '',
-          rawAsciiPreview: '',
-          errorReason: '선택된 파일의 크기가 0바이트입니다.'
-        };
-      }
-      const secSize = drive?.hardwareSpecs?.logicalSectorSize || 512;
-      const offset = fileSize > secSize ? (targetLba * secSize) % Math.max(1, fileSize - secSize) : 0;
-      const readLen = Math.min(fileSize - offset, 512);
-      const buf = await targetFile.slice(offset, offset + readLen).arrayBuffer();
-      const rawBytes = new Uint8Array(buf);
-      const { sigType, sigName } = classifySignatureFromBytes(rawBytes, targetFile.name);
-      const { hexPreview, rawAsciiPreview } = formatHexAndAscii(rawBytes);
-
-      return {
-        sourceLba: targetLba,
-        signatureType: sigType,
-        signatureName: sigName,
-        carvedSizeBytes: Math.min(fileSize - offset, span * secSize),
-        eccRecoveredBits: 0,
-        isSalvaged: true,
-        hexPreview,
-        rawAsciiPreview
-      };
-    } catch (err: any) {
-      return {
-        sourceLba: targetLba,
-        signatureType: 0,
-        signatureName: '파일 읽기 오류',
-        carvedSizeBytes: 0,
-        eccRecoveredBits: 0,
-        isSalvaged: false,
-        hexPreview: '',
-        rawAsciiPreview: '',
-        errorReason: err?.message || '파일 슬라이스 판독 실패'
-      };
-    }
-  }
-
-  // 2. Native Tauri / Win32 Bridge Physical Drive Bit Carving / Raw Sector Read
-  if (drive?.id.startsWith('drive-tauri-physical-') && (isNativeHardwareRuntime() || isTauriDesktopRuntime())) {
+  if (drive?.id.startsWith('drive-tauri-physical-') && isTauriDesktopRuntime()) {
     const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
-    const tauriCarved = isTauriDesktopRuntime()
-      ? await queryTauriBitCarving(driveIndex, targetLba, span)
-      : null;
+    const tauriCarved = await queryTauriBitCarving(driveIndex, targetLba, span);
     if (tauriCarved && Array.isArray(tauriCarved.hexPreview)) {
       const rawBytes = new Uint8Array(tauriCarved.hexPreview);
       const { hexPreview, rawAsciiPreview } = formatHexAndAscii(rawBytes);
@@ -883,17 +653,16 @@ export async function DS_ExecuteBitCarvingRecovery(
     };
   }
 
-  // 3. No accessible raw handle
   return {
     sourceLba: targetLba,
     signatureType: 0,
-    signatureName: '판독 불가 (실제 디스크/파일 핸들 필요)',
+    signatureName: '판독 불가 (Tauri 데스크톱 IPC 필요)',
     carvedSizeBytes: 0,
     eccRecoveredBits: 0,
     isSalvaged: false,
     hexPreview: '',
     rawAsciiPreview: '',
-    errorReason: '웹 브라우저 샌드박스에서는 OS 커널의 Raw LBA 섹터 바이트를 직접 읽을 수 없습니다. 복구 대상 파일(.img/.bin 등)을 직접 첨부하거나 Tauri 데스크톱 관리자 권한으로 실행하세요.'
+    errorReason: 'Tauri 데스크톱 네이티브 IPC(Windows 관리자 권한)로 물리 디스크에 연결된 상태에서만 Raw LBA 섹터 바이트를 판독할 수 있습니다.'
   };
 }
 
