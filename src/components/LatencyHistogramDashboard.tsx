@@ -183,8 +183,8 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
     const meanLatency = sortedLat.length > 0 ? (d3.mean(sortedLat) ?? null) : null;
     const stdDevLatency = sortedLat.length > 1 ? (d3.deviation(sortedLat) ?? 0) : 0;
 
-    // Sampling margin-of-error: Quick mode samples 25% of blocks (4-block stride), Full mode inspects 100%
-    const finitePopFactor = effectivePrecision === 'quick' ? Math.sqrt(0.75) : 0.25;
+    // Sampling margin-of-error: Quick mode samples 10% of blocks (10-block stride), Full mode inspects 100%
+    const finitePopFactor = effectivePrecision === 'quick' ? Math.sqrt(0.9) : 0.25;
     const standardErrorMs =
       sortedLat.length > 1
         ? (stdDevLatency / Math.sqrt(sortedLat.length)) * (effectivePrecision === 'quick' ? 1.96 * finitePopFactor : 1)

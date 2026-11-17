@@ -11,7 +11,63 @@ interface LbaGraphViewProps {
   onSelectBlock?: (block: SectorBlock) => void;
 }
 
-export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
+function decimateTracePoints(points: LbaTracePoint[], metric: 'latency' | 'throughput', maxRendered = 380): LbaTracePoint[] {
+  if (points.length <= maxRendered) return points;
+
+  const bucketCount = 160;
+  const bucketSize = points.length / bucketCount;
+  const selectedIndices = new Set<number>([0, points.length - 1]);
+  const severeAnomalyIndices: number[] = [];
+
+  for (let b = 0; b < bucketCount; b++) {
+    const start = Math.floor(b * bucketSize);
+    const end = Math.min(points.length, Math.floor((b + 1) * bucketSize));
+    if (start >= end) continue;
+
+    let minIdx = start;
+    let maxIdx = start;
+    let minVal = Infinity;
+    let maxVal = -Infinity;
+
+    for (let i = start; i < end; i++) {
+      const p = points[i];
+      if (p.status === 'bad' || p.status === 'critical') {
+        severeAnomalyIndices.push(i);
+      }
+      const val = metric === 'latency' ? (p.latencyMs < 0 ? 1e9 : p.latencyMs) : p.throughputMbSec;
+      if (val < minVal) {
+        minVal = val;
+        minIdx = i;
+      }
+      if (val > maxVal) {
+        maxVal = val;
+        maxIdx = i;
+      }
+    }
+    selectedIndices.add(minIdx);
+    selectedIndices.add(maxIdx);
+  }
+
+  for (let i = 0; i < severeAnomalyIndices.length && selectedIndices.size < maxRendered; i++) {
+    selectedIndices.add(severeAnomalyIndices[i]);
+  }
+
+  const ordered = Array.from(selectedIndices).sort((a, b) => a - b);
+  return ordered.map(i => points[i]);
+}
+
+function findPointAtSeq(points: LbaTracePoint[], targetSeq: number): LbaTracePoint | undefined {
+  let lo = 0;
+  let hi = points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (points[mid].seqIndex < targetSeq) lo = mid + 1;
+    else hi = mid;
+  }
+  return points[lo];
+}
+
+export const LbaGraphView: React.FC<LbaGraphViewProps> = React.memo(({
   trace,
   blocks,
   testType,
@@ -28,22 +84,42 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
   const innerH = height - margin.top - margin.bottom;
 
   const validPoints = useMemo(() => {
-    return trace.filter(p => (metric === 'latency' ? true : p.throughputMbSec >= 0));
+    if (metric === 'latency') return trace;
+    return trace.filter(p => p.throughputMbSec >= 0);
   }, [trace, metric]);
+
+  const renderedPoints = useMemo(
+    () => decimateTracePoints(validPoints, metric, 380),
+    [validPoints, metric]
+  );
+
+  const blocksById = useMemo(() => {
+    const map = new Map<number, SectorBlock>();
+    for (let i = 0; i < blocks.length; i++) {
+      map.set(blocks[i].id, blocks[i]);
+    }
+    return map;
+  }, [blocks]);
 
   const { xScale, yScale, linePath, yMax } = useMemo(() => {
     const maxSeq = Math.max(10, validPoints.length > 0 ? validPoints[validPoints.length - 1].seqIndex : 10);
     const xS = d3.scaleLinear().domain([0, maxSeq]).range([0, innerW]);
 
-    const vals = validPoints.map(p =>
-      metric === 'latency'
-        ? p.latencyMs < 0
-          ? 600
-          : p.latencyMs
-        : p.throughputMbSec
-    );
+    let rawMax = 0;
+    for (let i = 0; i < validPoints.length; i++) {
+      const p = validPoints[i];
+      const v =
+        metric === 'latency'
+          ? p.latencyMs < 0
+            ? 600
+            : p.latencyMs
+          : p.throughputMbSec;
+      if (v > rawMax) rawMax = v;
+    }
+    if (validPoints.length === 0) {
+      rawMax = metric === 'latency' ? 120 : 250;
+    }
 
-    const rawMax = vals.length > 0 ? Math.max(...vals) : metric === 'latency' ? 120 : 250;
     const computedMax =
       metric === 'latency'
         ? Math.max(25, Math.ceil(rawMax * 1.15))
@@ -67,27 +143,40 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
     return {
       xScale: xS,
       yScale: yS,
-      linePath: validPoints.length > 1 ? lineGen(validPoints) || '' : '',
+      linePath: renderedPoints.length > 1 ? lineGen(renderedPoints) || '' : '',
       yMax: yS.domain()[1]
     };
-  }, [validPoints, metric, innerW, innerH]);
+  }, [validPoints, renderedPoints, metric, innerW, innerH]);
 
   const yTicks = useMemo(() => yScale.ticks(4), [yScale]);
   const xTicks = useMemo(() => xScale.ticks(5), [xScale]);
 
   const stats = useMemo(() => {
-    const measured = validPoints.filter(p => p.latencyMs >= 0);
-    if (measured.length === 0) {
+    let latSum = 0;
+    let latCount = 0;
+    let peakLatency = 0;
+    let tpSum = 0;
+    let tpCount = 0;
+
+    for (let i = 0; i < validPoints.length; i++) {
+      const p = validPoints[i];
+      if (p.latencyMs < 0) continue;
+      latSum += p.latencyMs;
+      latCount++;
+      if (p.latencyMs > peakLatency) peakLatency = p.latencyMs;
+      if (p.throughputMbSec > 0) {
+        tpSum += p.throughputMbSec;
+        tpCount++;
+      }
+    }
+
+    if (latCount === 0) {
       return { avgLatency: 0, peakLatency: 0, avgThroughput: 0 };
     }
-    const avgLatency = measured.reduce((a, b) => a + b.latencyMs, 0) / measured.length;
-    const peakLatency = Math.max(...measured.map(p => p.latencyMs));
-    const tpItems = measured.filter(p => p.throughputMbSec > 0);
-    const avgThroughput = tpItems.length > 0 ? tpItems.reduce((a, b) => a + b.throughputMbSec, 0) / tpItems.length : 0;
     return {
-      avgLatency: Number(avgLatency.toFixed(2)),
+      avgLatency: Number((latSum / latCount).toFixed(2)),
       peakLatency: Number(peakLatency.toFixed(2)),
-      avgThroughput: Number(avgThroughput.toFixed(1))
+      avgThroughput: Number((tpCount > 0 ? tpSum / tpCount : 0).toFixed(1))
     };
   }, [validPoints]);
 
@@ -183,7 +272,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
 
               {/* X Ticks */}
               {xTicks.map(tick => {
-                const pt = validPoints.find(p => p.seqIndex >= tick);
+                const pt = findPointAtSeq(validPoints, tick);
                 const label = pt ? `${((pt.blockId / Math.max(1, blocks.length - 1)) * 100).toFixed(0)}%` : String(tick);
                 return (
                   <g key={tick} transform={`translate(${xScale(tick)}, ${innerH})`}>
@@ -254,8 +343,8 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
                 />
               )}
 
-              {/* Sample Points */}
-              {validPoints.map(pt => {
+              {/* Decimated Sample Points */}
+              {renderedPoints.map(pt => {
                 const cx = xScale(pt.seqIndex);
                 const val =
                   metric === 'latency'
@@ -281,7 +370,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
                     onMouseEnter={() => setHoveredPoint(pt)}
                     onMouseLeave={() => setHoveredPoint(null)}
                     onClick={() => {
-                      const blk = blocks.find(b => b.id === pt.blockId);
+                      const blk = blocksById.get(pt.blockId);
                       if (blk && onSelectBlock) onSelectBlock(blk);
                     }}
                   />
@@ -317,4 +406,4 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -318,3 +318,406 @@ export interface ThermalHistoryPoint {
   temperatureC: number;
 }
 
+export type DrivePowerMode = 'active_idle' | 'standby' | 'sleep' | 'unknown';
+
+export interface DriveFeatureStatus {
+  driveIndex: number;
+  protocol: 'ATA' | 'NVMe' | 'UNSUPPORTED';
+  isAtaPassthroughAvailable: boolean;
+  powerMode: DrivePowerMode;
+  aamSupported: boolean;
+  aamEnabled: boolean;
+  aamCurrent: number | null;
+  aamRecommended: number | null;
+  apmSupported: boolean;
+  apmEnabled: boolean;
+  apmCurrent: number | null;
+  pmSupported: boolean;
+  writeCacheSupported: boolean;
+  writeCacheEnabled: boolean;
+  readLookAheadSupported: boolean;
+  readLookAheadEnabled: boolean;
+  reason?: string;
+}
+
+export interface DriveIdentifyField {
+  wordIndex: string;
+  byteOffsetStart: number;
+  byteLength: number;
+  name: string;
+  rawHex: string;
+  decodedValue: string;
+  category: 'General' | 'Geometry' | 'Transfer' | 'Security' | 'Power';
+}
+
+export interface DriveIdentifySnapshot {
+  supported: boolean;
+  protocol: 'ATA' | 'NVMe' | 'UNSUPPORTED';
+  rawBytes: number[];
+  decodedFields: DriveIdentifyField[];
+  reason?: string;
+}
+
+export interface SmartSelfTestLogEntry {
+  index: number;
+  testCode: number;
+  testType: string;
+  statusCode: number;
+  statusText: string;
+  remainingPct: number;
+  lifeTimeHours: number;
+  failingLba: number | null;
+}
+
+export interface SmartErrorLogEntry {
+  errorNumber: number;
+  lifeTimeHours: number;
+  lba: number | null;
+  statusFlags: number;
+  errorFlags: number;
+  errorMnemonic: string;
+  commandReg: number;
+}
+
+export interface SmartExtendedLogsResponse {
+  supported: boolean;
+  protocol: 'ATA' | 'NVMe' | 'UNSUPPORTED';
+  selfTestLogs: SmartSelfTestLogEntry[];
+  errorLogs: SmartErrorLogEntry[];
+  totalErrorCount: number;
+  reason?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Raw Sector Hex Viewer & MBR / GPT Partition Table Inspector Types
+// ---------------------------------------------------------------------------
+export interface RawSectorRangeResponse {
+  supported: boolean;
+  driveIndex: number;
+  startLba: number;
+  sectorCount: number;
+  sectorSize: number;
+  bytes: number[];
+  reason?: string;
+}
+
+export interface PartitionEntryRecord {
+  index: number;
+  scheme: 'GPT' | 'MBR';
+  typeName: string;
+  typeCodeOrGuid: string;
+  partitionGuid?: string;
+  name: string;
+  bootable: boolean;
+  startLba: number;
+  endLba: number;
+  sectorCount: number;
+  sizeGb: number;
+  is4kAligned: boolean;
+}
+
+export interface ParsedPartitionTable {
+  scheme: 'GPT' | 'MBR' | 'UNINITIALIZED';
+  sectorSize: number;
+  mbrSignatureHex: string;
+  mbrSignatureValid: boolean;
+  protectiveMbrDetected: boolean;
+  gptHeaderSignature?: string;
+  gptHeaderCrcValid?: boolean;
+  gptDiskGuid?: string;
+  gptPrimaryLba?: number;
+  gptBackupLba?: number;
+  gptFirstUsableLba?: number;
+  gptLastUsableLba?: number;
+  entries: PartitionEntryRecord[];
+}
+
+export interface VbrBootInfo {
+  filesystem: string;
+  oemId: string;
+  bytesPerSector: number;
+  sectorsPerCluster: number;
+  clusterSizeBytes: number;
+  signatureValid: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Live LBA I/O Performance Benchmark & Profiler Types
+// ---------------------------------------------------------------------------
+export type BenchmarkProfilePreset = 'sequential_zone' | 'random_4k' | 'combined';
+
+export interface BenchmarkSamplePoint {
+  zoneIndex: number;
+  positionPct: number;
+  startLba: number;
+  readMbSec: number;
+  random4kIops: number | null;
+  avgLatencyMs: number;
+  p99LatencyMs: number;
+  statusCode: number;
+}
+
+export interface BenchmarkRunResult {
+  driveId: string;
+  driveModel: string;
+  preset: BenchmarkProfilePreset;
+  completedAt: number;
+  sampleCount: number;
+  minMbSec: number;
+  avgMbSec: number;
+  maxMbSec: number;
+  avgRandom4kIops: number | null;
+  avgLatencyMs: number;
+  p99LatencyMs: number;
+  samples: BenchmarkSamplePoint[];
+}
+
+// ---------------------------------------------------------------------------
+// Background Watchdog Scheduler & Persistent Alert Rules Types
+// ---------------------------------------------------------------------------
+export type WatchdogRuleMetric =
+  | 'temp'
+  | 'smart_05'
+  | 'smart_c5'
+  | 'health_score'
+  | 'scheduled_quick_scan';
+
+export interface WatchdogRule {
+  id: string;
+  name: string;
+  driveId: string; // 'ALL' or specific DiskDrive.id
+  metric: WatchdogRuleMetric;
+  thresholdValue: number;
+  intervalMinutes: number;
+  cooldownMinutes: number;
+  enabled: boolean;
+  lastTriggeredAt?: number;
+}
+
+export interface WatchdogBaselineSnapshot {
+  reallocated05: number;
+  pendingC5: number;
+  updatedAt: number;
+}
+
+export interface WatchdogTriggerEvent {
+  id: string;
+  ruleId: string;
+  ruleName: string;
+  metric: WatchdogRuleMetric;
+  driveId: string;
+  driveModel: string;
+  severity: 'warning' | 'critical' | 'info';
+  message: string;
+  triggeredAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// ddrescue-Style Multi-Pass LBA Image Cloner Types
+// ---------------------------------------------------------------------------
+export type LbaCloneIntervalStatus = 'non_tried' | 'non_trimmed' | 'non_scraped' | 'bad_sector' | 'finished';
+
+export type LbaClonePassPhase = 'copying' | 'trimming' | 'retrying' | 'idle' | 'completed' | 'paused';
+
+export interface LbaCloneDomainInterval {
+  startLba: number;
+  sectorCount: number;
+  status: LbaCloneIntervalStatus;
+  attempts: number;
+  lastErrorCode?: number;
+}
+
+export interface LbaCloneSessionState {
+  version: number;
+  driveId: string;
+  driveModel: string;
+  driveSerial: string;
+  sectorSize: number;
+  rangeStartLba: number;
+  rangeEndLba: number;
+  outputPath: string;
+  mapPath: string;
+  phase: LbaClonePassPhase;
+  chunkSectors: number;
+  copiedSectors: number;
+  badSectors: number;
+  retriedSectors: number;
+  bytesWritten: number;
+  startedAt: number;
+  updatedAt: number;
+  intervals: LbaCloneDomainInterval[];
+}
+
+export interface LbaCopyChunkResult {
+  supported: boolean;
+  success: boolean;
+  startLba: number;
+  sectorCount: number;
+  bytesWritten: number;
+  statusCode: number;
+  win32ErrorCode: number;
+  reason?: string;
+}
+
+export interface DdrescueRetryEvent {
+  timestampMs: number;
+  lba: number;
+  sectorCount: number;
+  phase: 'copying' | 'trimming' | 'retrying';
+  attempt: number;
+  maxRetries: number;
+  outcome: 'recovered' | 'escalated' | 'permanent_bad';
+  win32ErrorCode: number;
+}
+
+export interface DdrescueBackendStatus {
+  isRunning: boolean;
+  phase: 'idle' | 'copying' | 'trimming' | 'retrying' | 'paused' | 'completed' | 'error';
+  driveIndex: number;
+  driveModel: string;
+  driveSerial: string;
+  sectorSize: number;
+  rangeStartLba: number;
+  rangeEndLba: number;
+  outputPath: string;
+  mapPath: string;
+  chunkSectors: number;
+  maxRetries: number;
+  zeroFillBad: boolean;
+  totalSectors: number;
+  finishedSectors: number;
+  nonTriedSectors: number;
+  nonTrimmedSectors: number;
+  nonScrapedSectors: number;
+  badSectors: number;
+  pass1AttemptedSectors: number;
+  pass1RescuedSectors: number;
+  pass2AttemptedSectors: number;
+  pass2RescuedSectors: number;
+  pass3AttemptedSectors: number;
+  pass3RescuedSectors: number;
+  totalRetryAttempts: number;
+  rescuedOnRetrySectors: number;
+  bytesWritten: number;
+  currentLba: number;
+  throughputMbSec: number;
+  elapsedMs: number;
+  lastError?: string | null;
+  intervals: LbaCloneDomainInterval[];
+  recentEvents: DdrescueRetryEvent[];
+}
+
+// ---------------------------------------------------------------------------
+// Damaged LBA Affected-File Tracer (MFT / FAT32 / exFAT) Types
+// ---------------------------------------------------------------------------
+export interface LbaFileExtent {
+  startLba: number;
+  endLba: number;
+  vcnStart: number;
+  lcnStart: number;
+  clusterCount: number;
+}
+
+export interface LbaAffectedFileRecord {
+  fileName: string;
+  fullPath: string;
+  filesystem: 'NTFS' | 'FAT32' | 'exFAT' | 'UNKNOWN';
+  mftRecordNumber?: number;
+  startCluster?: number;
+  fileSizeBytes: number;
+  isDirectory: boolean;
+  isSystemMetafile: boolean;
+  matchConfidence: 'exact_extent' | 'resident_mft' | 'metadata_zone' | 'unallocated_or_unknown';
+  extents: LbaFileExtent[];
+  creationTimestampMs?: number;
+  note?: string;
+}
+
+export interface LbaFileTraceResult {
+  supported: boolean;
+  targetLba: number;
+  sectorSize: number;
+  partitionName: string;
+  partitionStartLba: number;
+  partitionEndLba: number;
+  filesystem: 'NTFS' | 'FAT32' | 'exFAT' | 'UNKNOWN';
+  clusterSizeBytes: number;
+  sectorsPerCluster: number;
+  targetLcn: number | null;
+  mftRecordsScanned: number;
+  elapsedMs: number;
+  aborted: boolean;
+  affectedFiles: LbaAffectedFileRecord[];
+  diagnosticNote: string;
+}
+
+// ---------------------------------------------------------------------------
+// NVMe/ATA Secure Erase (Sanitize/Format) & SSD TRIM Center Types
+// ---------------------------------------------------------------------------
+export type SanitizeActionId =
+  | 'volume_trim'
+  | 'nvme_format_user'
+  | 'nvme_format_crypto'
+  | 'ata_security_erase';
+
+export interface DriveSanitizeCapability {
+  supported: boolean;
+  driveIndex: number;
+  model: string;
+  serialNumber: string;
+  protocol: 'ATA' | 'NVMe' | 'UNSUPPORTED';
+  isSystemDrive: boolean;
+  mountedVolumes: string[];
+  trimSupported: boolean;
+  osTrimEnabled: boolean | null;
+  ataSecurity: {
+    supported: boolean;
+    enabled: boolean;
+    locked: boolean;
+    frozen: boolean;
+    countExpired: boolean;
+    enhancedEraseSupported: boolean;
+    eraseTimeMin: number;
+    enhancedEraseTimeMin: number;
+  };
+  nvmeFormat: {
+    formatSupported: boolean;
+    cryptoEraseSupported: boolean;
+    sanitizeBlockErase: boolean;
+    sanitizeCryptoErase: boolean;
+    sanitizeOverwrite: boolean;
+    oacsRaw: number;
+    fnaRaw: number;
+    sanicapRaw: number;
+  };
+  reason?: string;
+}
+
+export interface SanitizeExecutionResult {
+  success: boolean;
+  action: SanitizeActionId | string;
+  win32ErrorCode?: number;
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-Drive Fleet Matrix & CLI Batch Automation Types
+// ---------------------------------------------------------------------------
+export type CliBatchAction = 'smart-snapshot' | 'quick-verify' | 'full-audit';
+
+export interface FleetMatrixRow {
+  driveId: string;
+  driveIndex: number;
+  model: string;
+  serialNumber: string;
+  busType: string;
+  capacityGb: number | null;
+  mountPoint: string;
+  healthScore: number | null;
+  temperatureC: number | null;
+  powerOnHours: number | null;
+  reallocatedOrMediaErrors: number;
+  pendingSectors: number;
+  trimSupported: boolean | null;
+  overallStatus: 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'UNKNOWN';
+}

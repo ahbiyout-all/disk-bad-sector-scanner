@@ -1,22 +1,37 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ErrorLogItem } from '../types';
-import { Terminal, Copy, Check, Trash2, ArrowDown, AlertOctagon, AlertTriangle, ShieldCheck, Download } from 'lucide-react';
+import { Terminal, Copy, Check, Trash2, ArrowDown, AlertOctagon, AlertTriangle, ShieldCheck, Download, FileSearch } from 'lucide-react';
 
 interface ErrorLogStreamProps {
   logs: ErrorLogItem[];
   onClearLogs: () => void;
   onSelectLogLba?: (lba: number) => void;
+  onTraceLogLba?: (lba: number) => void;
 }
 
 export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
   logs,
   onClearLogs,
-  onSelectLogLba
+  onSelectLogLba,
+  onTraceLogLba
 }) => {
   const [filter, setFilter] = useState<'all' | 'bad' | 'slow'>('all');
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isMountedRef = useRef<boolean>(true);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const filteredLogs = logs.filter(item => {
     if (filter === 'bad') return item.status === 'bad';
@@ -33,9 +48,15 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
   const handleCopyLbas = () => {
     const badLbas = logs.filter(l => l.status === 'bad').map(l => l.lba);
     if (badLbas.length === 0) return;
-    navigator.clipboard.writeText(badLbas.join(', '));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void navigator.clipboard?.writeText(badLbas.join(', ')).then(() => {
+      if (!isMountedRef.current) return;
+      setCopied(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => {
+        copyTimeoutRef.current = null;
+        if (isMountedRef.current) setCopied(false);
+      }, 2000);
+    }).catch(() => {});
   };
 
   const handleExportCsv = () => {
@@ -97,6 +118,7 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const badCount = logs.filter(l => l.status === 'bad').length;
@@ -248,8 +270,24 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
                   <span>{log.description}</span>
                   <span className="text-slate-500 font-mono text-[10px]">LBA #{log.lba.toLocaleString()}</span>
                 </div>
-                <div className="text-slate-400 text-[10px] shrink-0 font-mono">
-                  {log.latencyMs > 0 ? `${log.latencyMs}ms` : 'TIMEOUT'}
+                <div className="flex items-center gap-2 shrink-0 font-mono">
+                  {onTraceLogLba && log.lba >= 0 && (isBad || isCritical || log.status === 'slow') && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTraceLogLba(log.lba);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/30 text-[10px] font-sans font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      title="이 LBA를 점유하는 손상 영향 파일 추적"
+                    >
+                      <FileSearch className="w-2.5 h-2.5" />
+                      <span>파일 추적</span>
+                    </button>
+                  )}
+                  <div className="text-slate-400 text-[10px]">
+                    {log.latencyMs > 0 ? `${log.latencyMs}ms` : 'TIMEOUT'}
+                  </div>
                 </div>
               </div>
             );

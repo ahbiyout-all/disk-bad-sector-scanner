@@ -58,7 +58,7 @@ export interface PredictiveFailureReport {
  *    across all scanned valid-latency blocks.
  * 2. Scans sectors in ascending physical LBA / block ID order to detect
  *    contiguous physical ranges consistently exceeding the latency threshold (default 100ms).
- *    Quick scans sample every 4th block, so block index deltas <= 4 are treated as contiguous
+ *    Quick scans sample every 10th block, so block index deltas <= 10 are treated as contiguous
  *    while Full scans enforce strict adjacent block deltas <= 1.
  */
 export function analyzePredictiveFailure(
@@ -68,7 +68,7 @@ export function analyzePredictiveFailure(
   const latencyThresholdMs = options.latencyThresholdMs ?? 100;
   const minContiguousCount = options.minContiguousCount ?? 3;
   const scanMode = options.scanMode ?? 'full';
-  const maxBlockIdGap = scanMode === 'quick' ? 4 : 1;
+  const maxBlockIdGap = scanMode === 'quick' ? 10 : 1;
 
   const scannedSorted = blocks
     .filter(b => b.status !== 'unscanned')

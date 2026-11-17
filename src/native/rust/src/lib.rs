@@ -287,15 +287,19 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
         );
 
         if ok != 0 && bytes_returned >= std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() as u32 {
+            let valid_len = (bytes_returned as usize).min(buffer.len());
+            if valid_len > 0 {
+                buffer[valid_len - 1] = 0;
+            }
             let desc = &*(buffer.as_ptr() as *const STORAGE_DEVICE_DESCRIPTOR);
 
-            let vendor_str = if desc.VendorIdOffset > 0 && (desc.VendorIdOffset as usize) < buffer.len() {
+            let vendor_str = if desc.VendorIdOffset > 0 && (desc.VendorIdOffset as usize) < valid_len {
                 std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.VendorIdOffset as usize) as *const i8)
                     .to_string_lossy().trim().to_string()
             } else {
                 String::new()
             };
-            let product_str = if desc.ProductIdOffset > 0 && (desc.ProductIdOffset as usize) < buffer.len() {
+            let product_str = if desc.ProductIdOffset > 0 && (desc.ProductIdOffset as usize) < valid_len {
                 std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.ProductIdOffset as usize) as *const i8)
                     .to_string_lossy().trim().to_string()
             } else {
@@ -317,12 +321,12 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
             if !combined_model.is_empty() {
                 copy_str_to_fixed_bytes(&combined_model, &mut detail.model);
             }
-            if desc.SerialNumberOffset > 0 && (desc.SerialNumberOffset as usize) < buffer.len() {
+            if desc.SerialNumberOffset > 0 && (desc.SerialNumberOffset as usize) < valid_len {
                 let serial_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.SerialNumberOffset as usize) as *const i8)
                     .to_string_lossy().trim().to_string();
                 copy_str_to_fixed_bytes(&serial_str, &mut detail.serial_number);
             }
-            if desc.ProductRevisionOffset > 0 && (desc.ProductRevisionOffset as usize) < buffer.len() {
+            if desc.ProductRevisionOffset > 0 && (desc.ProductRevisionOffset as usize) < valid_len {
                 let rev_str = std::ffi::CStr::from_ptr(buffer.as_ptr().add(desc.ProductRevisionOffset as usize) as *const i8)
                     .to_string_lossy().trim().to_string();
                 if !rev_str.is_empty() {
@@ -545,8 +549,21 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
 
         let ctx = &*(drive_handle as *const DriveContext);
         let sec_size = ctx.sector_size.max(512);
-        let byte_offset = (lba as i64) * (sec_size as i64);
-        let buffer_size = (count.max(1) as usize) * (sec_size as usize);
+        let safe_count = count.max(1);
+        let byte_offset = match lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+            Some(off) => off,
+            None => {
+                let res = &mut *out_result;
+                res.start_lba = lba;
+                res.sector_count = safe_count as u64;
+                res.latency_ms = 0.0;
+                res.win32_error_code = 87;
+                copy_str_to_fixed_bytes("ERROR_INVALID_PARAMETER", &mut res.error_mnemonic);
+                res.status_code = DSSectorStatus::Bad as u32;
+                return false;
+            }
+        };
+        let buffer_size = (safe_count as usize).saturating_mul(sec_size as usize);
         let mut aligned_buf = match AlignedSectorBuffer::new(buffer_size, sec_size.max(4096) as usize) {
             Some(b) => b,
             None => return false,
@@ -577,7 +594,7 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
 
         let res = &mut *out_result;
         res.start_lba = lba;
-        res.sector_count = count as u64;
+        res.sector_count = safe_count as u64;
         res.latency_ms = latency_ms;
 
         if read_ok != 0 && bytes_read == buffer_size as u32 {
@@ -592,7 +609,7 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
             };
             true
         } else {
-            let err = GetLastError();
+            let err = if seek_ok == 0 || read_ok == 0 { GetLastError() } else { 38 }; // ERROR_HANDLE_EOF on partial read
             res.win32_error_code = err;
             copy_str_to_fixed_bytes(&format!("WIN32_ERR_{}", err), &mut res.error_mnemonic);
             res.status_code = DSSectorStatus::Bad as u32;
@@ -627,7 +644,10 @@ pub unsafe extern "system" fn DS_ReadRawSector(
 
         let ctx = &*(drive_handle as *const DriveContext);
         let sec_size = ctx.sector_size.max(512) as usize;
-        let byte_offset = (lba as i64) * (sec_size as i64);
+        let byte_offset = match lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+            Some(off) => off,
+            None => return false,
+        };
         // FILE_FLAG_NO_BUFFERING requires both pointer alignment and sector-multiple read size
         let aligned_read_len = (buffer_size as usize).div_ceil(sec_size) * sec_size;
         let mut aligned_buf = match AlignedSectorBuffer::new(aligned_read_len, sec_size.max(4096)) {
@@ -1080,8 +1100,14 @@ pub unsafe extern "system" fn DS_AttemptSoftSectorRepair(
         let ctx = &*(drive_handle as *const DriveContext);
         let sec_size = ctx.sector_size.max(512);
         let safe_count = count.max(1);
-        let byte_offset = (bad_lba as i64) * (sec_size as i64);
-        let total_bytes = safe_count * sec_size;
+        let byte_offset = match bad_lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+            Some(off) => off,
+            None => {
+                *out_recovered_status = 0;
+                return false;
+            }
+        };
+        let total_bytes = safe_count.saturating_mul(sec_size);
         let mut aligned_buf = match AlignedSectorBuffer::new(total_bytes as usize, sec_size.max(4096) as usize) {
             Some(b) => b,
             None => {
@@ -1618,9 +1644,9 @@ pub unsafe extern "system" fn DS_RunTrayGuardianCheck(
                 health_status: 0,
             }; 32];
             let count = DS_GetSmartTelemetry(h_drive, entries.as_mut_ptr(), 32);
-            for i in 0..(count.max(0) as usize) {
+            for i in 0..(count.max(0) as usize).min(entries.len()) {
                 let id = entries[i].attribute_id;
-                if id == 0xC2 || id == 0xBE || id == 0xE7 {
+                if id == 0xC2 || id == 0xBE {
                     let cur_temp = (entries[i].raw_value & 0xFF) as u32;
                     if cur_temp > 0 && cur_temp < 150 && cur_temp > status.highest_temp_celsius {
                         status.highest_temp_celsius = cur_temp;
@@ -1732,19 +1758,20 @@ pub unsafe extern "system" fn DS_ExecuteBitCarvingRecovery(
     {
         use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
         if !ctx.raw_handle.is_null() {
-            let offset = (target_lba * (sector_bytes as u64)) as i64;
-            let mut new_pos: i64 = 0;
-            if SetFilePointerEx(ctx.raw_handle as _, offset, &mut new_pos, FILE_BEGIN) != 0 {
-                let mut bytes_read: u32 = 0;
-                let r = ReadFile(
-                    ctx.raw_handle as _,
-                    aligned_raw_buffer.as_mut_ptr() as _,
-                    buffer_size as u32,
-                    &mut bytes_read,
-                    std::ptr::null_mut(),
-                );
-                if r != 0 && bytes_read > 0 {
-                    actual_bytes_read = bytes_read;
+            if let Some(offset) = target_lba.checked_mul(sector_bytes as u64).and_then(|v| i64::try_from(v).ok()) {
+                let mut new_pos: i64 = 0;
+                if SetFilePointerEx(ctx.raw_handle as _, offset, &mut new_pos, FILE_BEGIN) != 0 {
+                    let mut bytes_read: u32 = 0;
+                    let r = ReadFile(
+                        ctx.raw_handle as _,
+                        aligned_raw_buffer.as_mut_ptr() as _,
+                        buffer_size as u32,
+                        &mut bytes_read,
+                        std::ptr::null_mut(),
+                    );
+                    if r != 0 && bytes_read > 0 {
+                        actual_bytes_read = bytes_read;
+                    }
                 }
             }
         }
@@ -1840,8 +1867,21 @@ pub unsafe extern "system" fn DS_VerifyLbaBlock(
 
         let ctx = &*(drive_handle as *const DriveContext);
         let sec_size = ctx.sector_size.max(512);
+        let starting_offset = match lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+            Some(off) => off,
+            None => {
+                let res = &mut *out_result;
+                res.start_lba = lba;
+                res.sector_count = count as u64;
+                res.latency_ms = 0.0;
+                res.win32_error_code = 87;
+                copy_str_to_fixed_bytes("VERIFY_ERR_INVALID_LBA", &mut res.error_mnemonic);
+                res.status_code = DSSectorStatus::Bad as u32;
+                return false;
+            }
+        };
         let verify_info = VerifyInformation {
-            starting_offset: (lba as i64) * (sec_size as i64),
+            starting_offset,
             length: count.saturating_mul(sec_size),
         };
 
@@ -2026,12 +2066,1305 @@ pub unsafe extern "system" fn DS_GetSmartSelfTestStatus(
 }
 
 // ---------------------------------------------------------------------------
+// 16. ATA Pass-Through & NVMe Identify / Features / Power / S.M.A.R.T. Logs
+// ---------------------------------------------------------------------------
+#[cfg(windows)]
+#[repr(C)]
+struct DSAtaPassThroughEx {
+    length: u16,
+    ata_flags: u16,
+    path_id: u8,
+    target_id: u8,
+    lun: u8,
+    reserved_as_uchar: u8,
+    data_transfer_length: u32,
+    time_out_value: u32,
+    reserved_as_ulong: u32,
+    data_buffer_offset: usize,
+    previous_task_file: [u8; 8],
+    current_task_file: [u8; 8],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DSAtaPassThroughExWithBuf {
+    apt: DSAtaPassThroughEx,
+    data: [u8; 512],
+}
+
+#[cfg(windows)]
+const DS_IOCTL_ATA_PASS_THROUGH: u32 = 0x0004_D02C;
+#[cfg(windows)]
+const DS_ATA_FLAGS_DRDY_REQUIRED: u16 = 0x01;
+#[cfg(windows)]
+const DS_ATA_FLAGS_DATA_IN: u16 = 0x02;
+
+#[cfg(windows)]
+unsafe fn ds_exec_ata_passthrough(
+    h_device: *mut c_void,
+    ata_flags: u16,
+    task_file: [u8; 8],
+    transfer_len: u32,
+    out_task_file: Option<&mut [u8; 8]>,
+    out_data: Option<&mut [u8; 512]>,
+) -> bool {
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    if h_device.is_null() {
+        return false;
+    }
+
+    let mut req: DSAtaPassThroughExWithBuf = std::mem::zeroed();
+    req.apt.length = std::mem::size_of::<DSAtaPassThroughEx>() as u16;
+    req.apt.ata_flags = ata_flags;
+    req.apt.data_transfer_length = transfer_len;
+    req.apt.time_out_value = 10;
+    req.apt.data_buffer_offset = if transfer_len > 0 {
+        std::mem::offset_of!(DSAtaPassThroughExWithBuf, data)
+    } else {
+        0
+    };
+    req.apt.current_task_file = task_file;
+
+    let total_size = if transfer_len > 0 {
+        std::mem::size_of::<DSAtaPassThroughExWithBuf>() as u32
+    } else {
+        std::mem::size_of::<DSAtaPassThroughEx>() as u32
+    };
+
+    let mut bytes_returned: u32 = 0;
+    let ok = DeviceIoControl(
+        h_device as _,
+        DS_IOCTL_ATA_PASS_THROUGH,
+        &req as *const _ as _,
+        total_size,
+        &mut req as *mut _ as _,
+        total_size,
+        &mut bytes_returned,
+        std::ptr::null_mut(),
+    );
+
+    if ok == 0 {
+        return false;
+    }
+
+    // Check ATA Status register (task_file[6]) bit 0 (ERR)
+    if (req.apt.current_task_file[6] & 0x01) != 0 {
+        return false;
+    }
+
+    if let Some(tf_out) = out_task_file {
+        *tf_out = req.apt.current_task_file;
+    }
+    if let Some(buf_out) = out_data {
+        *buf_out = req.data;
+    }
+    true
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_AtaIdentifyDevice(
+    drive_handle: *mut c_void,
+    out_512_buf: *mut u8,
+) -> bool {
+    if drive_handle.is_null() || out_512_buf.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            SMART_RCV_DRIVE_DATA, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        // 1. Primary: IOCTL_ATA_PASS_THROUGH with IDENTIFY DEVICE (0xEC)
+        let mut data_buf = [0u8; 512];
+        let tf = [0, 0, 0, 0, 0, 0xA0 | (((ctx.drive_index & 1) << 4) as u8), 0xEC, 0];
+        if ds_exec_ata_passthrough(
+            ctx.raw_handle,
+            DS_ATA_FLAGS_DRDY_REQUIRED | DS_ATA_FLAGS_DATA_IN,
+            tf,
+            512,
+            None,
+            Some(&mut data_buf),
+        ) {
+            std::ptr::copy_nonoverlapping(data_buf.as_ptr(), out_512_buf, 512);
+            return true;
+        }
+
+        // 2. Fallback: SMART_RCV_DRIVE_DATA with ID_CMD (0xEC)
+        let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
+        scip.cBufferSize = 512;
+        scip.irDriveRegs.bSectorCountReg = 1;
+        scip.irDriveRegs.bSectorNumberReg = 1;
+        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bCommandReg = 0xEC; // ID_CMD
+
+        let out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
+        let mut out_vec = vec![0u8; out_size];
+        let mut bytes_returned: u32 = 0;
+
+        if DeviceIoControl(
+            ctx.raw_handle as _,
+            SMART_RCV_DRIVE_DATA,
+            &scip as *const _ as _,
+            std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+            out_vec.as_mut_ptr() as _,
+            out_size as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        ) != 0 && bytes_returned >= 528 {
+            let p_out = out_vec.as_ptr() as *const SENDCMDOUTPARAMS;
+            std::ptr::copy_nonoverlapping((*p_out).bBuffer.as_ptr(), out_512_buf, 512);
+            return true;
+        }
+
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_GetNvmeIdentifyController(
+    drive_handle: *mut c_void,
+    out_4096_buf: *mut u8,
+) -> bool {
+    if drive_handle.is_null() || out_4096_buf.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            STORAGE_PROPERTY_QUERY,
+            STORAGE_PROTOCOL_SPECIFIC_DATA,
+            STORAGE_PROTOCOL_DATA_DESCRIPTOR,
+            StorageDeviceProtocolSpecificProperty,
+            StorageAdapterProtocolSpecificProperty,
+            PropertyStandardQuery,
+            ProtocolTypeNvme,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        const IDENTIFY_SIZE: usize = 4096;
+        let query_header_size = std::mem::size_of::<STORAGE_PROPERTY_QUERY>()
+            + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>();
+        let total_size = query_header_size + IDENTIFY_SIZE;
+        let mut buffer = vec![0u8; total_size];
+        let query_offset = std::mem::offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+
+        let try_prop = |prop_id: i32, buf: &mut [u8]| -> bool {
+            buf.fill(0);
+            let q = &mut *(buf.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY);
+            q.PropertyId = prop_id;
+            q.QueryType = PropertyStandardQuery;
+
+            let pdata = &mut *(buf.as_mut_ptr().add(query_offset) as *mut STORAGE_PROTOCOL_SPECIFIC_DATA);
+            pdata.ProtocolType = ProtocolTypeNvme;
+            pdata.DataType = 1; // NVMeDataTypeIdentify
+            pdata.ProtocolDataRequestValue = 1; // CNS = 01h (Identify Controller)
+            pdata.ProtocolDataRequestSubValue = 0;
+            pdata.ProtocolDataOffset = std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+            pdata.ProtocolDataLength = IDENTIFY_SIZE as u32;
+
+            let mut bytes_returned: u32 = 0;
+            DeviceIoControl(
+                ctx.raw_handle as _,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                buf.as_ptr() as _,
+                buf.len() as u32,
+                buf.as_mut_ptr() as _,
+                buf.len() as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            ) != 0 && bytes_returned >= std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        };
+
+        if try_prop(StorageDeviceProtocolSpecificProperty, &mut buffer)
+            || try_prop(StorageAdapterProtocolSpecificProperty, &mut buffer)
+        {
+            let desc = &*(buffer.as_ptr() as *const STORAGE_PROTOCOL_DATA_DESCRIPTOR);
+            let data_offset = desc.ProtocolSpecificData.ProtocolDataOffset as usize;
+            let data_len = desc.ProtocolSpecificData.ProtocolDataLength as usize;
+            let base_ptr = (&desc.ProtocolSpecificData as *const STORAGE_PROTOCOL_SPECIFIC_DATA) as usize;
+            let buf_start = buffer.as_ptr() as usize;
+            let rel_start = (base_ptr - buf_start) + data_offset;
+
+            if data_offset > 0 && data_len >= 512 && rel_start + data_len.min(IDENTIFY_SIZE) <= buffer.len() {
+                let copy_len = data_len.min(IDENTIFY_SIZE);
+                std::ptr::copy_nonoverlapping(buffer[rel_start..].as_ptr(), out_4096_buf, copy_len);
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_AtaCheckPowerMode(
+    drive_handle: *mut c_void,
+    out_sector_count: *mut u8,
+) -> bool {
+    if drive_handle.is_null() || out_sector_count.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+        let mut tf_out = [0u8; 8];
+        let tf = [0, 0, 0, 0, 0, 0xA0, 0xE5, 0]; // CHECK POWER MODE (0xE5)
+        if ds_exec_ata_passthrough(
+            ctx.raw_handle,
+            DS_ATA_FLAGS_DRDY_REQUIRED,
+            tf,
+            0,
+            Some(&mut tf_out),
+            None,
+        ) {
+            *out_sector_count = tf_out[1];
+            return true;
+        }
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        *out_sector_count = 0;
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_AtaSetFeature(
+    drive_handle: *mut c_void,
+    feature_subcmd: u8,
+    sector_count_val: u8,
+) -> bool {
+    if drive_handle.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+        let tf = [feature_subcmd, sector_count_val, 0, 0, 0, 0xA0, 0xEF, 0]; // SET FEATURES (0xEF)
+        ds_exec_ata_passthrough(
+            ctx.raw_handle,
+            DS_ATA_FLAGS_DRDY_REQUIRED,
+            tf,
+            0,
+            None,
+            None,
+        )
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (feature_subcmd, sector_count_val);
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_AtaPowerCommand(
+    drive_handle: *mut c_void,
+    ata_cmd: u8,
+    sector_count_val: u8,
+) -> bool {
+    if drive_handle.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+        let tf = [0, sector_count_val, 0, 0, 0, 0xA0, ata_cmd, 0];
+        ds_exec_ata_passthrough(
+            ctx.raw_handle,
+            DS_ATA_FLAGS_DRDY_REQUIRED,
+            tf,
+            0,
+            None,
+            None,
+        )
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (ata_cmd, sector_count_val);
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_GetSmartLogPage(
+    drive_handle: *mut c_void,
+    log_address: u8,
+    out_512_buf: *mut u8,
+) -> bool {
+    if drive_handle.is_null() || out_512_buf.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            SMART_RCV_DRIVE_DATA, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        // 1. Primary: SMART_RCV_DRIVE_DATA with SMART_READ_LOG (0xD5)
+        let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
+        scip.cBufferSize = 512;
+        scip.irDriveRegs.bFeaturesReg = 0xD5; // SMART READ LOG
+        scip.irDriveRegs.bSectorCountReg = 1;
+        scip.irDriveRegs.bSectorNumberReg = log_address;
+        scip.irDriveRegs.bCylLowReg = 0x4F;
+        scip.irDriveRegs.bCylHighReg = 0xC2;
+        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bCommandReg = 0xB0;
+
+        let out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
+        let mut out_vec = vec![0u8; out_size];
+        let mut bytes_returned: u32 = 0;
+
+        if DeviceIoControl(
+            ctx.raw_handle as _,
+            SMART_RCV_DRIVE_DATA,
+            &scip as *const _ as _,
+            std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+            out_vec.as_mut_ptr() as _,
+            out_size as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        ) != 0 && bytes_returned >= 528 {
+            let p_out = out_vec.as_ptr() as *const SENDCMDOUTPARAMS;
+            std::ptr::copy_nonoverlapping((*p_out).bBuffer.as_ptr(), out_512_buf, 512);
+            return true;
+        }
+
+        // 2. Fallback: IOCTL_ATA_PASS_THROUGH SMART READ LOG (0xB0 / 0xD5)
+        let mut data_buf = [0u8; 512];
+        let tf = [0xD5, 1, log_address, 0x4F, 0xC2, 0xA0, 0xB0, 0];
+        if ds_exec_ata_passthrough(
+            ctx.raw_handle,
+            DS_ATA_FLAGS_DRDY_REQUIRED | DS_ATA_FLAGS_DATA_IN,
+            tf,
+            512,
+            None,
+            Some(&mut data_buf),
+        ) {
+            std::ptr::copy_nonoverlapping(data_buf.as_ptr(), out_512_buf, 512);
+            return true;
+        }
+
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = log_address;
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_GetNvmeErrorLogPage(
+    drive_handle: *mut c_void,
+    out_512_buf: *mut u8,
+) -> bool {
+    if drive_handle.is_null() || out_512_buf.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            STORAGE_PROPERTY_QUERY,
+            STORAGE_PROTOCOL_SPECIFIC_DATA,
+            STORAGE_PROTOCOL_DATA_DESCRIPTOR,
+            StorageDeviceProtocolSpecificProperty,
+            StorageAdapterProtocolSpecificProperty,
+            PropertyStandardQuery,
+            ProtocolTypeNvme,
+            NVMeDataTypeLogPage,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        const LOG_SIZE: usize = 512;
+        let query_header_size = std::mem::size_of::<STORAGE_PROPERTY_QUERY>()
+            + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>();
+        let total_size = query_header_size + LOG_SIZE;
+        let mut buffer = vec![0u8; total_size];
+        let query_offset = std::mem::offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+
+        let try_prop = |prop_id: i32, buf: &mut [u8]| -> bool {
+            buf.fill(0);
+            let q = &mut *(buf.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY);
+            q.PropertyId = prop_id;
+            q.QueryType = PropertyStandardQuery;
+
+            let pdata = &mut *(buf.as_mut_ptr().add(query_offset) as *mut STORAGE_PROTOCOL_SPECIFIC_DATA);
+            pdata.ProtocolType = ProtocolTypeNvme;
+            pdata.DataType = NVMeDataTypeLogPage as u32;
+            pdata.ProtocolDataRequestValue = 0x01; // Error Information Log Page
+            pdata.ProtocolDataRequestSubValue = 0;
+            pdata.ProtocolDataOffset = std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+            pdata.ProtocolDataLength = LOG_SIZE as u32;
+
+            let mut bytes_returned: u32 = 0;
+            DeviceIoControl(
+                ctx.raw_handle as _,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                buf.as_ptr() as _,
+                buf.len() as u32,
+                buf.as_mut_ptr() as _,
+                buf.len() as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            ) != 0 && bytes_returned >= std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        };
+
+        if try_prop(StorageDeviceProtocolSpecificProperty, &mut buffer)
+            || try_prop(StorageAdapterProtocolSpecificProperty, &mut buffer)
+        {
+            let desc = &*(buffer.as_ptr() as *const STORAGE_PROTOCOL_DATA_DESCRIPTOR);
+            let data_offset = desc.ProtocolSpecificData.ProtocolDataOffset as usize;
+            let data_len = desc.ProtocolSpecificData.ProtocolDataLength as usize;
+            let base_ptr = (&desc.ProtocolSpecificData as *const STORAGE_PROTOCOL_SPECIFIC_DATA) as usize;
+            let buf_start = buffer.as_ptr() as usize;
+            let rel_start = (base_ptr - buf_start) + data_offset;
+
+            if data_offset > 0 && data_len >= 64 && rel_start + data_len.min(LOG_SIZE) <= buffer.len() {
+                let copy_len = data_len.min(LOG_SIZE);
+                std::ptr::copy_nonoverlapping(buffer[rel_start..].as_ptr(), out_512_buf, copy_len);
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 19. DS_RunLbaBenchmarkProbe (Real Win32 Direct Sequential & 4K Random IOPS)
+// ---------------------------------------------------------------------------
+#[repr(C, packed(8))]
+#[derive(Debug, Copy, Clone)]
+pub struct DSLbaBenchmarkResult {
+    pub start_lba: u64,
+    pub block_bytes: u32,
+    pub iterations: u32,
+    pub throughput_mb_sec: f64,
+    pub iops: f64,
+    pub avg_latency_ms: f64,
+    pub min_latency_ms: f64,
+    pub p99_latency_ms: f64,
+    pub status_code: u32,
+    pub win32_error_code: u32,
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_RunLbaBenchmarkProbe(
+    drive_handle: *mut c_void,
+    start_lba: u64,
+    block_bytes: u32,
+    mode: u32, // 0: sequential zone burst read, 1: random 4K read within zone window
+    iterations: u32,
+    out_result: *mut DSLbaBenchmarkResult,
+) -> bool {
+    if drive_handle.is_null() || out_result.is_null() {
+        return false;
+    }
+
+    let res = &mut *out_result;
+    *res = std::mem::zeroed();
+    res.start_lba = start_lba;
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, ReadFile, FILE_BEGIN};
+        use windows_sys::Win32::System::Ioctl::{IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX};
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            return false;
+        }
+
+        let sec_size = ctx.sector_size.max(512) as u64;
+        let mut total_sectors: u64 = 0;
+        let mut geom: DISK_GEOMETRY_EX = std::mem::zeroed();
+        let mut geom_bytes: u32 = 0;
+        if DeviceIoControl(
+            ctx.raw_handle as _,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+            std::ptr::null(),
+            0,
+            &mut geom as *mut _ as _,
+            std::mem::size_of::<DISK_GEOMETRY_EX>() as u32,
+            &mut geom_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && geom.DiskSize > 0 {
+            total_sectors = (geom.DiskSize as u64) / sec_size;
+        }
+
+        let req_bytes = if mode == 1 {
+            4096u32.max(ctx.sector_size)
+        } else {
+            block_bytes.clamp(ctx.sector_size.max(512), 4 * 1024 * 1024)
+        };
+        let aligned_len = ((req_bytes as usize).div_ceil(sec_size as usize)) * (sec_size as usize);
+        let sectors_per_io = (aligned_len as u64) / sec_size;
+        let safe_iters = iterations.clamp(1, 256);
+
+        let mut aligned_buf = match AlignedSectorBuffer::new(aligned_len, (sec_size as usize).max(4096)) {
+            Some(b) => b,
+            None => return false,
+        };
+
+        let max_valid_start = if total_sectors > sectors_per_io {
+            total_sectors - sectors_per_io
+        } else {
+            start_lba
+        };
+        let base_lba = start_lba.min(max_valid_start);
+        // Zone window for random 4K reads (~32 MB window capped at disk end)
+        let window_sectors = (32u64 * 1024 * 1024 / sec_size).max(sectors_per_io);
+
+        let mut latencies: Vec<f64> = Vec::with_capacity(safe_iters as usize);
+        let mut total_bytes_transferred: u64 = 0;
+        let mut last_err: u32 = 0;
+        let mut lcg_state: u64 = base_lba ^ 0x9E37_79B9_7F4A_7C15;
+
+        for iter in 0..safe_iters {
+            let io_lba = if mode == 1 {
+                lcg_state = lcg_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let span_avail = max_valid_start.saturating_sub(base_lba).min(window_sectors);
+                let offset_sectors = if span_avail > 0 {
+                    // Keep 4K alignment for realistic 4K IOPS probing
+                    let raw_off = (lcg_state >> 16) % (span_avail + 1);
+                    (raw_off / sectors_per_io.max(1)) * sectors_per_io.max(1)
+                } else {
+                    0
+                };
+                base_lba.saturating_add(offset_sectors).min(max_valid_start)
+            } else {
+                base_lba
+                    .saturating_add((iter as u64).saturating_mul(sectors_per_io))
+                    .min(max_valid_start)
+            };
+
+            let byte_offset = match io_lba.checked_mul(sec_size).and_then(|v| i64::try_from(v).ok()) {
+                Some(off) => off,
+                None => {
+                    res.win32_error_code = 87;
+                    res.status_code = DSSectorStatus::Bad as u32;
+                    return false;
+                }
+            };
+
+            let t0 = Instant::now();
+            let seek_ok = SetFilePointerEx(
+                ctx.raw_handle as _,
+                byte_offset,
+                std::ptr::null_mut(),
+                FILE_BEGIN,
+            );
+
+            let mut bytes_read: u32 = 0;
+            let read_ok = if seek_ok != 0 {
+                ReadFile(
+                    ctx.raw_handle as _,
+                    aligned_buf.as_mut_ptr(),
+                    aligned_len as u32,
+                    &mut bytes_read,
+                    std::ptr::null_mut(),
+                )
+            } else {
+                0
+            };
+            let elapsed_ms = (t0.elapsed().as_secs_f64() * 1000.0).max(0.001);
+
+            if read_ok == 0 || bytes_read == 0 {
+                last_err = GetLastError();
+                res.win32_error_code = last_err;
+                res.status_code = DSSectorStatus::Bad as u32;
+                return false;
+            }
+
+            total_bytes_transferred = total_bytes_transferred.saturating_add(bytes_read as u64);
+            latencies.push(elapsed_ms);
+        }
+
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let sum_ms: f64 = latencies.iter().sum();
+        let avg_ms = sum_ms / (latencies.len().max(1) as f64);
+        let min_ms = latencies.first().copied().unwrap_or(avg_ms);
+        let p99_idx = ((latencies.len() as f64) * 0.99).floor() as usize;
+        let p99_ms = latencies.get(p99_idx.min(latencies.len().saturating_sub(1))).copied().unwrap_or(avg_ms);
+
+        let total_sec = (sum_ms / 1000.0).max(0.000_001);
+        let throughput_mb_sec = ((total_bytes_transferred as f64) / (1024.0 * 1024.0)) / total_sec;
+        let iops = (latencies.len() as f64) / total_sec;
+
+        res.block_bytes = aligned_len as u32;
+        res.iterations = latencies.len() as u32;
+        res.throughput_mb_sec = throughput_mb_sec;
+        res.iops = iops;
+        res.avg_latency_ms = avg_ms;
+        res.min_latency_ms = min_ms;
+        res.p99_latency_ms = p99_ms;
+        res.win32_error_code = last_err;
+        res.status_code = if avg_ms >= 500.0 {
+            DSSectorStatus::Critical as u32
+        } else if avg_ms >= 150.0 {
+            DSSectorStatus::Slow as u32
+        } else if avg_ms >= 50.0 {
+            DSSectorStatus::Normal as u32
+        } else {
+            DSSectorStatus::Good as u32
+        };
+
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (block_bytes, mode, iterations);
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 20. DS_CopyLbaRangeChunk (ddrescue-style Multi-Pass LBA Chunk Copy to File)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_CopyLbaRangeChunk(
+    drive_handle: *mut c_void,
+    start_lba: u64,
+    sector_count: u32,
+    dest_path_ptr: *const u8,
+    dest_path_len: u32,
+    dest_byte_offset: u64,
+    write_zeros_on_input: bool,
+    out_bytes_written: *mut u64,
+    out_status_code: *mut u32,
+    out_win32_error: *mut u32,
+) -> bool {
+    if !out_bytes_written.is_null() {
+        *out_bytes_written = 0;
+    }
+    if !out_status_code.is_null() {
+        *out_status_code = DSSectorStatus::Bad as u32;
+    }
+    if !out_win32_error.is_null() {
+        *out_win32_error = 0;
+    }
+
+    if dest_path_ptr.is_null() || dest_path_len == 0 || sector_count == 0 {
+        if !out_win32_error.is_null() {
+            *out_win32_error = 87; // ERROR_INVALID_PARAMETER
+        }
+        return false;
+    }
+
+    let path_slice = std::slice::from_raw_parts(dest_path_ptr, dest_path_len as usize);
+    let dest_path = match std::str::from_utf8(path_slice) {
+        Ok(s) => s,
+        Err(_) => {
+            if !out_win32_error.is_null() {
+                *out_win32_error = 87;
+            }
+            return false;
+        }
+    };
+
+    use std::io::{Seek, SeekFrom, Write};
+
+    let write_buf_to_file = |data: &[u8]| -> Result<u64, u32> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(dest_path)
+            .map_err(|e| e.raw_os_error().unwrap_or(5) as u32)?;
+        file.seek(SeekFrom::Start(dest_byte_offset))
+            .map_err(|e| e.raw_os_error().unwrap_or(29) as u32)?;
+        file.write_all(data)
+            .map_err(|e| e.raw_os_error().unwrap_or(29) as u32)?;
+        file.flush()
+            .map_err(|e| e.raw_os_error().unwrap_or(29) as u32)?;
+        Ok(data.len() as u64)
+    };
+
+    if write_zeros_on_input {
+        let sec_size = if !drive_handle.is_null() {
+            let ctx = &*(drive_handle as *const DriveContext);
+            ctx.sector_size.max(512) as usize
+        } else {
+            512usize
+        };
+        let total_len = (sector_count as usize).saturating_mul(sec_size).min(4 * 1024 * 1024);
+        let zeros = vec![0u8; total_len];
+        return match write_buf_to_file(&zeros) {
+            Ok(written) => {
+                if !out_bytes_written.is_null() {
+                    *out_bytes_written = written;
+                }
+                if !out_status_code.is_null() {
+                    *out_status_code = DSSectorStatus::Good as u32;
+                }
+                true
+            }
+            Err(err_code) => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = err_code;
+                }
+                false
+            }
+        };
+    }
+
+    if drive_handle.is_null() {
+        if !out_win32_error.is_null() {
+            *out_win32_error = 6; // ERROR_INVALID_HANDLE
+        }
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            if !out_win32_error.is_null() {
+                *out_win32_error = 6;
+            }
+            return false;
+        }
+
+        let sec_size = ctx.sector_size.max(512) as usize;
+        let clamped_sectors = (sector_count as usize).min((4 * 1024 * 1024) / sec_size).max(1);
+        let read_len = clamped_sectors.saturating_mul(sec_size);
+
+        let byte_offset = match start_lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+            Some(off) => off,
+            None => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = 87;
+                }
+                return false;
+            }
+        };
+
+        let mut aligned_buf = match AlignedSectorBuffer::new(read_len, sec_size.max(4096)) {
+            Some(b) => b,
+            None => return false,
+        };
+
+        let seek_ok = SetFilePointerEx(
+            ctx.raw_handle as _,
+            byte_offset,
+            std::ptr::null_mut(),
+            FILE_BEGIN,
+        );
+        if seek_ok == 0 {
+            if !out_win32_error.is_null() {
+                *out_win32_error = GetLastError();
+            }
+            return false;
+        }
+
+        let mut bytes_read: u32 = 0;
+        let read_ok = ReadFile(
+            ctx.raw_handle as _,
+            aligned_buf.as_mut_ptr(),
+            read_len as u32,
+            &mut bytes_read,
+            std::ptr::null_mut(),
+        );
+        if read_ok == 0 || bytes_read == 0 {
+            if !out_win32_error.is_null() {
+                *out_win32_error = GetLastError();
+            }
+            return false;
+        }
+
+        let valid_len = (bytes_read as usize).min(read_len);
+        match write_buf_to_file(&aligned_buf.as_slice()[..valid_len]) {
+            Ok(written) => {
+                if !out_bytes_written.is_null() {
+                    *out_bytes_written = written;
+                }
+                if !out_status_code.is_null() {
+                    *out_status_code = DSSectorStatus::Good as u32;
+                }
+                true
+            }
+            Err(err_code) => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = err_code;
+                }
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (start_lba, write_buf_to_file);
+        if !out_win32_error.is_null() {
+            *out_win32_error = 50; // ERROR_NOT_SUPPORTED
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 21. DSSanitizeCapabilities, DS_InspectSanitizeCapabilities, DS_ExecuteSanitizeAction
+// ---------------------------------------------------------------------------
+#[repr(C, packed(8))]
+#[derive(Debug, Copy, Clone)]
+pub struct DSSanitizeCapabilities {
+    pub protocol_code: u32, // 0: UNSUPPORTED, 1: ATA, 2: NVMe
+    pub trim_supported: bool,
+    pub ata_security_supported: bool,
+    pub ata_security_enabled: bool,
+    pub ata_security_locked: bool,
+    pub ata_security_frozen: bool,
+    pub ata_security_count_expired: bool,
+    pub ata_enhanced_erase_supported: bool,
+    pub ata_erase_time_min: u32,
+    pub ata_enhanced_erase_time_min: u32,
+    pub nvme_format_supported: bool,
+    pub nvme_crypto_erase_supported: bool,
+    pub nvme_sanitize_block_erase: bool,
+    pub nvme_sanitize_crypto_erase: bool,
+    pub nvme_sanitize_overwrite: bool,
+    pub nvme_oacs_raw: u16,
+    pub nvme_fna_raw: u8,
+    pub nvme_sanicap_raw: u32,
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_InspectSanitizeCapabilities(
+    drive_handle: *mut c_void,
+    out_caps: *mut DSSanitizeCapabilities,
+) -> bool {
+    if drive_handle.is_null() || out_caps.is_null() {
+        return false;
+    }
+
+    let caps = &mut *out_caps;
+    *caps = std::mem::zeroed();
+
+    #[cfg(windows)]
+    {
+        let mut detail: DSPhysicalDriveDetail = std::mem::zeroed();
+        DS_GetDriveDetails(drive_handle, &mut detail);
+        caps.trim_supported = detail.is_trim_supported;
+
+        let bus = String::from_utf8_lossy(&detail.bus_type)
+            .trim_matches(char::from(0))
+            .to_string();
+
+        if bus == "NVMe" {
+            let mut nvme_id = [0u8; 4096];
+            if DS_GetNvmeIdentifyController(drive_handle, nvme_id.as_mut_ptr()) {
+                caps.protocol_code = 2; // NVMe
+                let oacs = u16::from_le_bytes([nvme_id[256], nvme_id[257]]);
+                let sanicap = u32::from_le_bytes([nvme_id[328], nvme_id[329], nvme_id[330], nvme_id[331]]);
+                let fna = nvme_id[524];
+
+                caps.nvme_oacs_raw = oacs;
+                caps.nvme_fna_raw = fna;
+                caps.nvme_sanicap_raw = sanicap;
+                caps.nvme_format_supported = (oacs & (1 << 1)) != 0;
+                caps.nvme_crypto_erase_supported = (fna & (1 << 2)) != 0;
+                caps.nvme_sanitize_crypto_erase = (sanicap & (1 << 0)) != 0;
+                caps.nvme_sanitize_block_erase = (sanicap & (1 << 1)) != 0;
+                caps.nvme_sanitize_overwrite = (sanicap & (1 << 2)) != 0;
+                return true;
+            }
+        }
+
+        let mut ata_id = [0u8; 512];
+        if DS_AtaIdentifyDevice(drive_handle, ata_id.as_mut_ptr()) {
+            caps.protocol_code = 1; // ATA
+            let word = |w: usize| -> u16 {
+                let idx = w * 2;
+                u16::from_le_bytes([ata_id[idx], ata_id[idx + 1]])
+            };
+            let w89 = word(89);
+            let w90 = word(90);
+            let w128 = word(128);
+
+            caps.ata_security_supported = (w128 & (1 << 0)) != 0;
+            caps.ata_security_enabled = (w128 & (1 << 1)) != 0;
+            caps.ata_security_locked = (w128 & (1 << 2)) != 0;
+            caps.ata_security_frozen = (w128 & (1 << 3)) != 0;
+            caps.ata_security_count_expired = (w128 & (1 << 4)) != 0;
+            caps.ata_enhanced_erase_supported = (w128 & (1 << 5)) != 0;
+            caps.ata_erase_time_min = ((w89 & 0xFF) as u32) * 2;
+            caps.ata_enhanced_erase_time_min = ((w90 & 0xFF) as u32) * 2;
+            return true;
+        }
+
+        false
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_ExecuteSanitizeAction(
+    drive_handle: *mut c_void,
+    action_code: u32, // 1: NVMe Format (User Erase), 2: NVMe Format (Crypto Erase), 3: ATA Security Erase Prepare+Unit
+    out_win32_error: *mut u32,
+) -> bool {
+    if !out_win32_error.is_null() {
+        *out_win32_error = 0;
+    }
+    if drive_handle.is_null() {
+        if !out_win32_error.is_null() {
+            *out_win32_error = 6;
+        }
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            if !out_win32_error.is_null() {
+                *out_win32_error = 6;
+            }
+            return false;
+        }
+
+        match action_code {
+            1 | 2 => {
+                // NVMe Format NVM Admin Command (Opcode 0x80) via IOCTL_STORAGE_PROTOCOL_COMMAND (0x002D1400)
+                const IOCTL_STORAGE_PROTOCOL_COMMAND_CODE: u32 = 0x002D_1400;
+                const STORAGE_PROTOCOL_COMMAND_FLAG_ADAPTER_REQUEST: u32 = 0x8000_0000;
+
+                #[repr(C)]
+                struct NvmeStorageProtocolCmd {
+                    version: u32,
+                    length: u32,
+                    protocol_type: u32, // 3 = ProtocolTypeNvme
+                    flags: u32,
+                    return_status: u32,
+                    error_code: u32,
+                    command_length: u32,
+                    error_info_length: u32,
+                    data_to_device_transfer_length: u32,
+                    data_from_device_transfer_length: u32,
+                    time_out_value: u32,
+                    error_info_offset: u32,
+                    data_to_device_buffer_offset: u32,
+                    data_from_device_buffer_offset: u32,
+                    command_specific: u32,
+                    reserved0: u32,
+                    fixed_protocol_return_data: u32,
+                    reserved1: [u32; 3],
+                    command: [u8; 64],
+                }
+
+                let mut req: NvmeStorageProtocolCmd = std::mem::zeroed();
+                req.version = 1;
+                req.length = std::mem::size_of::<NvmeStorageProtocolCmd>() as u32;
+                req.protocol_type = 3; // ProtocolTypeNvme
+                req.flags = STORAGE_PROTOCOL_COMMAND_FLAG_ADAPTER_REQUEST;
+                req.command_length = 64;
+                req.time_out_value = 60;
+                req.command_specific = 1; // STORAGE_PROTOCOL_SPECIFIC_NVME_ADMIN_COMMAND
+
+                // NVMe Admin Command 64-byte SQE:
+                // CDW0[0] = 0x80 (Format NVM)
+                // CDW1[4..8] = NSID (0xFFFFFFFF for all namespaces or 1)
+                // CDW10[40..44]: SES bits [11:9] -> 1 = User Data Erase, 2 = Cryptographic Erase
+                req.command[0] = 0x80;
+                req.command[4..8].copy_from_slice(&1u32.to_le_bytes());
+                let ses: u32 = if action_code == 2 { 2 << 9 } else { 1 << 9 };
+                req.command[40..44].copy_from_slice(&ses.to_le_bytes());
+
+                let mut bytes_ret: u32 = 0;
+                let ok = DeviceIoControl(
+                    ctx.raw_handle as _,
+                    IOCTL_STORAGE_PROTOCOL_COMMAND_CODE,
+                    &req as *const _ as _,
+                    std::mem::size_of::<NvmeStorageProtocolCmd>() as u32,
+                    &mut req as *mut _ as _,
+                    std::mem::size_of::<NvmeStorageProtocolCmd>() as u32,
+                    &mut bytes_ret,
+                    std::ptr::null_mut(),
+                );
+                if ok == 0 {
+                    if !out_win32_error.is_null() {
+                        *out_win32_error = GetLastError();
+                    }
+                    return false;
+                }
+                if req.return_status != 0 {
+                    if !out_win32_error.is_null() {
+                        *out_win32_error = req.error_code;
+                    }
+                    return false;
+                }
+                true
+            }
+            3 => {
+                // ATA SECURITY ERASE PREPARE (0xF3) followed by SECURITY ERASE UNIT (0xF4) with empty 32-byte user password
+                let prepare_tf = [0, 0, 0, 0, 0, 0xA0, 0xF3, 0];
+                if !ds_exec_ata_passthrough(
+                    ctx.raw_handle,
+                    DS_ATA_FLAGS_DRDY_REQUIRED,
+                    prepare_tf,
+                    0,
+                    None,
+                    None,
+                ) {
+                    if !out_win32_error.is_null() {
+                        *out_win32_error = GetLastError();
+                    }
+                    return false;
+                }
+
+                // Build SECURITY ERASE UNIT (0xF4) 512-byte parameter block (DATA_OUT = 0x04)
+                const DS_ATA_FLAGS_DATA_OUT: u16 = 0x04;
+                let mut req: DSAtaPassThroughExWithBuf = std::mem::zeroed();
+                req.apt.length = std::mem::size_of::<DSAtaPassThroughEx>() as u16;
+                req.apt.ata_flags = DS_ATA_FLAGS_DRDY_REQUIRED | DS_ATA_FLAGS_DATA_OUT;
+                req.apt.data_transfer_length = 512;
+                req.apt.time_out_value = 3600;
+                req.apt.data_buffer_offset = std::mem::offset_of!(DSAtaPassThroughExWithBuf, data);
+                req.apt.current_task_file = [0, 0, 0, 0, 0, 0xA0, 0xF4, 0];
+                // req.data stays zeroed (User Password identifier = 0, empty 32-byte password)
+
+                let total_size = std::mem::size_of::<DSAtaPassThroughExWithBuf>() as u32;
+                let mut bytes_returned: u32 = 0;
+                let ok = DeviceIoControl(
+                    ctx.raw_handle as _,
+                    DS_IOCTL_ATA_PASS_THROUGH,
+                    &req as *const _ as _,
+                    total_size,
+                    &mut req as *mut _ as _,
+                    total_size,
+                    &mut bytes_returned,
+                    std::ptr::null_mut(),
+                );
+                if ok == 0 || (req.apt.current_task_file[6] & 0x01) != 0 {
+                    if !out_win32_error.is_null() {
+                        *out_win32_error = GetLastError();
+                    }
+                    return false;
+                }
+                true
+            }
+            _ => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = 87;
+                }
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = action_code;
+        if !out_win32_error.is_null() {
+            *out_win32_error = 50;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 22. DS_ReadRawSectorWithError (Zero-reopen, thread-local aligned read for ddrescue)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_ReadRawSectorWithError(
+    drive_handle: *mut c_void,
+    lba: u64,
+    out_buffer: *mut u8,
+    buffer_size: u32,
+    out_bytes_read: *mut u32,
+    out_win32_error: *mut u32,
+) -> bool {
+    if !out_bytes_read.is_null() {
+        *out_bytes_read = 0;
+    }
+    if !out_win32_error.is_null() {
+        *out_win32_error = 0;
+    }
+    if drive_handle.is_null() || out_buffer.is_null() || buffer_size == 0 {
+        if !out_win32_error.is_null() {
+            *out_win32_error = 87;
+        }
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::cell::RefCell;
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+
+        thread_local! {
+            static ALIGNED_SCRATCH: RefCell<Option<AlignedSectorBuffer>> = const { RefCell::new(None) };
+        }
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            if !out_win32_error.is_null() {
+                *out_win32_error = 6;
+            }
+            return false;
+        }
+
+        let sec_size = ctx.sector_size.max(512) as usize;
+        let byte_offset = match lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+            Some(off) => off,
+            None => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = 87;
+                }
+                return false;
+            }
+        };
+
+        let aligned_read_len = (buffer_size as usize).div_ceil(sec_size) * sec_size;
+        let align = sec_size.max(4096);
+
+        ALIGNED_SCRATCH.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let needs_realloc = match slot.as_ref() {
+                Some(buf) => buf.len < aligned_read_len,
+                None => true,
+            };
+            if needs_realloc {
+                *slot = AlignedSectorBuffer::new(aligned_read_len, align);
+            }
+            let Some(aligned_buf) = slot.as_mut() else {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = 8; // ERROR_NOT_ENOUGH_MEMORY
+                }
+                return false;
+            };
+
+            let seek_ok = SetFilePointerEx(
+                ctx.raw_handle as _,
+                byte_offset,
+                std::ptr::null_mut(),
+                FILE_BEGIN,
+            );
+            if seek_ok == 0 {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = GetLastError();
+                }
+                return false;
+            }
+
+            let mut bytes_read: u32 = 0;
+            let read_ok = ReadFile(
+                ctx.raw_handle as _,
+                aligned_buf.as_mut_ptr(),
+                aligned_read_len as u32,
+                &mut bytes_read,
+                std::ptr::null_mut(),
+            );
+            if read_ok == 0 || bytes_read < buffer_size {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = if read_ok == 0 { GetLastError() } else { 38 }; // ERROR_HANDLE_EOF
+                }
+                return false;
+            }
+
+            std::ptr::copy_nonoverlapping(aligned_buf.as_ptr(), out_buffer, buffer_size as usize);
+            if !out_bytes_read.is_null() {
+                *out_bytes_read = buffer_size;
+            }
+            true
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (lba, out_buffer, buffer_size);
+        if !out_win32_error.is_null() {
+            *out_win32_error = 50;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helper: Copy string safely to fixed byte array
 // ---------------------------------------------------------------------------
 fn copy_str_to_fixed_bytes(src: &str, dst: &mut [u8]) {
     dst.fill(0);
+    if dst.is_empty() {
+        return;
+    }
     let bytes = src.as_bytes();
-    let len = bytes.len().min(dst.len() - 1);
+    let len = bytes.len().min(dst.len().saturating_sub(1));
     dst[..len].copy_from_slice(&bytes[..len]);
 }
-

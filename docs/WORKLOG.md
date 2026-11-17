@@ -8,6 +8,10 @@
 - **Tauri IPC 전용 물리 드라이브 탐색 및 브라우저 단독 실행 빈 상태 안내 UI 구축 (`App.tsx`, `ExternalDeviceModal.tsx`, `Navbar.tsx`, `ScanMethodSelector.tsx`, `TelemetryPanel.tsx`, `DiskHardwareDetailsModal.tsx`, `BitCarvingRecoveryModal.tsx`)**:
   - 웹 브라우저 단독 실행 시 `drives = []` 빈 상태로 유지하고 `Tauri 데스크톱 앱(DiskBadSectorScanner.exe)` 관리자 권한 실행 및 `npm run tauri:dev` 로컬 브릿지 실행 안내와 실시간 연결 진단 스트립(`Tauri IPC`, `로컬 Win32 브릿지(127.0.0.1)`, `[네이티브 엔진 연결 재확인]`)을 제공.
   - `ExternalDeviceModal`에서 `'실제 하드웨어 & 로컬 미디어 마운트'` 탭을 제거하고 32채널 물리 슬롯(`PhysicalDrive0~31`) 탐색 및 USB 2.0 진단 가이드로 단순화.
+- **심층 코드 감사(자아성찰) 기반 Tauri/Rust IPC 및 LBA 경계 오류 수정 (`src-tauri/src/main.rs`, `nativeDriveEngine.ts`, `App.tsx`, `Navbar.tsx`, `HelpGuideModal.tsx`, `ParallelDriveScanModal.tsx`, `HealthSummaryDashboard.tsx`, `ThermalMonitorWidget.tsx`, `TemperatureLineChart.tsx`)**:
+  - `main.rs`의 `scan_lba_block`, `verify_lba_block`에서 실제 배드섹터/CRC 오류 발생 시 `Err`로 예외를 삼켜 Win32 오류 코드(`win32ErrorCode`)가 유실되던 결함을 수정하고, `run_smart_self_test` JSON 응답에 `"executionCode"` 필드를 추가해 TS 타입과 정합성 확보.
+  - `nativeDriveEngine.ts`에서 IOCTL 용량 미확인 시 가짜 `1,000,000` 섹터 폴백을 제거(`0` + `UNKNOWN_DISK_GEOMETRY` 가드)하고, 마지막 블록·소용량 드라이브 프로브(`scan`/`verify`/`erase`/벤치마크) 시 `sectorCount`가 디스크 EOF(`totalSectors`)를 초과하지 않도록 클램핑 적용.
+  - `App.tsx`에서 `isNativeRuntime`이 `bridgeOk`로 오염되어 Tauri 미연결 브라우저 환경에서도 Tauri 전용 버튼이 활성화되던 플래그 오류를 분리하고, `Navbar.tsx` 미연결 상태(`!currentDrive`) 비활성 가드 및 잔여 구형 File API·브라우저 샌드박스 문구(`HelpGuideModal`, `ParallelDriveScanModal`, `HealthSummaryDashboard`, `ThermalMonitorWidget`, `TemperatureLineChart`) 일제 정비.
 
 ### 2026-11-14 (v4.6.0 실제 물리/외장 디스크 4종 표면검사 선택 UI, Win32 SeekPenalty·버스 확장 & 차세대 제조사/신모델 표준 분류 엔진)
 - **Win32/C++/Rust/Tauri 물리·외장 저장장치 감지 정확도 및 버스 규격 확장**:

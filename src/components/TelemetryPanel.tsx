@@ -70,7 +70,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition-colors cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              검사 시작 (Start)
+              검사 시작
             </button>
           )}
 
@@ -80,7 +80,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition-colors cursor-pointer"
             >
               <Pause className="w-3.5 h-3.5 fill-current" />
-              일시 정지 (Pause)
+              일시 정지
             </button>
           )}
 
@@ -90,7 +90,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition-colors cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              계속 (Resume)
+              계속
             </button>
           )}
 
@@ -100,7 +100,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-slate-800 hover:bg-slate-700 text-white transition-colors cursor-pointer"
             >
               <Square className="w-3.5 h-3.5" />
-              중지 (Stop)
+              중지
             </button>
           )}
 
@@ -117,21 +117,20 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           <button
             onClick={onOpenReport}
             className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors cursor-pointer shadow-xs min-h-[34px]"
-            title="상세 진단 보고서 대화상자 열기"
+            title="진단 보고서 열기"
           >
             <FileText className="w-3.5 h-3.5 shrink-0" />
             <span>진단 보고서</span>
-            <span className="hidden sm:inline">생성</span>
           </button>
 
           {onExportResults && (
             <button
               onClick={onExportResults}
               className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shadow-xs min-h-[34px]"
-              title="검사 결과를 CSV 또는 PDF 파일로 저장"
+              title="CSV 또는 PDF 파일로 저장"
             >
               <Share2 className="w-3.5 h-3.5 shrink-0" />
-              <span>결과 내보내기</span>
+              <span>내보내기</span>
             </button>
           )}
         </div>
@@ -142,6 +141,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             <button
               disabled={isScanning}
               onClick={() => onChangeScanMode('quick')}
+              title="빠른 검사 (Quick Scan): 매 10번째 블록만 샘플링"
               className={`px-2.5 py-1 rounded transition-colors ${
                 scanMode === 'quick'
                   ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
@@ -153,13 +153,14 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             <button
               disabled={isScanning}
               onClick={() => onChangeScanMode('full')}
+              title="전체 검사 (Full Scan): 모든 블록 100% 검사"
               className={`px-2.5 py-1 rounded transition-colors ${
                 scanMode === 'full'
                   ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 disabled:opacity-50'
               }`}
             >
-              정밀 전수 검사
+              전체 검사
             </button>
           </div>
 
@@ -269,10 +270,10 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         }`}>
           <div className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 mb-0.5 flex items-center justify-between">
             <span>Bad Blocks</span>
-            <div className={`w-1.5 h-1.5 rounded-full ${telemetry.badCount > 0 ? 'bg-red-500 animate-pulse' : 'bg-slate-500'}`}></div>
+            <div className={`w-1.5 h-1.5 rounded-full ${telemetry.badCount > 0 ? 'bg-red-500' : 'bg-slate-500'}`}></div>
           </div>
           <div className={`text-sm sm:text-base font-semibold font-mono ${telemetry.badCount > 0 ? 'text-red-400' : 'text-slate-400'}`}>
-            {telemetry.badCount.toLocaleString()} <span className="text-[10px] font-normal">Found</span>
+            {telemetry.badCount.toLocaleString()}
           </div>
         </div>
       </div>
@@ -281,15 +282,15 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
       <div className="mt-3.5 pt-3 border-t border-slate-200 dark:border-slate-800">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-1.5">
-            <Activity className={`w-3.5 h-3.5 text-indigo-500 ${vitals.isSensorAvailable ? 'animate-pulse' : ''}`} />
+            <Activity className="w-3.5 h-3.5 text-indigo-500" />
             <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-              실시간 하드웨어 상태 모니터링 (Hardware Vitals)
+              하드웨어 상태
             </h4>
           </div>
           <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
             <span className="inline-flex items-center gap-1">
               <span className={`w-1.5 h-1.5 rounded-full ${vitals.isSensorAvailable ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
-              {vitals.isSensorAvailable ? '커널 센서 실시간 수신 중' : '커널 센서 N/A'}
+              {vitals.isSensorAvailable ? '센서 연결됨' : '센서 N/A'}
             </span>
             <span>•</span>
             <span className="truncate max-w-[200px]">{drive.model}</span>
@@ -485,12 +486,12 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
                   {isTauri ? 'SATA AHCI / IOCTL' : 'SATA / NAND Flash'}
                 </span>
                 <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
-                  플래시 마모율: <b className="font-mono text-emerald-600 dark:text-emerald-400">
-                    {drive.smartAttributes.find(a => a.id === 5 || a.id === 1)?.raw ||
+                  플래시 잔여/마모: <b className="font-mono text-emerald-600 dark:text-emerald-400">
+                    {drive.smartAttributes.find(a => a.id === 231 || a.id === 177 || a.id === 173 || a.id === 233)?.raw ||
                       (drive.hardwareSpecs?.percentageUsed !== null && drive.hardwareSpecs?.percentageUsed !== undefined ? `${drive.hardwareSpecs.percentageUsed}%` : 'N/A')}
                   </b> &nbsp;|&nbsp;
                   예비 셀 잔여율: <b className="font-mono text-indigo-600 dark:text-indigo-400">
-                    {drive.smartAttributes.find(a => a.id === 3)?.raw ||
+                    {drive.smartAttributes.find(a => a.id === 232 || a.id === 170)?.raw ||
                       (drive.hardwareSpecs?.availableSparePercent !== null && drive.hardwareSpecs?.availableSparePercent !== undefined ? `${drive.hardwareSpecs.availableSparePercent}%` : 'N/A')}
                   </b> &nbsp;|&nbsp;
                   전원 인가 횟수: <b className="font-mono text-amber-600 dark:text-amber-400">

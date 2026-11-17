@@ -170,11 +170,11 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
 
                 <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
                   <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center justify-between">
-                    <span>4. 실물 파일 슬라이스 (File Stream)</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-600">실제 파일 I/O</span>
+                    <span>4. 하드웨어 Verify &amp; 안전 Erase (Win32 IOCTL)</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-600">Tauri 전용</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    사용자가 지정한 실제 로컬 파일(.img, .iso, .vhd 또는 일반 파일)을 물리 청크 단위로 분할하여 브라우저 File API로 실제 읽기 무결성을 실시간 검증합니다.
+                    Tauri 데스크톱 관리자 권한에서 Win32 <code className="font-mono">IOCTL_DISK_VERIFY</code>로 호스트 전송 없는 물리 표면 ECC 검증을 수행하며, 비시스템(외장/보조) 디스크에 한해 안전 가드 하의 LBA Erase 쓰기를 지원합니다.
                   </p>
                 </div>
               </div>

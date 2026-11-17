@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { SavedScanRecord, SectorBlock } from '../types';
 import { 
   X, 
@@ -35,38 +35,59 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 }) => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
 
   if (!isOpen) return null;
+
+  const showExportToast = (kind: string) => {
+    if (!isMountedRef.current) return;
+    setDownloadSuccess(kind);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
+      toastTimerRef.current = null;
+      if (isMountedRef.current) setDownloadSuccess(null);
+    }, 3000);
+  };
 
   const handleExportPdf = async () => {
     setIsExportingPdf(true);
     try {
       await exportPdfReport(record, badBlocks);
-      setDownloadSuccess('pdf');
-      setTimeout(() => setDownloadSuccess(null), 3000);
+      showExportToast('pdf');
     } catch (e) {
       console.error('PDF 내보내기 실패:', e);
     } finally {
-      setIsExportingPdf(false);
+      if (isMountedRef.current) {
+        setIsExportingPdf(false);
+      }
     }
   };
 
   const handleExportCsv = () => {
     exportCsvReport(record, badBlocks);
-    setDownloadSuccess('csv');
-    setTimeout(() => setDownloadSuccess(null), 3000);
+    showExportToast('csv');
   };
 
   const handleExportJson = () => {
     exportJsonReport(record);
-    setDownloadSuccess('json');
-    setTimeout(() => setDownloadSuccess(null), 3000);
+    showExportToast('json');
   };
 
   const handleExportOtel = () => {
     exportOtelMetricsReport(record);
-    setDownloadSuccess('otel');
-    setTimeout(() => setDownloadSuccess(null), 3000);
+    showExportToast('otel');
   };
 
   const handlePrint = () => {

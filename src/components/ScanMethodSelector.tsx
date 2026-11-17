@@ -101,10 +101,10 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
-                {getCategoryLabel(storageCategory)} 맞춤 검사
+                {getCategoryLabel(storageCategory)}
               </span>
               <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                블록 크기: {currentMethod.blockSizeKb}KB · 기준 지연: {currentMethod.typicalBlockLatency}
+                {currentMethod.blockSizeKb}KB · {currentMethod.typicalBlockLatency}
               </span>
             </div>
 
@@ -127,12 +127,12 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
               }
             }}
             className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded text-xs font-bold bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-xs transition-all cursor-pointer relative group min-h-[34px]"
-            title="S.M.A.R.T. 논리 배드섹터 제로필 수복 & 예비 트랙 섹터 재할당(Remap) 실행"
+            title="S.M.A.R.T. 논리 배드섹터 제로필 수복 & 섹터 재할당"
           >
             <Wrench className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">S.M.A.R.T. 수복</span>
             {badBlocksCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-white text-rose-600 font-extrabold text-[10px] animate-pulse shrink-0">
+              <span className="px-1.5 py-0.2 rounded-full bg-white text-rose-600 font-extrabold text-[10px] shrink-0">
                 {badBlocksCount} BAD
               </span>
             )}

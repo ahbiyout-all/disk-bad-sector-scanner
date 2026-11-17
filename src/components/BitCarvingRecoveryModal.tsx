@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Wrench,
@@ -36,7 +36,24 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [result, setResult] = useState<DSCarvedSectorResult | null>(null);
 
+  const isMountedRef = useRef<boolean>(true);
+  const isOpenRef = useRef<boolean>(isOpen);
+  isOpenRef.current = isOpen;
+  const activeDriveIdRef = useRef<string | undefined>(drive?.id);
+  activeDriveIdRef.current = drive?.id;
+  const carveReqIdRef = useRef<number>(0);
+
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      carveReqIdRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    carveReqIdRef.current += 1;
+    setIsProcessing(false);
     if (isOpen) {
       setTargetLba(initialLba);
       setResult(null);
@@ -49,12 +66,31 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   if (!isOpen) return null;
 
   const handleStartCarving = async () => {
+    const reqId = ++carveReqIdRef.current;
+    const reqDriveId = drive?.id;
     setIsProcessing(true);
     setResult(null);
 
-    const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, drive);
-    setResult(carved);
-    setIsProcessing(false);
+    try {
+      const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, drive);
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== reqDriveId ||
+        carveReqIdRef.current !== reqId
+      ) {
+        return;
+      }
+      setResult(carved);
+    } finally {
+      if (
+        isMountedRef.current &&
+        activeDriveIdRef.current === reqDriveId &&
+        carveReqIdRef.current === reqId
+      ) {
+        setIsProcessing(false);
+      }
+    }
   };
 
   const handleExportCarvedData = async () => {
@@ -63,10 +99,12 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     let blobPayload: Uint8Array | null = null;
     if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
       const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
-      const exportBytes = Math.min(64 * 4096, Math.max(secSize, result.carvedSizeBytes));
-      const rawTauriBytes = await queryTauriRawSector(driveIndex, targetLba, exportBytes);
-      if (rawTauriBytes && rawTauriBytes.length > 0) {
-        blobPayload = rawTauriBytes;
+      if (Number.isFinite(driveIndex) && driveIndex >= 0) {
+        const exportBytes = Math.min(64 * 4096, Math.max(secSize, result.carvedSizeBytes));
+        const rawTauriBytes = await queryTauriRawSector(driveIndex, targetLba, exportBytes);
+        if (rawTauriBytes && rawTauriBytes.length > 0) {
+          blobPayload = rawTauriBytes;
+        }
       }
     }
 

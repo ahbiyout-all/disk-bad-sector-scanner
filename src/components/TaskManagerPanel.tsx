@@ -58,7 +58,7 @@ export const TaskManagerPanel: React.FC<TaskManagerPanelProps> = ({
         <div className="flex items-center gap-1.5">
           <Layers className="w-3.5 h-3.5 text-indigo-500" />
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
-            작업 큐 (Task Manager)
+            작업 큐
           </span>
           <span className="text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
             ({tasks.length})
@@ -76,11 +76,8 @@ export const TaskManagerPanel: React.FC<TaskManagerPanelProps> = ({
       </div>
 
       {tasks.length === 0 ? (
-        <div className="py-4 px-2 text-center text-[11px] text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded bg-slate-50/50 dark:bg-slate-950/40">
-          실행 중이거나 대기 중인 진단 작업이 없습니다.
-          <div className="text-[10px] text-slate-400 mt-0.5">
-            동일 드라이브 작업은 자동 직렬 큐잉되며, 다른 드라이브는 동시 실행됩니다.
-          </div>
+        <div className="py-3 px-2 text-center text-[11px] text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded bg-slate-50/50 dark:bg-slate-950/40">
+          대기 중인 작업 없음
         </div>
       ) : (
         <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-0.5">

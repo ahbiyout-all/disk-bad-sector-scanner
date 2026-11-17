@@ -31,7 +31,11 @@ import {
   ArrowRight,
   Download,
   RotateCcw,
-  FileCheck
+  FileCheck,
+  Gauge,
+  HardDriveDownload,
+  FileSearch,
+  Trash2
 } from 'lucide-react';
 
 export interface NavbarProps {
@@ -62,6 +66,12 @@ export interface NavbarProps {
   onOpenTrayGuardianModal?: () => void;
   onOpenBitCarvingModal?: () => void;
   onOpenHardwareDetails?: () => void;
+  onOpenFeaturesModal?: () => void;
+  onOpenHexInspector?: () => void;
+  onOpenBenchmarkProfiler?: () => void;
+  onOpenLbaCloner?: () => void;
+  onOpenFileTracer?: () => void;
+  onOpenSanitizeTrim?: () => void;
   onRescanDrives?: () => Promise<void>;
   isRescanning?: boolean;
   onOpenOptionsModal?: () => void;
@@ -103,6 +113,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenTrayGuardianModal,
   onOpenBitCarvingModal,
   onOpenHardwareDetails,
+  onOpenFeaturesModal,
+  onOpenHexInspector,
+  onOpenBenchmarkProfiler,
+  onOpenLbaCloner,
+  onOpenFileTracer,
+  onOpenSanitizeTrim,
   onRescanDrives,
   isRescanning = false,
   onOpenOptionsModal,
@@ -183,9 +199,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="text-xs sm:text-sm font-extrabold tracking-tight text-slate-900 dark:text-white">
                   {PROJECT_INFO.appName}
                 </span>
-                <span className="hidden sm:inline-flex text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-bold uppercase tracking-wider">
-                  DESKTOP PC
-                </span>
               </div>
             </div>
 
@@ -203,16 +216,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
-                  <span>파일(F)</span>
+                  <span>파일</span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${activeMenu === 'file' ? 'rotate-180' : ''}`} />
                 </button>
 
                 {activeMenu === 'file' && (
-                  <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      물리 장치 및 진단 제어
-                    </div>
-
+                  <div className="absolute left-0 mt-1.5 w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
                     {onRescanDrives && (
                       <button
                         onClick={() => {
@@ -223,7 +232,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <RefreshCw className="w-4 h-4 text-indigo-500" />
-                          <span>하드웨어 재검색 갱신</span>
+                          <span>장치 재검색</span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">F5</span>
                       </button>
@@ -233,15 +242,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                     {onOpenReport && (
                       <button
+                        disabled={!currentDrive}
                         onClick={() => {
+                          if (!currentDrive) return;
                           setActiveMenu(null);
                           onOpenReport();
                         }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
                       >
                         <div className="flex items-center gap-2">
                           <FileCheck className="w-4 h-4 text-purple-500" />
-                          <span>진단 보고서 생성 및 열기...</span>
+                          <span>진단 보고서...</span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">Report</span>
                       </button>
@@ -249,15 +261,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                     {onExportResults && (
                       <button
+                        disabled={!currentDrive}
                         onClick={() => {
+                          if (!currentDrive) return;
                           setActiveMenu(null);
                           onExportResults();
                         }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
                       >
                         <div className="flex items-center gap-2">
                           <Download className="w-4 h-4 text-indigo-500" />
-                          <span>검사 결과 내보내기...</span>
+                          <span>결과 내보내기...</span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">CSV/PDF</span>
                       </button>
@@ -267,15 +282,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <>
                         <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
                         <button
+                          disabled={!currentDrive}
                           onClick={() => {
+                            if (!currentDrive) return;
                             setActiveMenu(null);
                             onResetScan();
                           }}
-                          className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                          title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                          className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
                         >
                           <div className="flex items-center gap-2">
                             <RotateCcw className="w-4 h-4 text-amber-500" />
-                            <span>현재 검사 세션 초기화</span>
+                            <span>세션 초기화</span>
                           </div>
                           <span className="text-[10px] text-slate-400 font-mono">R</span>
                         </button>
@@ -296,16 +314,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
-                  <span>보기(V)</span>
+                  <span>보기</span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${activeMenu === 'view' ? 'rotate-180' : ''}`} />
                 </button>
 
                 {activeMenu === 'view' && (
-                  <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      화면 탭 전환
-                    </div>
-
+                  <div className="absolute left-0 mt-1.5 w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
                     <button
                       onClick={() => {
                         onSelectTab('scan');
@@ -316,7 +330,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="flex items-center gap-2">
                         <Activity className="w-4 h-4 text-indigo-500" />
                         <span className={activeTab === 'scan' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
-                          1. 라이브 표면 검사
+                          라이브 표면 검사
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">1</span>
@@ -332,7 +346,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="flex items-center gap-2">
                         <Terminal className="w-4 h-4 text-indigo-500" />
                         <span className={activeTab === 'logs' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
-                          2. 오류 & 이벤트 로그
+                          오류 &amp; 이벤트 로그
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -355,7 +369,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-emerald-500" />
                         <span className={activeTab === 'health' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
-                          3. 건강 & 발열 추이
+                          건강 &amp; 발열 추이
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -376,7 +390,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="flex items-center gap-2">
                         <HardDrive className="w-4 h-4 text-indigo-500" />
                         <span className={activeTab === 'smart' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
-                          4. S.M.A.R.T. 정밀 속성
+                          S.M.A.R.T. 정밀 속성
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">4</span>
@@ -392,7 +406,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="flex items-center gap-2">
                         <GitCompare className="w-4 h-4 text-purple-500" />
                         <span className={activeTab === 'history' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
-                          5. 검사 기록 & 대조
+                          검사 기록 &amp; 대조
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">5</span>
@@ -412,30 +426,155 @@ export const Navbar: React.FC<NavbarProps> = ({
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
-                  <span>도구(T)</span>
+                  <span>도구</span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${activeMenu === 'tools' ? 'rotate-180' : ''}`} />
                 </button>
 
                 {activeMenu === 'tools' && (
-                  <div className="absolute left-0 mt-1.5 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      전문가용 진단 & 수복 도구
-                    </div>
-
+                  <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
                     {onOpenHardwareDetails && (
                       <button
+                        disabled={!currentDrive}
                         onClick={() => {
+                          if (!currentDrive) return;
                           setActiveMenu(null);
                           onOpenHardwareDetails();
                         }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
                       >
                         <div className="flex items-center gap-2">
                           <Cpu className="w-4 h-4 text-indigo-500" />
-                          <span>하드웨어 상세 스펙 분석기</span>
+                          <span>하드웨어 상세 스펙</span>
                         </div>
                         <span className="text-[10px] font-mono text-indigo-500 font-bold">
                           {currentDrive?.hardwareSpecs?.busType || 'N/A'}
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenFeaturesModal && (
+                      <button
+                        disabled={!currentDrive}
+                        onClick={() => {
+                          if (!currentDrive) return;
+                          setActiveMenu(null);
+                          onOpenFeaturesModal();
+                        }}
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Sliders className="w-4 h-4 text-sky-500" />
+                          <span>ATA/NVMe 기능 제어...</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-sky-600 dark:text-sky-400 font-bold">
+                          AAM/APM
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenHexInspector && (
+                      <button
+                        disabled={!currentDrive}
+                        onClick={() => {
+                          if (!currentDrive) return;
+                          setActiveMenu(null);
+                          onOpenHexInspector();
+                        }}
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Binary className="w-4 h-4 text-indigo-500" />
+                          <span>LBA 헥스 &amp; MBR/GPT...</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 font-bold">
+                          HEX
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenBenchmarkProfiler && (
+                      <button
+                        disabled={!currentDrive}
+                        onClick={() => {
+                          if (!currentDrive) return;
+                          setActiveMenu(null);
+                          onOpenBenchmarkProfiler();
+                        }}
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Gauge className="w-4 h-4 text-emerald-500" />
+                          <span>LBA I/O 벤치마크...</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                          MB/s
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenLbaCloner && (
+                      <button
+                        disabled={!currentDrive}
+                        onClick={() => {
+                          if (!currentDrive) return;
+                          setActiveMenu(null);
+                          onOpenLbaCloner();
+                        }}
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <HardDriveDownload className="w-4 h-4 text-sky-500" />
+                          <span>LBA 이미지 복제 &amp; 복구...</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-sky-600 dark:text-sky-400 font-bold">
+                          ddrescue
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenFileTracer && (
+                      <button
+                        disabled={!currentDrive}
+                        onClick={() => {
+                          if (!currentDrive) return;
+                          setActiveMenu(null);
+                          onOpenFileTracer();
+                        }}
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <FileSearch className="w-4 h-4 text-amber-500" />
+                          <span>손상 LBA 파일 추적...</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 font-bold">
+                          MFT/FAT
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenSanitizeTrim && (
+                      <button
+                        disabled={!currentDrive}
+                        onClick={() => {
+                          if (!currentDrive) return;
+                          setActiveMenu(null);
+                          onOpenSanitizeTrim();
+                        }}
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                          <span>보안 삭제 &amp; SSD TRIM...</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-red-600 dark:text-red-400 font-bold">
+                          Sanitize
                         </span>
                       </button>
                     )}
@@ -450,7 +589,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <Layers className="w-4 h-4 text-orange-500" />
-                          <span>Rayon 다중 병렬 스캔</span>
+                          <span>다중 병렬 스캔</span>
                         </div>
                         <span className="text-[10px] font-mono bg-orange-100 dark:bg-orange-950 text-orange-600 px-1.5 py-0.2 rounded font-bold">
                           {drives.length}대
@@ -468,23 +607,26 @@ export const Navbar: React.FC<NavbarProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <Shield className="w-4 h-4 text-emerald-500" />
-                          <span>시스템 트레이 가디언</span>
+                          <span>트레이 가디언</span>
                         </div>
-                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-semibold">ACTIVE</span>
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-semibold">ON</span>
                       </button>
                     )}
 
                     {onOpenBitCarvingModal && (
                       <button
+                        disabled={!currentDrive}
                         onClick={() => {
+                          if (!currentDrive) return;
                           setActiveMenu(null);
                           onOpenBitCarvingModal();
                         }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
                       >
                         <div className="flex items-center gap-2">
                           <Binary className="w-4 h-4 text-indigo-500" />
-                          <span>휴리스틱 비트 카빙 수복</span>
+                          <span>비트 카빙 수복</span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">ECC</span>
                       </button>
@@ -499,7 +641,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         <Usb className="w-4 h-4 text-blue-500" />
-                        <span>외장 저장장치 관리자</span>
+                        <span>외장 저장장치</span>
                       </div>
                       <span className="text-[10px] font-mono text-blue-500 font-bold">
                         {drives.filter(d => d.isExternal).length}대
@@ -508,15 +650,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                     {onOpenVendorDiagnostics && (
                       <button
+                        disabled={!currentDrive}
                         onClick={() => {
+                          if (!currentDrive) return;
                           setActiveMenu(null);
                           onOpenVendorDiagnostics();
                         }}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                        title={!currentDrive ? '연결된 물리 드라이브가 필요합니다' : undefined}
+                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200"
                       >
                         <div className="flex items-center gap-2">
                           <Cpu className="w-4 h-4 text-purple-500" />
-                          <span>제조사별 특성 & 조치 센터</span>
+                          <span>제조사 특성 센터</span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">Vendors</span>
                       </button>
@@ -536,26 +681,22 @@ export const Navbar: React.FC<NavbarProps> = ({
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
-                  <span>옵션(O)</span>
+                  <span>옵션</span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${activeMenu === 'options' ? 'rotate-180' : ''}`} />
                 </button>
 
                 {activeMenu === 'options' && (
-                  <div className="absolute left-0 mt-1.5 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      프로그램 환경설정
-                    </div>
-
+                  <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
                     <button
                       onClick={onToggleDarkMode}
                       className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
                     >
                       <div className="flex items-center gap-2">
                         {isDarkMode ? <Moon className="w-4 h-4 text-indigo-400" /> : <Sun className="w-4 h-4 text-amber-500" />}
-                        <span>화면 테마 모드</span>
+                        <span>화면 테마</span>
                       </div>
                       <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
-                        {isDarkMode ? '다크 모드' : '라이트 모드'}
+                        {isDarkMode ? '다크' : '라이트'}
                       </span>
                     </button>
 
@@ -565,10 +706,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         {!isMuted ? <Volume2 className="w-4 h-4 text-emerald-500" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
-                        <span>배드섹터 경고 사운드</span>
+                        <span>경고 사운드</span>
                       </div>
                       <span className={`text-[11px] font-bold ${!isMuted ? 'text-emerald-500' : 'text-slate-400'}`}>
-                        {!isMuted ? '소리 켬' : '음소거'}
+                        {!isMuted ? '켬' : '음소거'}
                       </span>
                     </button>
 
@@ -584,7 +725,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         <Bell className={`w-4 h-4 ${notificationPermission === 'granted' && notificationsEnabled ? 'text-emerald-500' : 'text-indigo-500'}`} />
-                        <span>데스크톱 웹 푸시 알림</span>
+                        <span>데스크톱 알림</span>
                       </div>
                       <span className={`text-[11px] font-bold ${
                         notificationPermission === 'granted' && notificationsEnabled
@@ -595,13 +736,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                       }`}>
                         {notificationPermission === 'granted'
                           ? notificationsEnabled
-                            ? '허용됨'
-                            : '일시 중지'
-                          : '설정하기'}
+                            ? '허용'
+                            : '중지'
+                          : '설정'}
                       </span>
                     </button>
-
-                    {/* Auto-Repair option follows */}
 
                     {onToggleAutoRepairMode && (
                       <button
@@ -610,10 +749,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <RotateCcw className="w-4 h-4 text-emerald-500" />
-                          <span>논리 배드섹터 자동 수복</span>
+                          <span>자동 배드 수복</span>
                         </div>
                         <span className={`text-[11px] font-bold ${isAutoRepairMode ? 'text-emerald-500' : 'text-slate-400'}`}>
-                          {isAutoRepairMode ? 'ON (자동)' : 'OFF (수동)'}
+                          {isAutoRepairMode ? 'ON' : 'OFF'}
                         </span>
                       </button>
                     )}
@@ -630,7 +769,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         >
                           <div className="flex items-center gap-2">
                             <Settings className="w-4 h-4" />
-                            <span>전체 환경설정 상세창...</span>
+                            <span>환경설정...</span>
                           </div>
                           <span className="text-[10px] text-slate-400 font-mono">Ctrl+,</span>
                         </button>
@@ -651,17 +790,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
-                  <span>도움말(H)</span>
-                  {hasUpdate && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+                  <span>도움말</span>
+                  {hasUpdate && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
                   <ChevronDown className={`w-3 h-3 transition-transform ${activeMenu === 'help' ? 'rotate-180' : ''}`} />
                 </button>
 
                 {activeMenu === 'help' && (
-                  <div className="absolute left-0 mt-1.5 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      사용자 가이드 & 정보
-                    </div>
-
+                  <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150 text-xs">
                     {onOpenHelpGuideModal && (
                       <button
                         onClick={() => {
@@ -672,7 +807,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <BookOpen className="w-4 h-4 text-blue-500" />
-                          <span>검사 및 섹터 진단 가이드...</span>
+                          <span>사용 가이드...</span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">F1</span>
                       </button>
@@ -688,9 +823,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <ShieldCheck className="w-4 h-4 text-teal-500" />
-                          <span>지원 하드웨어 카탈로그...</span>
+                          <span>지원 하드웨어...</span>
                         </div>
-                        <span className="text-[10px] text-slate-400 font-mono">Tools</span>
+                        <span className="text-[10px] text-slate-400 font-mono">Catalog</span>
                       </button>
                     )}
 
@@ -703,9 +838,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         <Terminal className="w-4 h-4 text-indigo-500" />
-                        <span>Rust 네이티브 코어 명세서...</span>
+                        <span>네이티브 코어 명세...</span>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-mono">DLL</span>
+                      <span className="text-[10px] text-slate-400 font-mono">API</span>
                     </button>
 
                     <button
@@ -717,10 +852,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-amber-500" />
-                        <span>GitHub 자동 업데이트 확인...</span>
+                        <span>업데이트 확인...</span>
                       </div>
                       {hasUpdate ? (
-                        <span className="px-1.5 py-0.2 rounded bg-emerald-500 text-white text-[9px] font-bold animate-pulse">
+                        <span className="px-1.5 py-0.2 rounded bg-emerald-500 text-white text-[9px] font-bold">
                           NEW
                         </span>
                       ) : (
@@ -739,7 +874,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         <Info className="w-4 h-4 text-slate-400" />
-                        <span>프로그램 정보 및 공식 채널...</span>
+                        <span>프로그램 정보...</span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">About</span>
                     </button>
@@ -757,7 +892,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg px-2 py-0.5 shadow-2xs">
               <div className="shrink-0 flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 {getDriveTypeIcon(currentDrive)}
-                <span className="hidden sm:inline">Drive:</span>
               </div>
               <select
                 value={drives.length > 0 ? selectedDriveId : ''}
@@ -768,16 +902,14 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 {drives.length === 0 ? (
                   <option value="" className="bg-white dark:bg-slate-900 text-slate-500">
-                    네이티브 장치 미연결 (Tauri IPC 필요)
+                    연결된 디스크 없음
                   </option>
                 ) : (
-                  <optgroup label="내·외장 물리 저장장치 (Tauri IPC)" className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold">
-                    {drives.map((d) => (
-                      <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
-                        [{d.hardwareSpecs?.busType || d.type} {d.isExternal ? '외장' : '내장'} {d.mountPoint || ''}] {d.model} ({d.capacityGb !== null ? `${d.capacityGb}GB` : 'N/A'})
-                      </option>
-                    ))}
-                  </optgroup>
+                  drives.map((d) => (
+                    <option key={d.id} value={d.id} className="text-slate-900 dark:text-slate-100 font-sans font-normal">
+                      [{d.hardwareSpecs?.busType || d.type} {d.isExternal ? '외장' : '내장'} {d.mountPoint || ''}] {d.model} ({d.capacityGb !== null ? `${d.capacityGb}GB` : 'N/A'})
+                    </option>
+                  ))
                 )}
               </select>
 

@@ -6,12 +6,15 @@ import {
   SectorBlock,
   SpecializedScanMethodId,
   SmartSelfTestState,
-  SmartSelfTestType
+  SmartSelfTestType,
+  SavedScanRecord
 } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
 import { detectVendor, getVendorProfile, getDriveMediaAnalysis, getTailoredActionMethods } from '../utils/vendorDiagnostics';
 import { TemperatureLineChart } from './TemperatureLineChart';
 import { LatencyHistogramDashboard } from './LatencyHistogramDashboard';
+import { SmartAttributeTrendChart } from './SmartAttributeTrendChart';
+import { SmartExtendedLogsPanel } from './SmartExtendedLogsPanel';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -31,7 +34,8 @@ import {
   ArrowRight,
   Info,
   Play,
-  Square
+  Square,
+  Sliders
 } from 'lucide-react';
 
 interface HealthSummaryDashboardProps {
@@ -47,11 +51,14 @@ interface HealthSummaryDashboardProps {
   onOpenVendorModal?: () => void;
   onOpenRemapModal?: () => void;
   onOpenHardwareDetails?: () => void;
+  onOpenFeaturesModal?: () => void;
   viewMode?: 'all' | 'health_only' | 'smart_only';
   smartSelfTestState?: SmartSelfTestState | null;
   onRunSmartSelfTest?: (testType: SmartSelfTestType | 'abort') => void;
   onPollSmartSelfTest?: () => void;
+  smartLogRefreshSignal?: number;
   isTauriRuntime?: boolean;
+  scanRecords?: SavedScanRecord[];
 }
 
 export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
@@ -67,11 +74,14 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   onOpenVendorModal,
   onOpenRemapModal,
   onOpenHardwareDetails,
+  onOpenFeaturesModal,
   viewMode = 'all',
   smartSelfTestState,
   onRunSmartSelfTest,
   onPollSmartSelfTest,
-  isTauriRuntime = false
+  smartLogRefreshSignal = 0,
+  isTauriRuntime = false,
+  scanRecords = []
 }) => {
   const vendorKey = detectVendor(drive);
   const vendorProfile = getVendorProfile(vendorKey);
@@ -92,7 +102,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   let healthColor = 'text-slate-400 stroke-slate-400';
   let healthBg = 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300';
   let healthTitle = '센서 미제공 (N/A)';
-  let healthDesc = '커널 S.M.A.R.T. 센서가 없는 샌드박스 환경입니다. 표면 검사를 실행하면 실제 I/O 응답 기반 건강도 지수가 산출됩니다.';
+  let healthDesc = '커널 S.M.A.R.T. 센서가 미감지 상태입니다. Tauri 데스크톱 환경에서 표면 검사를 실행하면 실제 I/O 응답 기반 건강도 지수가 산출됩니다.';
 
   if (calculatedHealth !== null) {
     healthColor = 'text-emerald-500 stroke-emerald-500';
@@ -122,7 +132,17 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
       };
     }
 
-    const rawVal = parseInt(attr.raw.replace(/[^0-9]/g, ''), 10);
+    const parseSmartRawCount = (rawStr: string): number => {
+      const s = String(rawStr ?? '').trim();
+      if (!s) return NaN;
+      if (/^0x[0-9a-f]+$/i.test(s)) return parseInt(s, 16);
+      const token = s.split(/[\s(/,:]+/)[0] || '';
+      if (/^0x[0-9a-f]+$/i.test(token)) return parseInt(token, 16);
+      if (/^\d+$/.test(token)) return parseInt(token, 10);
+      return NaN;
+    };
+
+    const rawVal = parseSmartRawCount(attr.raw);
     if (!isNaN(rawVal)) {
       if (attr.id === 5 && attr.threshold > 0 && attr.current <= attr.threshold) {
         return {
@@ -519,9 +539,15 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
         </>
       )}
 
-      {/* S.M.A.R.T. Attributes Table */}
+      {/* S.M.A.R.T. Historical Attribute Trend & Attributes Table */}
       {viewMode !== 'health_only' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs">
+        <>
+          <SmartAttributeTrendChart
+            drive={drive}
+            scanRecords={scanRecords}
+            onStartScan={onStartScan}
+          />
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs">
           {/* Threshold Breach Visual Notification Banner */}
           {hasThresholdBreaches && (
             <div className="mb-3.5 p-3 sm:p-3.5 rounded-lg bg-red-500/10 dark:bg-red-950/40 border border-red-500/40 text-red-700 dark:text-red-300 flex items-start gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
@@ -591,15 +617,27 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               </p>
             </div>
 
-            {onRefreshSmart && (
-              <button
-                onClick={onRefreshSmart}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors border border-slate-200 dark:border-slate-700 cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3" />
-                새로고침
-              </button>
-            )}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {onOpenFeaturesModal && (
+                <button
+                  type="button"
+                  onClick={onOpenFeaturesModal}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 transition-colors border border-indigo-200 dark:border-indigo-800 cursor-pointer"
+                >
+                  <Sliders className="w-3 h-3" />
+                  <span>기능 제어 (AAM·APM)</span>
+                </button>
+              )}
+              {onRefreshSmart && (
+                <button
+                  onClick={onRefreshSmart}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors border border-slate-200 dark:border-slate-700 cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  새로고침
+                </button>
+              )}
+            </div>
           </div>
 
           {/* S.M.A.R.T. Hardware Self-Test Runner */}
@@ -667,7 +705,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
 
               {!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') ? (
                 <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                  Kernel IOCTL Required — 브라우저 샌드박스 또는 비물리 파일 타겟에서는 ATA SMART Self-Test 실행이 차단됩니다 (Windows 관리자 권한 Tauri 데스크톱 전용).
+                  Kernel IOCTL Required — Tauri 데스크톱 네이티브 IPC 물리 디스크 핸들이 연결된 경우에만 ATA SMART Self-Test를 실행할 수 있습니다 (Windows 관리자 권한 전용).
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -706,7 +744,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 <span>S.M.A.R.T. 하드웨어 속성 데이터 없음 (N/A)</span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-xl mx-auto leading-relaxed">
-                웹 브라우저 보안 샌드박스 또는 USB 브릿지 환경에서는 ATA/NVMe 커널 패스스루(Win32 IOCTL) 직접 호출이 차단되므로 임의의 가짜 SMART 값을 생성하지 않습니다.
+                일반 웹 브라우저 또는 패스스루 미지원 USB 브릿지 환경에서는 ATA/NVMe 커널 패스스루(Win32 IOCTL) 직접 호출이 차단되므로 임의의 가짜 SMART 값을 생성하지 않습니다.
                 Windows 관리자 권한 Tauri 데스크톱 앱으로 실행하면 실제 물리 디스크의 S.M.A.R.T. 레지스터 전체가 표시됩니다.
               </p>
             </div>
@@ -732,7 +770,13 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                     const isBreached = breachInfo.isBreached;
                     const isCrit = attr.status === 'critical' || isBreached;
                     const isWarn = attr.status === 'warning' && !isBreached;
-                    const rawNumeric = Number(String(attr.raw).replace(/[^0-9]/g, ''));
+                    const rawStr = String(attr.raw ?? '').trim();
+                    const headToken = rawStr.split(/[\s(/,:]+/)[0] || '';
+                    const rawNumeric = /^0x[0-9a-f]+$/i.test(headToken)
+                      ? parseInt(headToken, 16)
+                      : /^\d+$/.test(headToken)
+                      ? parseInt(headToken, 10)
+                      : NaN;
                     const computedRawHex = attr.rawHex || (!Number.isNaN(rawNumeric)
                       ? `0x${rawNumeric.toString(16).padStart(12, '0').toUpperCase()}`
                       : '0x000000000000');
@@ -742,7 +786,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                         key={attr.id}
                         className={`hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors ${
                           isBreached
-                            ? 'bg-red-500/15 dark:bg-red-950/40 text-red-900 dark:text-red-200 border-l-4 border-l-red-600 font-medium'
+                            ? 'bg-red-500/15 dark:bg-red-950/40 text-red-900 dark:text-red-200 ring-1 ring-inset ring-red-600/50 font-medium'
                             : isCrit
                             ? 'bg-red-950/20 font-semibold text-red-300'
                             : ''
@@ -756,7 +800,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                             <span>{attr.name}</span>
                             {isBreached && (
                               <div className="relative group/tip inline-flex items-center">
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-600 text-white animate-pulse cursor-help shadow-2xs">
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-600 text-white cursor-help shadow-2xs">
                                   <AlertOctagon className="w-2.5 h-2.5" />
                                   임계치 한계 초과
                                 </span>
@@ -839,7 +883,13 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               </table>
             </div>
           )}
-        </div>
+          </div>
+          <SmartExtendedLogsPanel
+            drive={drive}
+            isTauriRuntime={isTauriRuntime}
+            refreshSignal={smartLogRefreshSignal}
+          />
+        </>
       )}
     </div>
   );

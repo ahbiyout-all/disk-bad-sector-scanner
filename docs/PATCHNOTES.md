@@ -10,6 +10,11 @@ All notable changes to this project will be documented in this file. This projec
   - OPFS 스토리지 프로브, 폴더/파일(`webkitdirectory`, `showDirectoryPicker`, `.img`/`.iso` `File.slice`) 마운트, WebUSB, Web Serial 기반 디스크 인식 및 비트 카빙/제로필 우회 경로를 모두 제거.
   - 실제 장착된 내·외장 물리 디스크(`\\.\PhysicalDrive0~31`) 탐색과 Verify·Read·Butterfly·Erase 4종 표면검사를 Tauri 데스크톱 네이티브 IPC(`__TAURI__` -> Rust/Win32 IOCTL) 전용으로 일원화.
   - 일반 웹 브라우저 단독 실행 시 가짜·샌드박스 드라이브를 표시하지 않고 연결 상태 진단 스트립과 Tauri 데스크톱 앱 / 로컬 브릿지 실행 안내 및 `[네이티브 엔진 연결 재확인]` 빈 상태 화면을 제공.
+### Fixed
+- **Tauri Rust IPC 배드섹터 오류 코드 전달·LBA EOF 경계 클램핑 및 UI 정합성 수정**:
+  - `scan_lba_block`, `verify_lba_block`이 실제 디스크 결함 시 `Err` 대신 `statusCode`·`win32ErrorCode`를 보존 반환하도록 수정하고 `run_smart_self_test` JSON(`executionCode`) 필드 누락을 보완.
+  - `nativeDriveEngine.ts`의 가짜 `1,000,000` 섹터 폴백을 제거하고 벤치마크/Verify/Read/Erase 프로브의 `sectorCount`를 디스크 잔여 LBA 범위로 클램핑해 소용량·경계 LBA 오탐을 방지.
+  - `isNativeRuntime` 플래그 분리, 드라이브 미연결 시 메뉴 비활성 가드 적용, 잔여 File API/브라우저 샌드박스 안내 문구 정비.
 
 ---
 

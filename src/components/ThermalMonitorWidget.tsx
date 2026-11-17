@@ -66,7 +66,7 @@ export const ThermalMonitorWidget: React.FC<ThermalMonitorWidgetProps> = ({
                 ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
                 : 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
             }`}
-            title={isTauriRuntime ? '4초 주기 SMART 온도 자동 폴링 토글' : '브라우저 샌드박스에서는 하드웨어 온도 센서를 지원하지 않습니다'}
+            title={isTauriRuntime ? '4초 주기 SMART 온도 자동 폴링 토글' : 'Tauri 데스크톱 네이티브 IPC 환경에서만 하드웨어 온도 센서를 조회할 수 있습니다'}
           >
             {isTauriRuntime ? (isPollingEnabled ? 'POLL ON' : 'POLL OFF') : 'N/A'}
           </button>
@@ -139,10 +139,10 @@ export const ThermalMonitorWidget: React.FC<ThermalMonitorWidgetProps> = ({
             </div>
           </div>
         ) : (
-          <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 leading-relaxed">
+          <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
             {isTauriRuntime
-              ? '물리 드라이브 S.M.A.R.T. 온도 폴링 대기 중 (4초 간격 기록)'
-              : '브라우저 샌드박스에서는 OS 디스크 온도 센서 접근이 차단되어 임의 값을 생성하지 않습니다.'}
+              ? '온도 폴링 대기 중 (4초 주기)'
+              : '온도 센서 데이터 없음 (Tauri 연결 필요)'}
           </div>
         )}
       </div>

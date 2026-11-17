@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import {
   DiskDrive,
   SectorBlock,
@@ -11,7 +11,11 @@ import {
   DiagnosticTask,
   SmartSelfTestState,
   SmartSelfTestType,
-  ThermalHistoryPoint
+  ThermalHistoryPoint,
+  DiskHardwareSpecs,
+  WatchdogRule,
+  WatchdogBaselineSnapshot,
+  WatchdogTriggerEvent
 } from './types';
 import { generateBlocksForDrive, TOTAL_SCAN_BLOCKS } from './utils/drivePresets';
 import { soundManager } from './utils/audio';
@@ -22,29 +26,45 @@ import { TelemetryPanel } from './components/TelemetryPanel';
 import { ErrorLogStream } from './components/ErrorLogStream';
 import { HealthSummaryDashboard } from './components/HealthSummaryDashboard';
 import { HistoryAndComparison } from './components/HistoryAndComparison';
-import { ReportModal } from './components/ReportModal';
-import { ExportModal } from './components/ExportModal';
 import { AlertBanner } from './components/AlertBanner';
-import { UpdateModal } from './components/UpdateModal';
-import { AboutModal } from './components/AboutModal';
-import { DllDocsModal } from './components/DllDocsModal';
-import { ExternalDeviceModal } from './components/ExternalDeviceModal';
-import { VendorDiagnosticsModal } from './components/VendorDiagnosticsModal';
-import { SupportedProductsCatalogModal } from './components/SupportedProductsCatalogModal';
-import { ParallelDriveScanModal } from './components/ParallelDriveScanModal';
-import { TrayGuardianModal } from './components/TrayGuardianModal';
-import { BitCarvingRecoveryModal } from './components/BitCarvingRecoveryModal';
-import { DiskHardwareDetailsModal } from './components/DiskHardwareDetailsModal';
-import { ScanCompletionSummaryModal } from './components/ScanCompletionSummaryModal';
-import { OptionsModal } from './components/OptionsModal';
-import { HelpGuideModal } from './components/HelpGuideModal';
 import { ScanMethodSelector } from './components/ScanMethodSelector';
-import { SmartRemapModal } from './components/SmartRemapModal';
 import { LatencyHistogramDashboard } from './components/LatencyHistogramDashboard';
 import { ResponseBucketsBar, BucketKey } from './components/ResponseBucketsBar';
 import { LbaGraphView } from './components/LbaGraphView';
 import { TaskManagerPanel } from './components/TaskManagerPanel';
 import { ThermalMonitorWidget } from './components/ThermalMonitorWidget';
+
+const ReportModal = React.lazy(() => import('./components/ReportModal').then(m => ({ default: m.ReportModal })));
+const ExportModal = React.lazy(() => import('./components/ExportModal').then(m => ({ default: m.ExportModal })));
+const UpdateModal = React.lazy(() => import('./components/UpdateModal').then(m => ({ default: m.UpdateModal })));
+const AboutModal = React.lazy(() => import('./components/AboutModal').then(m => ({ default: m.AboutModal })));
+const DllDocsModal = React.lazy(() => import('./components/DllDocsModal').then(m => ({ default: m.DllDocsModal })));
+const ExternalDeviceModal = React.lazy(() => import('./components/ExternalDeviceModal').then(m => ({ default: m.ExternalDeviceModal })));
+const VendorDiagnosticsModal = React.lazy(() => import('./components/VendorDiagnosticsModal').then(m => ({ default: m.VendorDiagnosticsModal })));
+const SupportedProductsCatalogModal = React.lazy(() => import('./components/SupportedProductsCatalogModal').then(m => ({ default: m.SupportedProductsCatalogModal })));
+const ParallelDriveScanModal = React.lazy(() => import('./components/ParallelDriveScanModal').then(m => ({ default: m.ParallelDriveScanModal })));
+const TrayGuardianModal = React.lazy(() => import('./components/TrayGuardianModal').then(m => ({ default: m.TrayGuardianModal })));
+const BitCarvingRecoveryModal = React.lazy(() => import('./components/BitCarvingRecoveryModal').then(m => ({ default: m.BitCarvingRecoveryModal })));
+const DiskHardwareDetailsModal = React.lazy(() => import('./components/DiskHardwareDetailsModal').then(m => ({ default: m.DiskHardwareDetailsModal })));
+const DriveFeaturesModal = React.lazy(() => import('./components/DriveFeaturesModal').then(m => ({ default: m.DriveFeaturesModal })));
+const SectorHexPartitionModal = React.lazy(() => import('./components/SectorHexPartitionModal').then(m => ({ default: m.SectorHexPartitionModal })));
+const DiskBenchmarkProfilerModal = React.lazy(() => import('./components/DiskBenchmarkProfilerModal').then(m => ({ default: m.DiskBenchmarkProfilerModal })));
+const LbaImageClonerModal = React.lazy(() => import('./components/LbaImageClonerModal').then(m => ({ default: m.LbaImageClonerModal })));
+const LbaFileTracerModal = React.lazy(() => import('./components/LbaFileTracerModal').then(m => ({ default: m.LbaFileTracerModal })));
+const SanitizeTrimModal = React.lazy(() => import('./components/SanitizeTrimModal').then(m => ({ default: m.SanitizeTrimModal })));
+const ScanCompletionSummaryModal = React.lazy(() => import('./components/ScanCompletionSummaryModal').then(m => ({ default: m.ScanCompletionSummaryModal })));
+const OptionsModal = React.lazy(() => import('./components/OptionsModal').then(m => ({ default: m.OptionsModal })));
+const HelpGuideModal = React.lazy(() => import('./components/HelpGuideModal').then(m => ({ default: m.HelpGuideModal })));
+const SmartRemapModal = React.lazy(() => import('./components/SmartRemapModal').then(m => ({ default: m.SmartRemapModal })));
+import {
+  evaluateWatchdogRules,
+  loadWatchdogBaselines,
+  loadWatchdogEvents,
+  loadWatchdogRules,
+  saveWatchdogBaselines,
+  saveWatchdogEvents,
+  saveWatchdogRules
+} from './utils/watchdogEngine';
 import { checkForGithubReleaseUpdate } from './utils/updater';
 import { PROJECT_INFO, ReleaseInfo } from './config/projectInfo';
 import { SCAN_METHOD_DEFINITIONS, getDefaultMethodForDrive } from './utils/scanProfiles';
@@ -58,7 +78,7 @@ import {
   classifyResponseBucket,
   buildScanBlockSequence,
   isSafeEraseTarget,
-  executeHddScanBlockProbe,
+  executeHddScanBlockBatch,
   queryTauriRunSmartSelfTest,
   queryTauriSmartSelfTestStatus,
   queryTauriPollTemperatures
@@ -74,7 +94,6 @@ import {
   Building2,
   Sparkles,
   ShieldCheck,
-  Cpu,
   Usb,
   HardDrive,
   Activity,
@@ -85,7 +104,8 @@ import {
   Play,
   Layers,
   SlidersHorizontal,
-  RefreshCw
+  RefreshCw,
+  Zap
 } from 'lucide-react';
 
 export default function App() {
@@ -199,8 +219,10 @@ export default function App() {
 
   const activeDrive: DiskDrive | undefined = drives.find(d => d.id === selectedDriveId) || drives[0];
 
-  // Hardware Details & Live Rescan State
+  // Hardware Details, Features Control & Live Rescan State
   const [isHardwareDetailsOpen, setIsHardwareDetailsOpen] = useState<boolean>(false);
+  const [isFeaturesModalOpen, setIsFeaturesModalOpen] = useState<boolean>(false);
+  const [smartLogRefreshSignal, setSmartLogRefreshSignal] = useState<number>(0);
   const [isRescanningDrives, setIsRescanningDrives] = useState<boolean>(false);
 
   // Active Tab: 'scan' | 'logs' | 'health' | 'smart' | 'history'
@@ -260,9 +282,11 @@ export default function App() {
         isNativeHardwareRuntime() ||
         allDrives.some(d => d.id.startsWith('drive-tauri-physical-'));
 
-      setIsNativeRuntime(nativeActive || bridgeOk);
-      if (nativeActive || bridgeOk) {
+      setIsNativeRuntime(nativeActive);
+      if (nativeActive) {
         setIsThermalPolling(true);
+      } else {
+        setIsThermalPolling(false);
       }
 
       setBridgeDiagnostics({
@@ -354,9 +378,13 @@ export default function App() {
 
   // S.M.A.R.T Sector Remapping & Zero-Fill Repair Handler
   const handleRepairSectors = useCallback((driveId: string, repairedBlockIds: number[]) => {
+    if (repairedBlockIds.length === 0) return;
+    const uniqueIds = Array.from(new Set(repairedBlockIds));
+    const repairedIdSet = new Set(uniqueIds);
+
     const patchBlocks = (list: SectorBlock[]) =>
       list.map(b =>
-        repairedBlockIds.includes(b.id)
+        repairedIdSet.has(b.id)
           ? {
               ...b,
               status: 'good' as const,
@@ -366,7 +394,9 @@ export default function App() {
           : b
       );
 
-    setIdleBlocks(prev => patchBlocks(prev));
+    if (activeDriveRef.current?.id === driveId) {
+      setIdleBlocks(prev => patchBlocks(prev));
+    }
     setTasks(prev =>
       prev.map(t =>
         t.driveId === driveId
@@ -380,7 +410,7 @@ export default function App() {
 
     setDrives(prev => prev.map(d => {
       if (d.id === driveId) {
-        const repairedCount = repairedBlockIds.length;
+        const repairedCount = uniqueIds.length;
         const updatedSmart = d.smartAttributes.map(attr => {
           if (attr.id === 5) {
             const currentVal = parseInt(attr.raw, 10) || 0;
@@ -414,16 +444,18 @@ export default function App() {
       return d;
     }));
 
-    const firstRepairedBlock = blocksRef.current.find(b => repairedBlockIds.includes(b.id));
+    const driveTask = tasksRef.current.find(t => t.driveId === driveId);
+    const sourceBlocks = driveTask ? driveTask.blocks : blocksRef.current;
+    const firstRepairedBlock = sourceBlocks.find(b => repairedIdSet.has(b.id));
     const newLog: ErrorLogItem = {
       id: `repair-log-${Date.now()}`,
       timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-      blockIndex: repairedBlockIds[0] || 0,
-      lba: firstRepairedBlock ? firstRepairedBlock.lba : (repairedBlockIds[0] || 0) * 1000000,
+      blockIndex: uniqueIds[0] || 0,
+      lba: firstRepairedBlock ? firstRepairedBlock.lba : (uniqueIds[0] || 0) * 1000000,
       status: 'repaired',
       latencyMs: 0.8,
       errorCode: 'REPAIRED_ZEROFILL',
-      description: `S.M.A.R.T. 제로필 수복 완료: ${repairedBlockIds.length}개 섹터 ATA Write DMA 강제 초기화 및 예비 트랙 치환(05h) 성공`,
+      description: `S.M.A.R.T. 제로필 수복 완료: ${uniqueIds.length}개 섹터 ATA Write DMA 강제 초기화 및 예비 트랙 치환(05h) 성공`,
       methodContext: 'S.M.A.R.T. Sector Remapping Engine'
     };
 
@@ -581,9 +613,38 @@ export default function App() {
   const [isTrayGuardianOpen, setIsTrayGuardianOpen] = useState<boolean>(false);
   const [isBitCarvingOpen, setIsBitCarvingOpen] = useState<boolean>(false);
   const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(0);
+  const [isHexInspectorOpen, setIsHexInspectorOpen] = useState<boolean>(false);
+  const [hexInspectorTargetLba, setHexInspectorTargetLba] = useState<number>(0);
+  const [isBenchmarkProfilerOpen, setIsBenchmarkProfilerOpen] = useState<boolean>(false);
+  const [isLbaClonerOpen, setIsLbaClonerOpen] = useState<boolean>(false);
+  const [lbaClonerRange, setLbaClonerRange] = useState<{ startLba: number; endLba: number } | null>(null);
+  const [isFileTracerOpen, setIsFileTracerOpen] = useState<boolean>(false);
+  const [fileTracerTargetLba, setFileTracerTargetLba] = useState<number>(0);
+  const [isSanitizeTrimOpen, setIsSanitizeTrimOpen] = useState<boolean>(false);
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState<boolean>(false);
   const [isHelpGuideModalOpen, setIsHelpGuideModalOpen] = useState<boolean>(false);
   const [isSmartRemapOpen, setIsSmartRemapOpen] = useState<boolean>(false);
+
+  // Persistent Background Watchdog Rules, SMART Baselines & Event Feed
+  const [watchdogRules, setWatchdogRules] = useState<WatchdogRule[]>(() => loadWatchdogRules());
+  const [watchdogBaselines, setWatchdogBaselines] = useState<Record<string, WatchdogBaselineSnapshot>>(() =>
+    loadWatchdogBaselines()
+  );
+  const [watchdogEvents, setWatchdogEvents] = useState<WatchdogTriggerEvent[]>(() => loadWatchdogEvents());
+  const watchdogRulesRef = useRef<WatchdogRule[]>(watchdogRules);
+  watchdogRulesRef.current = watchdogRules;
+  const watchdogBaselinesRef = useRef<Record<string, WatchdogBaselineSnapshot>>(watchdogBaselines);
+  watchdogBaselinesRef.current = watchdogBaselines;
+
+  const handleUpdateWatchdogRules = useCallback((nextRules: WatchdogRule[]) => {
+    setWatchdogRules(nextRules);
+    saveWatchdogRules(nextRules);
+  }, []);
+
+  const handleClearWatchdogEvents = useCallback(() => {
+    setWatchdogEvents([]);
+    saveWatchdogEvents([]);
+  }, []);
 
   // Real-time Update Checker
   const checkUpdates = useCallback(async (manual = false) => {
@@ -627,12 +688,29 @@ export default function App() {
   const scanModeRef = useRef<'quick' | 'full'>(scanMode);
   scanModeRef.current = scanMode;
 
-  // Derived counts
-  const goodCount = blocks.filter(b => b.status === 'good').length;
-  const normalCount = blocks.filter(b => b.status === 'normal').length;
-  const slowCount = blocks.filter(b => b.status === 'slow').length;
-  const criticalCount = blocks.filter(b => b.status === 'critical').length;
-  const badCount = blocks.filter(b => b.status === 'bad').length;
+  // Derived counts (single-pass memoized)
+  const { goodCount, normalCount, slowCount, criticalCount, badCount } = useMemo(() => {
+    let good = 0;
+    let normal = 0;
+    let slow = 0;
+    let critical = 0;
+    let bad = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const s = blocks[i].status;
+      if (s === 'good') good++;
+      else if (s === 'normal') normal++;
+      else if (s === 'slow') slow++;
+      else if (s === 'critical') critical++;
+      else if (s === 'bad') bad++;
+    }
+    return {
+      goodCount: good,
+      normalCount: normal,
+      slowCount: slow,
+      criticalCount: critical,
+      badCount: bad
+    };
+  }, [blocks]);
 
   // Initialize blank blocks on drive change or capacity update
   useEffect(() => {
@@ -744,7 +822,11 @@ export default function App() {
   // Poll OS Physical Drive Temperatures every 4s in Tauri Desktop runtime
   const handlePollTemperatures = useCallback(async () => {
     if (!isTauriRuntime) return;
-    const readings = await queryTauriPollTemperatures();
+    const knownIndices = drivesRef.current
+      .filter(d => d.id.startsWith('drive-tauri-physical-'))
+      .map(d => parseInt(d.id.replace('drive-tauri-physical-', ''), 10))
+      .filter(n => Number.isFinite(n) && n >= 0);
+    const readings = await queryTauriPollTemperatures(knownIndices.length > 0 ? knownIndices : undefined);
     if (readings.length === 0) return;
 
     const now = Date.now();
@@ -755,21 +837,25 @@ export default function App() {
       second: '2-digit'
     });
 
-    setDrives(prev =>
-      prev.map(d => {
+    setDrives(prev => {
+      let mutated = false;
+      const next = prev.map(d => {
         if (!d.id.startsWith('drive-tauri-physical-')) return d;
         const idx = parseInt(d.id.replace('drive-tauri-physical-', ''), 10);
         const hit = readings.find(r => r.driveIndex === idx);
-        if (!hit || hit.temperatureC === null) return d;
+        if (!hit || hit.temperatureC === null || hit.temperatureC === d.temperatureC) return d;
+        mutated = true;
         return {
           ...d,
           temperatureC: hit.temperatureC,
-          hardwareSpecs: d.hardwareSpecs
-            ? { ...d.hardwareSpecs, currentTempC: hit.temperatureC }
-            : d.hardwareSpecs
+          hardwareSpecs:
+            d.hardwareSpecs && d.hardwareSpecs.currentTempC == null
+              ? { ...d.hardwareSpecs, currentTempC: hit.temperatureC }
+              : d.hardwareSpecs
         };
-      })
-    );
+      });
+      return mutated ? next : prev;
+    });
 
     setThermalHistoryByDrive(prev => {
       const next = { ...prev };
@@ -797,12 +883,19 @@ export default function App() {
     const driveIdToPoll = targetDriveId || activeDriveRef.current?.id;
     if (!driveIdToPoll || !driveIdToPoll.startsWith('drive-tauri-physical-')) return;
     const driveIndex = parseInt(driveIdToPoll.replace('drive-tauri-physical-', ''), 10);
-    const existingType = smartSelfTestByDrive[driveIdToPoll]?.testType || null;
+    const prevEntry = smartSelfTestByDrive[driveIdToPoll];
+    const existingType = prevEntry?.testType || null;
     const status = await queryTauriSmartSelfTestStatus(driveIndex, driveIdToPoll, existingType);
     setSmartSelfTestByDrive(prev => ({
       ...prev,
       [driveIdToPoll]: status
     }));
+    if (
+      prevEntry?.status === 'running' &&
+      (status.status === 'completed' || status.status === 'aborted')
+    ) {
+      setSmartLogRefreshSignal(prev => prev + 1);
+    }
   }, [smartSelfTestByDrive]);
 
   const handleRunSmartSelfTest = useCallback(async (testType: SmartSelfTestType | 'abort') => {
@@ -959,41 +1052,53 @@ export default function App() {
           continue;
         }
 
-        const step = task.stepSequence[task.completedSteps];
-        const idx = step.blockIndex;
+        const batchSize =
+          task.testType === 'erase'
+            ? 1
+            : targetDrive.id.startsWith('drive-tauri-physical-')
+            ? scanSpeedMultiplier >= 4
+              ? 16
+              : 8
+            : scanSpeedMultiplier >= 4
+            ? 8
+            : 4;
+        const batchStartStep = task.completedSteps;
+        const batchSteps = task.stepSequence.slice(
+          batchStartStep,
+          batchStartStep + batchSize
+        );
+        if (batchSteps.length === 0) continue;
+
+        const batchIndices = batchSteps.map(s => s.blockIndex);
         inFlightDrivesRef.current.add(task.driveId);
 
         void (async () => {
           try {
-            const probeResult = await executeHddScanBlockProbe(
+            const batchResults = await executeHddScanBlockBatch(
               targetDrive,
               task.methodId,
-              idx,
+              batchIndices,
               task.blocks.length,
               task.testType
             );
 
             if (isCancelled) return;
             const latestTask = tasksRef.current.find(t => t.id === task.id);
-            if (!latestTask || latestTask.status !== 'running') return;
+            if (!latestTask || latestTask.status !== 'running' || latestTask.completedSteps !== batchStartStep) return;
 
-            const { status, latencyMs, throughputMbSec, checksum, errorCode, zoneTag } = probeResult;
-            const targetBlock = latestTask.blocks[idx];
-            if (!targetBlock) return;
-            const targetBlockLba = targetBlock.lba;
-            const bucketKey = classifyResponseBucket(status, latencyMs);
-
-            if (errorCode === 'ERASE_BLOCKED_UNSAFE_TARGET') {
+            const unsafeResult = batchResults.find(r => r.errorCode === 'ERASE_BLOCKED_UNSAFE_TARGET');
+            if (unsafeResult) {
+              const targetBlockLba = latestTask.blocks[unsafeResult.blockIndex]?.lba ?? 0;
               soundManager.playBadSectorAlert();
               const guardLog: ErrorLogItem = {
-                id: `erase-guard-${Date.now()}-${idx}`,
+                id: `erase-guard-${Date.now()}-${unsafeResult.blockIndex}`,
                 timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-                blockIndex: idx,
+                blockIndex: unsafeResult.blockIndex,
                 lba: targetBlockLba,
                 status: 'bad',
                 latencyMs: -1,
-                errorCode,
-                description: `안전 가드 차단: [${targetDrive.model}]은 물리 디스크 또는 읽기 전용 대상이므로 Erase 쓰기가 중단되었습니다.`,
+                errorCode: unsafeResult.errorCode,
+                description: `안전 가드 차단: [${targetDrive.model}]은 OS 시스템/부트 드라이브 보호 대상이거나 비Tauri 대상이므로 Erase 쓰기가 중단되었습니다.`,
                 methodContext: 'Safe Erase Guard'
               };
               setErrorLogs(prev => [guardLog, ...prev.slice(0, 199)]);
@@ -1003,96 +1108,152 @@ export default function App() {
               return;
             }
 
-            let resolvedStatus = status;
-            let resolvedLatency = latencyMs;
-            let resolvedErrorCode = errorCode;
+            const timestampStr = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+            const nowMs = Date.now();
+            const newLogs: ErrorLogItem[] = [];
+            const repairedIndices: number[] = [];
+            let hasBadInBatch = false;
+            let hasWarnInBatch = false;
+            let lastBadLbaInBatch: number | null = null;
 
-            if (status === 'bad' && isAutoRepairModeRef.current && task.testType !== 'erase') {
-              const repairRes = await executeRealZeroFillRepairBlock(idx, targetBlockLba, targetDrive);
-              if (!isCancelled && repairRes.success) {
-                resolvedStatus = 'good';
-                resolvedLatency = 0.8;
-                resolvedErrorCode = undefined;
-                handleRepairSectors(targetDrive.id, [idx]);
+            const resolvedItems: Array<{
+              idx: number;
+              passSide: 'outer' | 'inner' | 'sequential';
+              targetBlockLba: number;
+              resolvedStatus: 'good' | 'normal' | 'slow' | 'critical' | 'bad';
+              resolvedLatency: number;
+              throughputMbSec: number;
+              checksum?: string;
+              resolvedErrorCode?: string;
+              zoneTag?: typeof batchResults[number]['zoneTag'];
+            }> = [];
+
+            const count = Math.min(batchSteps.length, batchResults.length);
+            for (let i = 0; i < count; i++) {
+              const step = batchSteps[i];
+              const probeResult = batchResults[i];
+              const idx = step.blockIndex;
+              const targetBlock = latestTask.blocks[idx];
+              if (!targetBlock) continue;
+
+              const targetBlockLba = targetBlock.lba;
+              let resolvedStatus = probeResult.status;
+              let resolvedLatency = probeResult.latencyMs;
+              let resolvedErrorCode = probeResult.errorCode;
+
+              if (resolvedStatus === 'bad' && isAutoRepairModeRef.current && task.testType !== 'erase') {
+                const repairRes = await executeRealZeroFillRepairBlock(idx, targetBlockLba, targetDrive);
+                if (!isCancelled && repairRes.success) {
+                  resolvedStatus = 'good';
+                  resolvedLatency = 0.8;
+                  resolvedErrorCode = undefined;
+                  repairedIndices.push(idx);
+                }
               }
+
+              if (resolvedStatus === 'bad') {
+                hasBadInBatch = true;
+                lastBadLbaInBatch = targetBlockLba;
+                newLogs.push({
+                  id: `log-${nowMs}-${idx}`,
+                  timestamp: timestampStr,
+                  blockIndex: idx,
+                  lba: targetBlockLba,
+                  status: 'bad',
+                  latencyMs: -1,
+                  errorCode: resolvedErrorCode || 'UNC',
+                  description: `섹터 I/O 오류 [${task.testType.toUpperCase()}]: ${resolvedErrorCode || '판독/검증 실패'} (LBA #${targetBlockLba.toLocaleString()})`,
+                  methodContext: `${task.testType.toUpperCase()} Engine`
+                });
+              } else if (resolvedStatus === 'critical' || resolvedStatus === 'slow') {
+                hasWarnInBatch = true;
+                newLogs.push({
+                  id: `log-${nowMs}-${idx}`,
+                  timestamp: timestampStr,
+                  blockIndex: idx,
+                  lba: targetBlockLba,
+                  status: resolvedStatus,
+                  latencyMs: resolvedLatency,
+                  errorCode: resolvedErrorCode || 'LATENCY',
+                  description: `응답 지연 감지 (${resolvedLatency}ms) - [${task.testType.toUpperCase()}]`,
+                  methodContext: `${task.testType.toUpperCase()} Engine`
+                });
+              }
+
+              resolvedItems.push({
+                idx,
+                passSide: step.passSide,
+                targetBlockLba,
+                resolvedStatus,
+                resolvedLatency,
+                throughputMbSec: probeResult.throughputMbSec,
+                checksum: probeResult.checksum,
+                resolvedErrorCode,
+                zoneTag: probeResult.zoneTag
+              });
             }
 
-            if (resolvedStatus === 'bad') {
+            if (isCancelled) return;
+            if (repairedIndices.length > 0) {
+              handleRepairSectors(targetDrive.id, repairedIndices);
+            }
+            if (hasBadInBatch) {
               soundManager.playBadSectorAlert();
               setAlertBannerVisible(true);
-              setLatestBadLba(targetBlockLba);
-              const newLog: ErrorLogItem = {
-                id: `log-${Date.now()}-${idx}`,
-                timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-                blockIndex: idx,
-                lba: targetBlockLba,
-                status: 'bad',
-                latencyMs: -1,
-                errorCode: resolvedErrorCode || 'UNC',
-                description: `섹터 I/O 오류 [${task.testType.toUpperCase()}]: ${resolvedErrorCode || '판독/검증 실패'} (LBA #${targetBlockLba.toLocaleString()})`,
-                methodContext: `${task.testType.toUpperCase()} Engine`
-              };
-              setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
-            } else if (resolvedStatus === 'critical' || resolvedStatus === 'slow') {
+              if (lastBadLbaInBatch !== null) {
+                setLatestBadLba(lastBadLbaInBatch);
+              }
+            } else if (hasWarnInBatch) {
               soundManager.playWarningTone();
-              const newLog: ErrorLogItem = {
-                id: `log-${Date.now()}-${idx}`,
-                timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
-                blockIndex: idx,
-                lba: targetBlockLba,
-                status: resolvedStatus,
-                latencyMs: resolvedLatency,
-                errorCode: resolvedErrorCode || 'LATENCY',
-                description: `응답 지연 감지 (${resolvedLatency}ms) - [${task.testType.toUpperCase()}]`,
-                methodContext: `${task.testType.toUpperCase()} Engine`
-              };
-              setErrorLogs(prev => [newLog, ...prev.slice(0, 199)]);
+            }
+            if (newLogs.length > 0) {
+              setErrorLogs(prev => [...newLogs.reverse(), ...prev].slice(0, 200));
             }
 
-            setTasks(prev =>
-              prev.map(t => {
-                if (t.id !== task.id || t.status !== 'running') return t;
-                const nextBlocks = [...t.blocks];
-                nextBlocks[idx] = {
-                  ...nextBlocks[idx],
-                  status: resolvedStatus,
-                  responseTimeMs: resolvedLatency,
-                  throughputMbSec,
-                  checksum,
-                  errorCode: resolvedErrorCode,
-                  zoneTag,
-                  timestamp: Date.now()
-                };
-                const finalBucket = classifyResponseBucket(resolvedStatus, resolvedLatency);
-                const nextBuckets = {
-                  ...t.buckets,
-                  [finalBucket]: t.buckets[finalBucket] + 1
-                };
-                const nextTrace = [
-                  ...t.lbaTrace,
-                  {
-                    seqIndex: t.completedSteps,
-                    blockId: idx,
-                    lba: targetBlockLba,
-                    latencyMs: resolvedLatency,
-                    throughputMbSec,
-                    status: resolvedStatus,
-                    passSide: step.passSide
-                  }
-                ];
-
-                return {
-                  ...t,
-                  blocks: nextBlocks,
-                  buckets: nextBuckets,
-                  lbaTrace: nextTrace,
-                  completedSteps: t.completedSteps + 1,
-                  currentBlockIndex: idx,
-                  currentLba: targetBlockLba,
-                  speedMbPerSec: throughputMbSec > 0 ? throughputMbSec : t.speedMbPerSec
-                };
-              })
-            );
+            if (resolvedItems.length > 0) {
+              setTasks(prev =>
+                prev.map(t => {
+                  if (t.id !== task.id || t.status !== 'running' || t.completedSteps !== batchStartStep) return t;
+                  const nextBlocks = [...t.blocks];
+                  const nextBuckets = { ...t.buckets };
+                  const baseSeq = t.completedSteps;
+                  const appendedTrace = resolvedItems.map((item, offset) => {
+                    nextBlocks[item.idx] = {
+                      ...nextBlocks[item.idx],
+                      status: item.resolvedStatus,
+                      responseTimeMs: item.resolvedLatency,
+                      throughputMbSec: item.throughputMbSec,
+                      checksum: item.checksum,
+                      errorCode: item.resolvedErrorCode,
+                      zoneTag: item.zoneTag,
+                      timestamp: nowMs
+                    };
+                    const finalBucket = classifyResponseBucket(item.resolvedStatus, item.resolvedLatency);
+                    nextBuckets[finalBucket] = nextBuckets[finalBucket] + 1;
+                    return {
+                      seqIndex: baseSeq + offset,
+                      blockId: item.idx,
+                      lba: item.targetBlockLba,
+                      latencyMs: item.resolvedLatency,
+                      throughputMbSec: item.throughputMbSec,
+                      status: item.resolvedStatus,
+                      passSide: item.passSide
+                    };
+                  });
+                  const lastItem = resolvedItems[resolvedItems.length - 1];
+                  return {
+                    ...t,
+                    blocks: nextBlocks,
+                    buckets: nextBuckets,
+                    lbaTrace: [...t.lbaTrace, ...appendedTrace],
+                    completedSteps: t.completedSteps + resolvedItems.length,
+                    currentBlockIndex: lastItem.idx,
+                    currentLba: lastItem.targetBlockLba,
+                    speedMbPerSec: lastItem.throughputMbSec > 0 ? lastItem.throughputMbSec : t.speedMbPerSec
+                  };
+                })
+              );
+            }
           } finally {
             inFlightDrivesRef.current.delete(task.driveId);
           }
@@ -1111,10 +1272,17 @@ export default function App() {
 
   // Task & Scan Controls
   const createAndEnqueueTask = useCallback(
-    (startImmediately = true, forcedTestType?: SurfaceTestType) => {
-      const targetDrive = activeDriveRef.current;
+    (
+      startImmediately = true,
+      forcedTestType?: SurfaceTestType,
+      options?: { overrideDriveId?: string; overrideScanMode?: 'quick' | 'full' }
+    ) => {
+      const targetDrive = options?.overrideDriveId
+        ? drivesRef.current.find(d => d.id === options.overrideDriveId)
+        : activeDriveRef.current;
       if (!targetDrive) return;
       const testTypeToRun = forcedTestType || selectedTestType;
+      const modeToRun = options?.overrideScanMode || scanMode;
 
       if (testTypeToRun === 'erase') {
         const guard = isSafeEraseTarget(targetDrive);
@@ -1142,7 +1310,7 @@ export default function App() {
       const startBlock = Math.floor((clampedStartPct / 100) * (totalB - 1));
       const endBlock = Math.max(startBlock, Math.floor((clampedEndPct / 100) * (totalB - 1)));
 
-      const stepSequence = buildScanBlockSequence(totalB, startBlock, endBlock, scanMode, testTypeToRun);
+      const stepSequence = buildScanBlockSequence(totalB, startBlock, endBlock, modeToRun, testTypeToRun);
       const safeGuard = testTypeToRun === 'erase' ? isSafeEraseTarget(targetDrive) : undefined;
 
       const driveBusy = tasksRef.current.some(t => t.driveId === targetDrive.id && t.status === 'running');
@@ -1155,8 +1323,8 @@ export default function App() {
         driveModel: targetDrive.model,
         driveType: targetDrive.type,
         testType: testTypeToRun,
-        scanMode,
-        methodId: selectedMethodId,
+        scanMode: modeToRun,
+        methodId: options?.overrideDriveId ? getDefaultMethodForDrive(targetDrive) : selectedMethodId,
         status: initialStatus,
         startBlock,
         endBlock,
@@ -1174,12 +1342,100 @@ export default function App() {
         createdAt: Date.now()
       };
 
-      emittedDegradationKeysRef.current.clear();
-      setActiveBucketFilter(null);
+      if (!options?.overrideDriveId || options.overrideDriveId === activeDriveRef.current?.id) {
+        emittedDegradationKeysRef.current.clear();
+        setActiveBucketFilter(null);
+        setActiveTaskId(newTask.id);
+      }
       setTasks(prev => [newTask, ...prev]);
-      setActiveTaskId(newTask.id);
     },
     [selectedTestType, rangeStartPct, rangeEndPct, scanMode, selectedMethodId, scanSpeedMultiplier]
+  );
+
+  // Background Anomaly Watchdog Evaluation & Scheduled Quick Scan Dispatcher
+  const runWatchdogEvaluation = useCallback(() => {
+    const currentDrives = drivesRef.current;
+    if (currentDrives.length === 0) return;
+
+    const evalRes = evaluateWatchdogRules(
+      currentDrives,
+      watchdogRulesRef.current,
+      watchdogBaselinesRef.current,
+      Date.now()
+    );
+
+    if (evalRes.baselinesChanged) {
+      setWatchdogBaselines(evalRes.updatedBaselines);
+      saveWatchdogBaselines(evalRes.updatedBaselines);
+    }
+
+    if (evalRes.rulesChanged) {
+      setWatchdogRules(evalRes.updatedRules);
+      saveWatchdogRules(evalRes.updatedRules);
+    }
+
+    if (evalRes.triggeredEvents.length > 0) {
+      setWatchdogEvents(prev => {
+        const next = [...evalRes.triggeredEvents, ...prev].slice(0, 100);
+        saveWatchdogEvents(next);
+        return next;
+      });
+
+      const alertLogs: ErrorLogItem[] = evalRes.triggeredEvents.map(ev => ({
+        id: `log-${ev.id}`,
+        timestamp: new Date(ev.triggeredAt).toLocaleTimeString('ko-KR', { hour12: false }),
+        blockIndex: 0,
+        lba: 0,
+        status: ev.severity === 'critical' ? 'critical' : 'slow',
+        latencyMs: 0,
+        errorCode: `WATCHDOG_${ev.metric.toUpperCase()}`,
+        description: ev.message,
+        methodContext: `Watchdog (${ev.ruleName})`
+      }));
+      setErrorLogs(prev => [...alertLogs, ...prev]);
+
+      const hasCritical = evalRes.triggeredEvents.some(e => e.severity === 'critical');
+      if (hasCritical) {
+        soundManager.playWarningTone();
+      }
+
+      const first = evalRes.triggeredEvents[0];
+      dispatchNotification(`🛡️ 가디언 워치독: ${first.ruleName}`, first.message);
+    }
+
+    for (const targetDriveId of evalRes.quickScanTargetDriveIds) {
+      createAndEnqueueTask(true, 'verify', {
+        overrideDriveId: targetDriveId,
+        overrideScanMode: 'quick'
+      });
+    }
+  }, [createAndEnqueueTask, dispatchNotification]);
+
+  const hasDrivesForWatchdog = drives.length > 0;
+  useEffect(() => {
+    if (!hasDrivesForWatchdog) return;
+    runWatchdogEvaluation();
+    const interval = setInterval(runWatchdogEvaluation, 60_000);
+    return () => clearInterval(interval);
+  }, [hasDrivesForWatchdog, runWatchdogEvaluation]);
+
+  const handleBenchmarkComplete = useCallback(
+    (driveId: string, specsPatch: Partial<DiskHardwareSpecs>) => {
+      setDrives(prev =>
+        prev.map(d =>
+          d.id === driveId && d.hardwareSpecs
+            ? {
+                ...d,
+                hardwareSpecs: {
+                  ...d.hardwareSpecs,
+                  ...specsPatch
+                }
+              }
+            : d
+        )
+      );
+    },
+    []
   );
 
   const handlePauseTask = useCallback((taskId: string) => {
@@ -1241,8 +1497,21 @@ export default function App() {
   };
 
   const handleResetScan = () => {
-    if (activeTask && (activeTask.status === 'running' || activeTask.status === 'paused')) {
+    const driveIdToReset = activeDrive?.id;
+    const taskToResetId = activeTask?.id;
+    if (activeTask && (activeTask.status === 'running' || activeTask.status === 'paused' || activeTask.status === 'queued')) {
       handleStopTask(activeTask.id);
+    }
+    if (driveIdToReset) {
+      setTasks(prev =>
+        prev.filter(
+          t =>
+            !(
+              t.driveId === driveIdToReset &&
+              (t.id === taskToResetId || t.status === 'aborted' || t.status === 'completed' || t.status === 'paused')
+            )
+        )
+      );
     }
     setActiveTaskId(null);
     setActiveBucketFilter(null);
@@ -1303,6 +1572,19 @@ export default function App() {
     }
   };
 
+  const shortcutHandlersRef = useRef({
+    handleStartScan,
+    handlePauseScan,
+    handleResumeScan,
+    handleResetScan
+  });
+  shortcutHandlersRef.current = {
+    handleStartScan,
+    handlePauseScan,
+    handleResumeScan,
+    handleResetScan
+  };
+
   // Native Desktop Keyboard Shortcuts Handler
   useEffect(() => {
     const handleDesktopKeyDown = (e: KeyboardEvent) => {
@@ -1338,11 +1620,11 @@ export default function App() {
         e.preventDefault();
         if (!activeDriveRef.current) return;
         if (scanStatus === 'scanning') {
-          handlePauseScan();
+          shortcutHandlersRef.current.handlePauseScan();
         } else if (scanStatus === 'paused') {
-          handleResumeScan();
+          shortcutHandlersRef.current.handleResumeScan();
         } else {
-          handleStartScan();
+          shortcutHandlersRef.current.handleStartScan();
         }
         return;
       }
@@ -1351,7 +1633,7 @@ export default function App() {
       if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         if (!activeDriveRef.current) return;
-        handleResetScan();
+        shortcutHandlersRef.current.handleResetScan();
         return;
       }
 
@@ -1403,6 +1685,25 @@ export default function App() {
           setIsBitCarvingOpen(true);
         }}
         onOpenHardwareDetails={() => { if (activeDrive) setIsHardwareDetailsOpen(true); }}
+        onOpenFeaturesModal={() => { if (activeDrive) setIsFeaturesModalOpen(true); }}
+        onOpenHexInspector={() => {
+          if (!activeDrive) return;
+          setHexInspectorTargetLba(selectedBlock?.lba ?? 0);
+          setIsHexInspectorOpen(true);
+        }}
+        onOpenBenchmarkProfiler={() => { if (activeDrive) setIsBenchmarkProfilerOpen(true); }}
+        onOpenLbaCloner={() => {
+          if (!activeDrive) return;
+          setLbaClonerRange(selectedBlock ? { startLba: selectedBlock.lba, endLba: selectedBlock.endLba } : null);
+          setIsLbaClonerOpen(true);
+        }}
+        onOpenFileTracer={() => {
+          if (!activeDrive) return;
+          const targetLba = selectedBlock?.lba ?? latestBadLba ?? (blocks.find(b => b.status === 'bad')?.lba) ?? 0;
+          setFileTracerTargetLba(targetLba);
+          setIsFileTracerOpen(true);
+        }}
+        onOpenSanitizeTrim={() => { if (activeDrive) setIsSanitizeTrimOpen(true); }}
         onRescanDrives={handleRescanDrives}
         isRescanning={isRescanningDrives}
         onOpenOptionsModal={() => setIsOptionsModalOpen(true)}
@@ -1457,7 +1758,7 @@ export default function App() {
             <Terminal className="w-4 h-4" />
             <span>오류 & 이벤트 로그</span>
             {badCount > 0 ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-red-600 text-white animate-pulse">
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-red-600 text-white">
                 {badCount} BAD
               </span>
             ) : errorLogs.length > 0 ? (
@@ -1525,32 +1826,21 @@ export default function App() {
         {activeTab !== 'history' && !activeDrive && (
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-7 space-y-5">
             {isInitialProbing ? (
-              <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
+              <div className="py-10 flex flex-col items-center justify-center text-center space-y-2.5">
                 <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin" />
-                <div className="space-y-1">
-                  <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                    Tauri 데스크톱 네이티브 스토리지 엔진 확인 중...
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    시스템 물리 드라이브(<code className="font-mono">\\.\PhysicalDrive0~31</code>) 연결 상태를 조회하고 있습니다.
-                  </p>
+                <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  물리 드라이브 확인 중...
                 </div>
               </div>
             ) : (
               <>
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-amber-600 dark:text-amber-400 font-semibold">
-                      <ShieldAlert className="w-4 h-4 shrink-0" />
-                      <span>Tauri Desktop Native IPC Required</span>
-                    </div>
-                    <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-                      웹 브라우저 단독 실행에서는 물리 디스크를 직접 인식할 수 없습니다
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+                      연결된 물리 디스크 없음
                     </h2>
-                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-3xl leading-relaxed">
-                      정확한 물리 섹터 및 하드웨어 모델 진단을 위해 브라우저 기반 가상/샌드박스 디스크 인식을 제거했습니다.
-                      실제 장착된 내·외장 SSD, HDD, USB 저장장치(<code className="font-mono text-slate-800 dark:text-slate-200">\\.\PhysicalDrive0~31</code>)를
-                      선택해 Verify·Read·Butterfly·Erase 표면검사를 수행하려면 Tauri 데스크톱 앱 또는 관리자 권한 네이티브 브릿지로 실행하세요.
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+                      실제 내·외장 디스크(<code className="font-mono text-slate-800 dark:text-slate-200">\\.\PhysicalDrive0~31</code>) 인식 및 Verify·Read·Butterfly·Erase 검사는 Tauri 데스크톱 앱에서 실행하세요.
                     </p>
                   </div>
 
@@ -1562,7 +1852,7 @@ export default function App() {
                       className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-50"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${bridgeDiagnostics.checking ? 'animate-spin' : ''}`} />
-                      <span>네이티브 엔진 연결 재확인</span>
+                      <span>연결 재확인</span>
                     </button>
                     <button
                       type="button"
@@ -1570,58 +1860,51 @@ export default function App() {
                       className="px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                     >
                       <Layers className="w-3.5 h-3.5" />
-                      <span>32채널 진단 슬롯 보기</span>
+                      <span>장치 슬롯 보기</span>
                     </button>
                   </div>
                 </div>
 
                 {/* Live Runtime Connection Diagnostic Strip */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 border border-slate-200 dark:border-slate-800 rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-slate-200 dark:divide-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
-                  <div className="p-3.5 space-y-1">
+                  <div className="p-3 space-y-0.5">
                     <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Tauri 데스크톱 IPC</div>
                     <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                      {bridgeDiagnostics.tauriAvailable ? '연결됨 (__TAURI__)' : '미감지 (웹 브라우저)'}
+                      {bridgeDiagnostics.tauriAvailable ? '연결됨' : '미감지'}
                     </div>
                   </div>
-                  <div className="p-3.5 space-y-1">
-                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">로컬 Win32 브릿지 (127.0.0.1)</div>
+                  <div className="p-3 space-y-0.5">
+                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">로컬 Win32 브릿지</div>
                     <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                      {bridgeDiagnostics.bridgeReachable ? '응답 확인됨' : '미연결'}
+                      {bridgeDiagnostics.bridgeReachable ? '연결됨' : '미연결'}
                     </div>
                   </div>
-                  <div className="p-3.5 space-y-1">
-                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">마지막 연결 확인</div>
+                  <div className="p-3 space-y-0.5">
+                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">확인 시각</div>
                     <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
                       {bridgeDiagnostics.checkedAt
                         ? new Date(bridgeDiagnostics.checkedAt).toLocaleTimeString('ko-KR', { hour12: false })
-                        : '확인 중'}
+                        : '-'}
                     </div>
                   </div>
                 </div>
 
-                {/* 2-Step Native Desktop & Bridge Launch Instructions */}
+                {/* Concise Native Launch Instructions */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                  <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1.5">
-                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
-                      <span className="font-mono text-indigo-600 dark:text-indigo-400">01</span>
-                      <span>설치형 Tauri 데스크톱 앱 실행 (권장)</span>
+                  <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1">
+                    <div className="font-bold text-slate-900 dark:text-slate-100">
+                      1. Tauri 데스크톱 앱 실행
                     </div>
-                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                      Windows용 <code className="font-mono font-semibold text-slate-800 dark:text-slate-200">DiskBadSectorScanner.exe</code>를
-                      <strong className="text-slate-800 dark:text-slate-200"> 관리자 권한</strong>으로 실행하면 Rust Win32 IOCTL 엔진이
-                      <code className="font-mono"> PhysicalDrive0~31</code>과 S.M.A.R.T.·NVMe 센서를 즉시 로드합니다.
+                    <p className="text-slate-600 dark:text-slate-400">
+                      <code className="font-mono font-semibold text-slate-800 dark:text-slate-200">DiskBadSectorScanner.exe</code>를 관리자 권한으로 실행하세요.
                     </p>
                   </div>
 
-                  <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1.5">
-                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
-                      <span className="font-mono text-indigo-600 dark:text-indigo-400">02</span>
-                      <span>개발 환경에서 로컬 Tauri 브릿지 실행</span>
+                  <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1">
+                    <div className="font-bold text-slate-900 dark:text-slate-100">
+                      2. 개발 환경 실행
                     </div>
-                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                      소스 환경에서 직접 테스트할 경우 터미널에서 아래 명령으로 Tauri 데스크톱 컨테이너를 시작한 뒤 연결을 재확인하세요.
-                    </p>
-                    <pre className="mt-1 px-2.5 py-1.5 rounded bg-slate-900 text-slate-100 font-mono text-[11px] overflow-x-auto">
+                    <pre className="px-2.5 py-1.5 rounded bg-slate-900 text-slate-100 font-mono text-[11px] overflow-x-auto">
                       npm run tauri:dev
                     </pre>
                   </div>
@@ -1630,14 +1913,14 @@ export default function App() {
                 {scanRecords.length > 0 && (
                   <div className="pt-2 flex items-center justify-between border-t border-slate-200 dark:border-slate-800 text-xs">
                     <span className="text-slate-500 dark:text-slate-400">
-                      이전 데스크톱 진단 세션에서 저장된 검사 기록 <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">{scanRecords.length}건</strong>이 있습니다.
+                      저장된 검사 기록 <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">{scanRecords.length}건</strong>
                     </span>
                     <button
                       type="button"
                       onClick={() => setActiveTab('history')}
                       className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
                     >
-                      <span>저장된 검사 기록 보기</span>
+                      <span>기록 보기</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1658,7 +1941,7 @@ export default function App() {
                   <div className="flex items-center gap-1.5">
                     <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" />
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
-                      표면 검사 구성 (Surface Test)
+                      표면 검사
                     </span>
                   </div>
                   <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
@@ -1811,6 +2094,63 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Quick Scan Toggle (Every 10th Block Sampling) */}
+                {(() => {
+                  const isQuick = scanMode === 'quick';
+                  const clampedStartPct = Math.max(0, Math.min(95, rangeStartPct));
+                  const clampedEndPct = Math.max(clampedStartPct + 1, Math.min(100, rangeEndPct));
+                  const startB = Math.floor((clampedStartPct / 100) * (TOTAL_SCAN_BLOCKS - 1));
+                  const endB = Math.max(startB, Math.floor((clampedEndPct / 100) * (TOTAL_SCAN_BLOCKS - 1)));
+                  const rangeBlockTotal = endB - startB + 1;
+                  const targetBlockCount = isQuick
+                    ? Math.floor((endB - startB) / 10) + 1
+                    : rangeBlockTotal;
+
+                  return (
+                    <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isQuick}
+                        aria-label="Quick Scan 토글 (매 10번째 블록 샘플링)"
+                        onClick={() => setScanMode(prev => (prev === 'quick' ? 'full' : 'quick'))}
+                        className={`w-full px-2.5 py-2 rounded border text-left transition-colors cursor-pointer flex items-center justify-between gap-2 ${
+                          isQuick
+                            ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/45'
+                            : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <Zap className={`w-3.5 h-3.5 shrink-0 ${isQuick ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`} />
+                            <span className={`text-[11px] font-bold ${isQuick ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-800 dark:text-slate-200'}`}>
+                              Quick Scan
+                            </span>
+                          </div>
+                          <div className="text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400 truncate">
+                            {isQuick
+                              ? `10블록 간격 (${targetBlockCount.toLocaleString()} / ${rangeBlockTotal.toLocaleString()})`
+                              : `전체 블록 (${rangeBlockTotal.toLocaleString()})`}
+                          </div>
+                        </div>
+
+                        <span
+                          aria-hidden="true"
+                          className={`relative inline-flex h-4 w-8 shrink-0 items-center rounded-full transition-colors ${
+                            isQuick ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-xs transition-transform ${
+                              isQuick ? 'translate-x-4.5' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {/* Safe Erase Guard Callout */}
                 {selectedTestType === 'erase' && (() => {
                   const guard = isSafeEraseTarget(activeDrive);
@@ -1823,7 +2163,7 @@ export default function App() {
                       }`}
                     >
                       <div className="font-bold flex items-center justify-between gap-1">
-                        <span>{guard.allowed ? '비시스템 물리 드라이브 쓰기 검증 허용됨' : 'OS 시스템 디스크 Erase 보호 가드'}</span>
+                        <span>{guard.allowed ? '쓰기 검증 가능' : '시스템 디스크 Erase 차단'}</span>
                         <span className="font-mono text-[9px] truncate max-w-[130px]">{guard.targetLabel}</span>
                       </div>
                       {!guard.allowed && (
@@ -1927,15 +2267,15 @@ export default function App() {
               <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md text-[11px]">
                 <div className="flex items-center gap-2 font-mono text-slate-600 dark:text-slate-300">
                   <span className="font-bold text-slate-800 dark:text-slate-100">
-                    TEST: {activeTask ? activeTask.testType.toUpperCase() : selectedTestType.toUpperCase()}
+                    {activeTask ? activeTask.testType.toUpperCase() : selectedTestType.toUpperCase()}
                   </span>
-                  <span className="text-slate-300 dark:text-slate-700">|</span>
-                  <span>범위: {rangeStartPct}% ~ {rangeEndPct}%</span>
+                  <span className="text-slate-300 dark:text-slate-700">·</span>
+                  <span>{rangeStartPct}~{rangeEndPct}%</span>
                   {activeBucketFilter && (
                     <>
-                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <span className="text-slate-300 dark:text-slate-700">·</span>
                       <span className="text-indigo-600 dark:text-indigo-400 font-bold">
-                        포커스 버킷: {activeBucketFilter}
+                        {activeBucketFilter}
                       </span>
                     </>
                   )}
@@ -1987,6 +2327,18 @@ export default function App() {
                     setBitCarvingTargetLba(lba);
                     setIsBitCarvingOpen(true);
                   }}
+                  onOpenHexInspector={lba => {
+                    setHexInspectorTargetLba(lba);
+                    setIsHexInspectorOpen(true);
+                  }}
+                  onTraceLbaFile={lba => {
+                    setFileTracerTargetLba(lba);
+                    setIsFileTracerOpen(true);
+                  }}
+                  onCloneLbaRange={range => {
+                    setLbaClonerRange(range);
+                    setIsLbaClonerOpen(true);
+                  }}
                 />
               )}
 
@@ -2006,7 +2358,7 @@ export default function App() {
               {/* Quick Summary Strip & Link to Error Logs */}
               <div className="p-2.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <div className="flex items-center gap-2 flex-wrap font-mono tabular-nums">
-                  <span className="font-sans font-semibold text-slate-700 dark:text-slate-300">실시간 검출 요약:</span>
+                  <span className="font-sans font-semibold text-slate-700 dark:text-slate-300">요약:</span>
                   <span className={`font-bold ${badCount > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                     {badCount} BAD
                   </span>
@@ -2019,7 +2371,7 @@ export default function App() {
                   onClick={() => setActiveTab('logs')}
                   className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 cursor-pointer transition-colors"
                 >
-                  <span>상세 오류 및 시스템 로그 확인하기</span>
+                  <span>오류 로그 보기</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -2038,6 +2390,10 @@ export default function App() {
                 if (found) setSelectedBlock(found);
                 setActiveTab('scan');
               }}
+              onTraceLogLba={(lba) => {
+                setFileTracerTargetLba(lba);
+                setIsFileTracerOpen(true);
+              }}
             />
 
             {/* Action Card when errors exist */}
@@ -2045,11 +2401,11 @@ export default function App() {
               <div className="p-4 rounded-xl bg-gradient-to-r from-red-950/40 via-slate-900 to-slate-900 border border-red-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                 <div className="space-y-1">
                   <div className="font-bold text-red-400 flex items-center gap-1.5">
-                    <ShieldAlert className="w-4 h-4 text-red-500 animate-pulse" />
-                    <span>배드섹터 {badCount}개에 대한 즉각 조치가 준비되어 있습니다</span>
+                    <ShieldAlert className="w-4 h-4 text-red-500" />
+                    <span>배드섹터 {badCount}개 검출</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    S.M.A.R.T. 제로필(Zero-Fill)로 논리 배드를 수복하거나, 휴리스틱 비트 카빙으로 손상된 섹터의 파일 헤더를 복구할 수 있습니다.
+                    제로필 수복 또는 비트 카빙 복구를 실행할 수 있습니다.
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -2109,17 +2465,25 @@ export default function App() {
               drive={activeDrive}
               telemetry={telemetry}
               calculatedHealth={calculatedHealth}
+              scanRecords={scanRecords}
+              onStartScan={() => {
+                setActiveTab('scan');
+                handleStartScan();
+              }}
               onRefreshSmart={() => {
                 void handleRescanDrives();
+                setSmartLogRefreshSignal(prev => prev + 1);
               }}
               onOpenVendorModal={() => setIsVendorModalOpen(true)}
               onOpenRemapModal={() => setIsSmartRemapOpen(true)}
               onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
+              onOpenFeaturesModal={() => setIsFeaturesModalOpen(true)}
               viewMode="smart_only"
               isTauriRuntime={isTauriRuntime}
               smartSelfTestState={smartSelfTestByDrive[activeDrive.id] || null}
               onRunSmartSelfTest={type => void handleRunSmartSelfTest(type)}
               onPollSmartSelfTest={() => void handlePollSmartSelfTest(activeDrive.id)}
+              smartLogRefreshSignal={smartLogRefreshSignal}
             />
           </div>
         )}
@@ -2144,6 +2508,7 @@ export default function App() {
         )}
       </main>
 
+      <Suspense fallback={null}>
       {/* Comprehensive Diagnostic Report Modal */}
       {activeReportRecord && (
         <ReportModal
@@ -2280,6 +2645,11 @@ export default function App() {
           highestTemp={currentTemp}
           hasBadSector={badCount > 0}
           onTriggerNotification={dispatchNotification}
+          watchdogRules={watchdogRules}
+          onUpdateWatchdogRules={handleUpdateWatchdogRules}
+          watchdogEvents={watchdogEvents}
+          onClearWatchdogEvents={handleClearWatchdogEvents}
+          onRunWatchdogNow={runWatchdogEvaluation}
         />
       )}
 
@@ -2301,11 +2671,92 @@ export default function App() {
           onClose={() => setIsHardwareDetailsOpen(false)}
           drive={activeDrive}
           onRescanHardware={handleRescanDrives}
+          onOpenBenchmarkProfiler={() => setIsBenchmarkProfilerOpen(true)}
+          onOpenHexInspector={(lba = 0) => {
+            setHexInspectorTargetLba(lba);
+            setIsHexInspectorOpen(true);
+          }}
+        />
+      )}
+
+      {/* ATA / NVMe Hardware Features Control Modal (AAM, APM, Standby, Cache) */}
+      {isFeaturesModalOpen && activeDrive && (
+        <DriveFeaturesModal
+          isOpen={isFeaturesModalOpen}
+          onClose={() => setIsFeaturesModalOpen(false)}
+          drive={activeDrive}
+          onOpenSanitizeTrim={() => setIsSanitizeTrimOpen(true)}
+        />
+      )}
+
+      {/* Read-Only Raw Sector Hex Viewer & MBR/GPT Partition Table Modal */}
+      {isHexInspectorOpen && activeDrive && (
+        <SectorHexPartitionModal
+          isOpen={isHexInspectorOpen}
+          onClose={() => setIsHexInspectorOpen(false)}
+          drive={activeDrive}
+          initialLba={hexInspectorTargetLba}
+        />
+      )}
+
+      {/* Live LBA I/O Zone Benchmark & 4K IOPS Profiler Modal */}
+      {isBenchmarkProfilerOpen && activeDrive && (
+        <DiskBenchmarkProfilerModal
+          isOpen={isBenchmarkProfilerOpen}
+          onClose={() => setIsBenchmarkProfilerOpen(false)}
+          drive={activeDrive}
+          onBenchmarkComplete={handleBenchmarkComplete}
+        />
+      )}
+
+      {/* ddrescue-style Multi-Pass LBA Image Cloner & Bad Sector Recovery Modal */}
+      {isLbaClonerOpen && activeDrive && (
+        <LbaImageClonerModal
+          isOpen={isLbaClonerOpen}
+          onClose={() => setIsLbaClonerOpen(false)}
+          drive={activeDrive}
+          initialRange={lbaClonerRange}
+        />
+      )}
+
+      {/* Damaged LBA Affected File Tracer (NTFS MFT / FAT32 / exFAT) Modal */}
+      {isFileTracerOpen && activeDrive && (
+        <LbaFileTracerModal
+          isOpen={isFileTracerOpen}
+          onClose={() => setIsFileTracerOpen(false)}
+          drive={activeDrive}
+          initialLba={fileTracerTargetLba}
+          sectorBlocks={blocks}
+          errorLogs={errorLogs}
+          badLbaHistory={scanRecords
+            .filter(r => r.driveId === activeDrive.id)
+            .flatMap(r => r.badLbaList || [])}
+          onOpenHexInspector={(lba) => {
+            setIsFileTracerOpen(false);
+            setHexInspectorTargetLba(lba);
+            setIsHexInspectorOpen(true);
+          }}
+          onOpenLbaCloner={(range) => {
+            setIsFileTracerOpen(false);
+            setLbaClonerRange(range);
+            setIsLbaClonerOpen(true);
+          }}
+          onRepairSectors={handleRepairSectors}
+        />
+      )}
+
+      {/* NVMe/ATA Secure Erase (Sanitize/Format) & SSD TRIM Center Modal */}
+      {isSanitizeTrimOpen && activeDrive && (
+        <SanitizeTrimModal
+          isOpen={isSanitizeTrimOpen}
+          onClose={() => setIsSanitizeTrimOpen(false)}
+          drive={activeDrive}
+          onRefreshHardware={handleRescanDrives}
         />
       )}
 
       {/* S.M.A.R.T. Sector Remapping & Zero-Fill Repair Center Modal (Root level so accessible from all tabs) */}
-      {activeDrive && (
+      {isSmartRemapOpen && activeDrive && (
         <SmartRemapModal
           isOpen={isSmartRemapOpen}
           onClose={() => setIsSmartRemapOpen(false)}
@@ -2349,114 +2800,66 @@ export default function App() {
           onOpenAboutModal={() => setIsAboutModalOpen(true)}
         />
       )}
+      </Suspense>
 
 
-      {/* High Density Footer with Creator & Official Channels */}
-      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-2.5 bg-slate-100/60 dark:bg-slate-900/60 text-xs text-slate-500 dark:text-slate-400">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-2">
-          
-          {/* Left: App & Version Specs */}
-          <div className="flex items-center gap-2 text-center md:text-left">
-            <span className="font-mono text-[11px] font-medium text-slate-700 dark:text-slate-300">
-              {PROJECT_INFO.appName} {PROJECT_INFO.version}
-            </span>
-            <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">•</span>
-            <span className="font-mono text-[10px] text-slate-500">
-              Node.js 22 LTS / 24 Compliant Release
-            </span>
-          </div>
+      {/* Compact Footer */}
+      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-2 bg-slate-100/60 dark:bg-slate-900/60 text-xs text-slate-500 dark:text-slate-400">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <span className="font-mono text-[11px] font-medium text-slate-700 dark:text-slate-300">
+            {PROJECT_INFO.appName} v{PROJECT_INFO.version}
+          </span>
 
-          {/* Center: Official Channel Badges */}
           <div className="flex flex-wrap items-center justify-center gap-3 text-[11px]">
             <a
               href={PROJECT_INFO.developer.githubProfileUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-mono transition-colors"
-              title="GitHub: AhBiYout-all"
             >
               <Github className="w-3.5 h-3.5" />
               <span>{PROJECT_INFO.developer.githubUsername}</span>
             </a>
-
             <a
               href={PROJECT_INFO.developer.blogUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-amber-500 dark:hover:text-amber-400 font-mono transition-colors"
-              title="Official Google Blog: ahbiyoutvibe.blogspot.com"
             >
               <BookOpen className="w-3.5 h-3.5 text-amber-500" />
-              <span>Google Blog</span>
+              <span>Blog</span>
             </a>
-
             <a
               href={PROJECT_INFO.developer.affiliation.url}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-cyan-500 dark:hover:text-cyan-400 font-mono transition-colors"
-              title="Affiliation: cisnet.co.kr"
             >
               <Building2 className="w-3.5 h-3.5 text-cyan-500" />
               <span>CISNet</span>
             </a>
           </div>
 
-          {/* Right: Trigger Update Check, DLL Docs, External Diagnostics */}
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { if (activeDrive) setIsHardwareDetailsOpen(true); }}
-              disabled={!activeDrive}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              title="디스크 장치 상세 스펙 및 하드웨어 텔레메트리"
-            >
-              <Cpu className="w-3 h-3 text-indigo-500" />
-              <span>장치 스펙</span>
-            </button>
-            <button
-              onClick={() => { if (activeDrive) setIsVendorModalOpen(true); }}
-              disabled={!activeDrive}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-50/40 dark:bg-blue-950/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              title="제조사 및 내/외부 매체 특성 진단 센터"
-            >
-              <Cpu className="w-3 h-3 text-blue-500" />
-              <span>제조사 특성</span>
-            </button>
-            <button
-              onClick={() => setIsExternalModalOpen(true)}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-50/40 dark:bg-emerald-950/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 font-medium transition-colors"
-              title="외부 저장장치 연결 및 관리"
-            >
-              <Usb className="w-3 h-3 text-emerald-500" />
-              <span>외장 저장장치</span>
-            </button>
-            <button
-              onClick={() => setIsDllDocsOpen(true)}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 font-medium transition-colors"
-            >
-              <Cpu className="w-3 h-3 text-indigo-500" />
-              <span>창작 DLL 명세</span>
-            </button>
-            <button
               onClick={() => checkUpdates(true)}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
             >
               <Sparkles className="w-3 h-3 text-indigo-500" />
-              <span>실시간 업데이트 확인</span>
+              <span>업데이트 확인</span>
             </button>
             <button
               onClick={() => setIsAboutModalOpen(true)}
-              className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+              className="text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
             >
-              채널 안내
+              정보
             </button>
           </div>
-
         </div>
       </footer>
 
-      {/* Native Desktop Status Bar (Classic Professional Utility Style) */}
-      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1 text-[11px] font-mono text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 overflow-x-auto select-none shadow-inner">
+      {/* Bottom Status Bar */}
+      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1 text-[11px] font-mono text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 overflow-x-auto select-none">
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${
@@ -2468,11 +2871,11 @@ export default function App() {
             }`} />
             <span className="font-semibold text-slate-700 dark:text-slate-200 font-sans">
               {
-                !activeDrive ? '네이티브 엔진 대기 (Tauri IPC 미감지)' :
-                scanStatus === 'scanning' ? `검사 진행 중 (${scannedPercentage.toFixed(1)}%)` :
-                scanStatus === 'paused' ? '일시 정지됨' :
-                scanStatus === 'completed' ? '검사 완료 (정상)' :
-                '대기 중 (Ready)'
+                !activeDrive ? 'Tauri IPC 대기' :
+                scanStatus === 'scanning' ? `검사 중 (${scannedPercentage.toFixed(1)}%)` :
+                scanStatus === 'paused' ? '일시 정지' :
+                scanStatus === 'completed' ? '완료' :
+                '대기'
               }
             </span>
           </div>
@@ -2480,33 +2883,26 @@ export default function App() {
           <span className="text-slate-300 dark:text-slate-700">|</span>
           <span className="truncate max-w-[240px]">
             {activeDrive
-              ? `[${activeDrive.mountPoint || 'Physical'}] ${activeDrive.name} (${activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : '용량 N/A'})`
-              : '연결된 물리 디스크 없음'}
+              ? `${activeDrive.name} (${activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : 'N/A'})`
+              : '연결된 디스크 없음'}
           </span>
 
           {activeDrive && (
             <>
               <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
-              <span className="hidden sm:inline">LBA: 0 ~ {(activeDrive.totalSectors || 0).toLocaleString()}</span>
+              <span className="hidden sm:inline">LBA 0~{(activeDrive.totalSectors || 0).toLocaleString()}</span>
             </>
           )}
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
-          <span className="hidden md:inline">
-            I/O 채널:{' '}
-            <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">
-              {activeDrive?.hardwareSpecs?.probeMethod || 'Tauri Desktop Native IPC'}
-            </strong>
+          <span className="hidden md:inline text-emerald-600 dark:text-emerald-400 font-semibold">
+            {activeDrive?.hardwareSpecs?.probeMethod || 'Tauri IPC'}
           </span>
           <span className="text-slate-300 dark:text-slate-700 hidden md:inline">|</span>
           <span>건강: <strong className={calculatedHealth === null ? 'text-slate-400' : calculatedHealth >= 80 ? 'text-emerald-500' : 'text-red-500'}>{calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}</strong></span>
           <span className="text-slate-300 dark:text-slate-700">|</span>
           <span>온도: <strong>{currentTemp !== null ? `${currentTemp.toFixed(0)}°C` : 'N/A'}</strong></span>
-          <span className="text-slate-300 dark:text-slate-700 hidden lg:inline">|</span>
-          <span className="hidden lg:inline text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 font-bold">
-            DESKTOP PC EDITION
-          </span>
         </div>
       </div>
     </div>
@@ -2517,37 +2913,84 @@ export default function App() {
  * Lightweight background component that periodically polls physical hardware 
  * for fresh temperature and S.M.A.R.T. status.
  */
-function BackgroundTelemetryRefresher({ 
-  drives, 
-  onUpdateDrives, 
-  isActive 
-}: { 
-  drives: DiskDrive[], 
-  onUpdateDrives: (d: DiskDrive[]) => void,
-  isActive: boolean 
+function BackgroundTelemetryRefresher({
+  drives,
+  onUpdateDrives,
+  isActive
+}: {
+  drives: DiskDrive[];
+  onUpdateDrives: React.Dispatch<React.SetStateAction<DiskDrive[]>>;
+  isActive: boolean;
 }) {
+  const drivesRef = useRef<DiskDrive[]>(drives);
+  drivesRef.current = drives;
+  const hasDrives = drives.length > 0;
+
   useEffect(() => {
-    if (!isActive || drives.length === 0) return;
+    if (!isActive || !hasDrives) return;
 
     const interval = setInterval(async () => {
       try {
-        const updated = await rescanAllDrives(drives);
-        // Only update if there's an actual change in temperature or health to avoid unnecessary re-renders
-        const hasChanged = updated.some((d, i) => 
-          d.temperatureC !== drives[i]?.temperatureC || 
-          d.healthScore !== drives[i]?.healthScore
-        );
-        
-        if (hasChanged) {
-          onUpdateDrives(updated);
-        }
-      } catch (err) {
+        const snapshot = drivesRef.current;
+        if (snapshot.length === 0) return;
+        const updated = await rescanAllDrives(snapshot);
+        if (updated.length === 0) return;
+
+        onUpdateDrives(prev => {
+          const prevById = new Map<string, DiskDrive>(prev.map(d => [d.id, d] as const));
+          let hasChanged = updated.length !== prev.length;
+
+          const merged = updated.map(nextDrive => {
+            const existing = prevById.get(nextDrive.id);
+            if (!existing) {
+              hasChanged = true;
+              return nextDrive;
+            }
+            const smartSig = (d: DiskDrive) =>
+              d.smartAttributes.map(a => `${a.id}:${a.current}:${a.raw}`).join('|');
+
+            if (
+              existing.temperatureC !== nextDrive.temperatureC ||
+              existing.healthScore !== nextDrive.healthScore ||
+              existing.powerOnHours !== nextDrive.powerOnHours ||
+              smartSig(existing) !== smartSig(nextDrive)
+            ) {
+              hasChanged = true;
+            }
+
+            return {
+              ...nextDrive,
+              hardwareSpecs: nextDrive.hardwareSpecs
+                ? {
+                    ...nextDrive.hardwareSpecs,
+                    currentTempC:
+                      existing.hardwareSpecs?.currentTempC ?? nextDrive.hardwareSpecs.currentTempC,
+                    measuredKernelLatencyUs:
+                      existing.hardwareSpecs?.measuredKernelLatencyUs ??
+                      nextDrive.hardwareSpecs.measuredKernelLatencyUs,
+                    measuredSequentialReadMbSec:
+                      existing.hardwareSpecs?.measuredSequentialReadMbSec ??
+                      nextDrive.hardwareSpecs.measuredSequentialReadMbSec,
+                    measuredSequentialWriteMbSec:
+                      existing.hardwareSpecs?.measuredSequentialWriteMbSec ??
+                      nextDrive.hardwareSpecs.measuredSequentialWriteMbSec,
+                    measuredRandom4kReadIops:
+                      existing.hardwareSpecs?.measuredRandom4kReadIops ??
+                      nextDrive.hardwareSpecs.measuredRandom4kReadIops
+                  }
+                : existing.hardwareSpecs
+            };
+          });
+
+          return hasChanged ? merged : prev;
+        });
+      } catch {
         // Silent background error
       }
     }, 10000); // 10s polling
 
     return () => clearInterval(interval);
-  }, [isActive, drives, onUpdateDrives]);
+  }, [isActive, hasDrives, onUpdateDrives]);
 
   return null;
 }

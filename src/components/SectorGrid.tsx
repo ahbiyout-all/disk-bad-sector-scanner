@@ -17,7 +17,9 @@ import {
   Navigation,
   Sparkles,
   RotateCcw,
-  Binary
+  Binary,
+  FileSearch,
+  HardDriveDownload
 } from 'lucide-react';
 
 interface SectorGridProps {
@@ -26,16 +28,113 @@ interface SectorGridProps {
   onSelectBlock?: (block: SectorBlock) => void;
   selectedBlock?: SectorBlock | null;
   onTriggerBitCarving?: (lba: number) => void;
+  onOpenHexInspector?: (lba: number) => void;
+  onTraceLbaFile?: (lba: number) => void;
+  onCloneLbaRange?: (range: { startLba: number; endLba: number }) => void;
 }
 
 export type ZoomLevel = 1 | 2 | 4 | 8;
 
-export const SectorGrid: React.FC<SectorGridProps> = ({
+const SectorTile = React.memo<{
+  block: SectorBlock;
+  isActive: boolean;
+  isSelected: boolean;
+  zoomLevel: ZoomLevel;
+  highlightFilter: 'all' | 'bad' | 'slow';
+  onHoverBlock: (block: SectorBlock | null) => void;
+  onSelectBlock?: (block: SectorBlock) => void;
+}>(({
+  block,
+  isActive,
+  isSelected,
+  zoomLevel,
+  highlightFilter,
+  onHoverBlock,
+  onSelectBlock
+}) => {
+  let opacity = 'opacity-100';
+  if (highlightFilter === 'bad' && block.status !== 'bad') {
+    opacity = 'opacity-10';
+  } else if (highlightFilter === 'slow' && block.status !== 'slow' && block.status !== 'critical' && block.status !== 'bad') {
+    opacity = 'opacity-10';
+  }
+
+  let colorClass = 'bg-slate-800/80 border-slate-700/40';
+  if (block.status === 'good') {
+    colorClass = 'bg-emerald-500/75 hover:bg-emerald-400 border-emerald-500/40 text-emerald-100';
+  } else if (block.status === 'normal') {
+    colorClass = 'bg-lime-500/75 hover:bg-lime-400 border-lime-500/40 text-lime-100';
+  } else if (block.status === 'slow') {
+    colorClass = 'bg-amber-500/85 hover:bg-amber-400 border-amber-500/40 text-amber-100';
+  } else if (block.status === 'critical') {
+    colorClass = 'bg-orange-500 hover:bg-orange-400 border-orange-500/50 text-orange-100';
+  } else if (block.status === 'bad') {
+    colorClass = 'bg-red-500 hover:bg-red-400 border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.6)] animate-pulse text-white';
+  }
+
+  if (isActive) {
+    colorClass = 'bg-indigo-500 border-indigo-300 ring-2 ring-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.8)] z-10 text-white';
+  }
+
+  if (isSelected) {
+    colorClass += ' ring-2 ring-white ring-offset-2 ring-offset-slate-950 z-20';
+  }
+
+  if (zoomLevel >= 4) {
+    return (
+      <div
+        onMouseEnter={() => onHoverBlock(block)}
+        onMouseLeave={() => onHoverBlock(null)}
+        onClick={() => onSelectBlock && onSelectBlock(block)}
+        className={`rounded-md cursor-pointer transition-all duration-75 border p-1 sm:p-1.5 flex flex-col justify-between ${colorClass} ${opacity} hover:ring-2 hover:ring-white`}
+        title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()} ~ ${block.endLba.toLocaleString()}) - ${block.status.toUpperCase()}`}
+      >
+        <div className="flex items-center justify-between font-mono text-[9px] sm:text-[10px] leading-tight">
+          <span className="font-bold truncate opacity-90">#{block.id}</span>
+          {block.status === 'bad' ? (
+            <span className="font-extrabold text-[8px] bg-red-950/80 px-1 py-0.2 rounded border border-red-400/50">
+              BAD
+            </span>
+          ) : (
+            <span className="opacity-80 text-[8px]">
+              {block.responseTimeMs > 0 ? `${block.responseTimeMs.toFixed(0)}ms` : '--'}
+            </span>
+          )}
+        </div>
+
+        {zoomLevel === 8 && (
+          <div className="my-0.5 font-mono text-[8px] leading-none opacity-85 truncate">
+            LBA {(block.lba / 1000000).toFixed(1)}M
+          </div>
+        )}
+
+        <div className="text-[8px] sm:text-[9px] font-mono truncate font-semibold uppercase opacity-95">
+          {block.status}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onMouseEnter={() => onHoverBlock(block)}
+      onMouseLeave={() => onHoverBlock(null)}
+      onClick={() => onSelectBlock && onSelectBlock(block)}
+      className={`aspect-square rounded-xs cursor-pointer transition-all duration-75 border ${colorClass} ${opacity} hover:ring-1 hover:ring-white`}
+      title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()}) - ${block.status.toUpperCase()} ${block.responseTimeMs > 0 ? `(${block.responseTimeMs}ms)` : ''}`}
+    />
+  );
+});
+
+export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
   blocks,
   activeBlockIndex,
   onSelectBlock,
   selectedBlock,
   onTriggerBitCarving,
+  onOpenHexInspector,
+  onTraceLbaFile,
+  onCloneLbaRange,
 }) => {
   const [hoveredBlock, setHoveredBlock] = useState<SectorBlock | null>(null);
   const [highlightFilter, setHighlightFilter] = useState<'all' | 'bad' | 'slow'>('all');
@@ -45,14 +144,27 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
 
   const inspectedBlock = hoveredBlock || selectedBlock;
 
-  // Bad sectors list for quick navigation
-  const badBlocks = useMemo(() => {
-    return blocks.filter(b => b.status === 'bad');
+  const handleHoverBlock = React.useCallback((block: SectorBlock | null) => {
+    setHoveredBlock(block);
+  }, []);
+
+  // O(1) lookup table + single-pass badEntries extraction
+  const { blockIndexById, badEntries } = useMemo(() => {
+    const idMap = new Map<number, number>();
+    const bads: Array<{ block: SectorBlock; index: number }> = [];
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      idMap.set(b.id, i);
+      if (b.status === 'bad') {
+        bads.push({ block: b, index: i });
+      }
+    }
+    return { blockIndexById: idMap, badEntries: bads };
   }, [blocks]);
 
-  // Group bad blocks into localized LBA clusters (within ~25 blocks of each other)
+  // Group sorted bad blocks into localized LBA clusters in a single O(B) pass
   const badClusters = useMemo(() => {
-    if (badBlocks.length === 0) return [];
+    if (badEntries.length === 0) return [];
 
     const clusters: Array<{
       id: number;
@@ -65,15 +177,11 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
       badBlocksList: SectorBlock[];
     }> = [];
 
-    badBlocks.forEach((badBlock) => {
-      const idx = blocks.findIndex(b => b.id === badBlock.id);
-      if (idx === -1) return;
+    for (let i = 0; i < badEntries.length; i++) {
+      const { block: badBlock, index: idx } = badEntries[i];
+      const existing = clusters[clusters.length - 1];
 
-      const existing = clusters.find(
-        c => Math.abs(c.centerIndex - idx) <= 30
-      );
-
-      if (existing) {
+      if (existing && Math.abs(existing.centerIndex - idx) <= 30) {
         existing.badCount++;
         existing.badBlocksList.push(badBlock);
         existing.startIndex = Math.min(existing.startIndex, Math.max(0, idx - 15));
@@ -95,17 +203,17 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
           badBlocksList: [badBlock]
         });
       }
-    });
+    }
 
     return clusters;
-  }, [badBlocks, blocks]);
+  }, [badEntries, blocks]);
 
   const [badSectorNavIdx, setBadSectorNavIdx] = useState<number>(0);
 
   // Jump to specific bad block and automatically zoom into its LBA neighborhood
   const focusOnBlockWithZoom = (targetBlock: SectorBlock, targetZoom: ZoomLevel = 4) => {
-    const idx = blocks.findIndex(b => b.id === targetBlock.id);
-    if (idx !== -1) {
+    const idx = blockIndexById.get(targetBlock.id);
+    if (idx !== undefined) {
       setViewCenterIndex(idx);
       setZoomLevel(targetZoom);
       if (onSelectBlock) {
@@ -115,17 +223,17 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
   };
 
   const handleNextBadSector = () => {
-    if (badBlocks.length === 0) return;
-    const nextIdx = (badSectorNavIdx + 1) % badBlocks.length;
+    if (badEntries.length === 0) return;
+    const nextIdx = (badSectorNavIdx + 1) % badEntries.length;
     setBadSectorNavIdx(nextIdx);
-    focusOnBlockWithZoom(badBlocks[nextIdx], zoomLevel === 1 ? 4 : zoomLevel);
+    focusOnBlockWithZoom(badEntries[nextIdx].block, zoomLevel === 1 ? 4 : zoomLevel);
   };
 
   const handlePrevBadSector = () => {
-    if (badBlocks.length === 0) return;
-    const prevIdx = (badSectorNavIdx - 1 + badBlocks.length) % badBlocks.length;
+    if (badEntries.length === 0) return;
+    const prevIdx = (badSectorNavIdx - 1 + badEntries.length) % badEntries.length;
     setBadSectorNavIdx(prevIdx);
-    focusOnBlockWithZoom(badBlocks[prevIdx], zoomLevel === 1 ? 4 : zoomLevel);
+    focusOnBlockWithZoom(badEntries[prevIdx].block, zoomLevel === 1 ? 4 : zoomLevel);
   };
 
   // Follow active scanning head if enabled
@@ -137,13 +245,13 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
 
   // When external selectedBlock changes (e.g. from ErrorLogStream), center viewport
   useEffect(() => {
-    if (selectedBlock) {
-      const idx = blocks.findIndex(b => b.id === selectedBlock.id);
-      if (idx !== -1 && zoomLevel > 1) {
+    if (selectedBlock && zoomLevel > 1) {
+      const idx = blockIndexById.get(selectedBlock.id);
+      if (idx !== undefined) {
         setViewCenterIndex(idx);
       }
     }
-  }, [selectedBlock, blocks, zoomLevel]);
+  }, [selectedBlock, blockIndexById, zoomLevel]);
 
   // Compute active visible window based on zoom level and viewCenterIndex
   const { visibleBlocks, windowStartIdx, windowEndIdx, windowSize } = useMemo(() => {
@@ -208,7 +316,11 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
 
   // Bad sectors contained in the current zoomed viewport
   const visibleBadCount = useMemo(() => {
-    return visibleBlocks.filter(b => b.status === 'bad').length;
+    let count = 0;
+    for (let i = 0; i < visibleBlocks.length; i++) {
+      if (visibleBlocks[i].status === 'bad') count++;
+    }
+    return count;
   }, [visibleBlocks]);
 
   return (
@@ -232,7 +344,10 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
               </span>
             </h2>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-              총 {blocks.length.toLocaleString()}개 블록 중 {visibleBlocks.length}개 표시 중 · LBA 범위: #{visibleBlocks[0]?.lba.toLocaleString()} ~ #{visibleBlocks[visibleBlocks.length - 1]?.endLba.toLocaleString()}
+              총 {blocks.length.toLocaleString()}개 블록 중 {visibleBlocks.length}개 표시 중
+              {visibleBlocks.length > 0
+                ? ` · LBA 범위: #${visibleBlocks[0].lba.toLocaleString()} ~ #${visibleBlocks[visibleBlocks.length - 1].endLba.toLocaleString()}`
+                : ' · LBA 범위: N/A'}
             </p>
           </div>
         </div>
@@ -262,11 +377,11 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
           </div>
 
           {/* Quick Bad Sector Focus Button */}
-          {badBlocks.length > 0 && (
+          {badEntries.length > 0 && (
             <div className="flex items-center gap-1 bg-red-950/30 border border-red-500/40 rounded-lg px-2 py-1 text-red-400">
               <ShieldAlert className="w-3.5 h-3.5 text-red-500 shrink-0" />
               <span className="text-[11px] font-mono font-bold">
-                배드 #{badSectorNavIdx + 1}/{badBlocks.length}
+                배드 #{badSectorNavIdx + 1}/{badEntries.length}
               </span>
               <div className="flex items-center gap-0.5 ml-1">
                 <button
@@ -369,7 +484,7 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
               <span>전체 디스크 LBA 네비게이터 (미니맵 클릭 시 해당 영역으로 확대 이동)</span>
             </div>
             <span>
-              현재 뷰포트: #{windowStartIdx + 1} ~ #{windowEndIdx + 1} ({((visibleBlocks.length / blocks.length) * 100).toFixed(0)}% 영역)
+              현재 뷰포트: {blocks.length > 0 ? `#${windowStartIdx + 1} ~ #${windowEndIdx + 1} (${((visibleBlocks.length / Math.max(1, blocks.length)) * 100).toFixed(0)}% 영역)` : '0개 블록 (0%)'}
             </span>
           </div>
 
@@ -382,14 +497,12 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
             {/* Scanned Progress Fill */}
             <div 
               className="absolute top-0 bottom-0 left-0 bg-indigo-500/20"
-              style={{ width: `${Math.min(100, (activeBlockIndex / blocks.length) * 100)}%` }}
+              style={{ width: `${blocks.length > 0 ? Math.min(100, (activeBlockIndex / Math.max(1, blocks.length)) * 100) : 0}%` }}
             />
 
             {/* Individual Bad Sector Red Indicator Dots on Mini-Map */}
-            {badBlocks.map((b) => {
-              const bIdx = blocks.findIndex(item => item.id === b.id);
-              if (bIdx === -1) return null;
-              const leftPct = (bIdx / blocks.length) * 100;
+            {badEntries.map(({ block: b, index: bIdx }) => {
+              const leftPct = (bIdx / Math.max(1, blocks.length)) * 100;
               return (
                 <div
                   key={`minimap-bad-${b.id}`}
@@ -403,7 +516,7 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
             {activeBlockIndex >= 0 && activeBlockIndex < blocks.length && (
               <div
                 className="absolute top-0 bottom-0 w-1 bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,1)] z-20 animate-pulse"
-                style={{ left: `${(activeBlockIndex / blocks.length) * 100}%` }}
+                style={{ left: `${(activeBlockIndex / Math.max(1, blocks.length)) * 100}%` }}
               />
             )}
 
@@ -415,8 +528,8 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
                   : 'border-slate-400/40 bg-transparent'
               }`}
               style={{
-                left: `${(windowStartIdx / blocks.length) * 100}%`,
-                width: `${Math.max(2, (visibleBlocks.length / blocks.length) * 100)}%`
+                left: `${(windowStartIdx / Math.max(1, blocks.length)) * 100}%`,
+                width: `${blocks.length > 0 ? Math.max(2, (visibleBlocks.length / Math.max(1, blocks.length)) * 100) : 0}%`
               }}
             />
           </div>
@@ -472,7 +585,7 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
             {/* Pan Right */}
             <button
               onClick={() => handlePan('right')}
-              disabled={windowEndIdx === blocks.length - 1}
+              disabled={windowEndIdx >= blocks.length - 1}
               className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 text-slate-700 dark:text-slate-300 disabled:opacity-30 cursor-pointer"
               title="다음 LBA 블록 영역으로 이동"
             >
@@ -516,87 +629,18 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
                 : 'repeat(auto-fill, minmax(78px, 1fr))'
           }}
         >
-          {visibleBlocks.map((block) => {
-            const actualIndex = blocks.findIndex(b => b.id === block.id);
-            const isActive = actualIndex === activeBlockIndex;
-            const isSelected = selectedBlock?.id === block.id;
-
-            // Highlight filtering
-            let opacity = 'opacity-100';
-            if (highlightFilter === 'bad' && block.status !== 'bad') {
-              opacity = 'opacity-10';
-            } else if (highlightFilter === 'slow' && block.status !== 'slow' && block.status !== 'critical' && block.status !== 'bad') {
-              opacity = 'opacity-10';
-            }
-
-            // High Density Block color styling
-            let colorClass = 'bg-slate-800/80 border-slate-700/40';
-            if (block.status === 'good') {
-              colorClass = 'bg-emerald-500/75 hover:bg-emerald-400 border-emerald-500/40 text-emerald-100';
-            } else if (block.status === 'normal') {
-              colorClass = 'bg-lime-500/75 hover:bg-lime-400 border-lime-500/40 text-lime-100';
-            } else if (block.status === 'slow') {
-              colorClass = 'bg-amber-500/85 hover:bg-amber-400 border-amber-500/40 text-amber-100';
-            } else if (block.status === 'critical') {
-              colorClass = 'bg-orange-500 hover:bg-orange-400 border-orange-500/50 text-orange-100';
-            } else if (block.status === 'bad') {
-              colorClass = 'bg-red-500 hover:bg-red-400 border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.6)] animate-pulse text-white';
-            }
-
-            if (isActive) {
-              colorClass = 'bg-indigo-500 border-indigo-300 ring-2 ring-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.8)] z-10 text-white';
-            }
-
-            if (isSelected) {
-              colorClass += ' ring-2 ring-white ring-offset-2 ring-offset-slate-950 z-20';
-            }
-
-            // High Detail Tile Rendering for 4x and 8x Zoom Levels
-            if (zoomLevel >= 4) {
-              return (
-                <div
-                  key={block.id}
-                  onMouseEnter={() => setHoveredBlock(block)}
-                  onMouseLeave={() => setHoveredBlock(null)}
-                  onClick={() => onSelectBlock && onSelectBlock(block)}
-                  className={`rounded-md cursor-pointer transition-all duration-75 border p-1 sm:p-1.5 flex flex-col justify-between ${colorClass} ${opacity} hover:ring-2 hover:ring-white`}
-                  title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()} ~ ${block.endLba.toLocaleString()}) - ${block.status.toUpperCase()}`}
-                >
-                  <div className="flex items-center justify-between font-mono text-[9px] sm:text-[10px] leading-tight">
-                    <span className="font-bold truncate opacity-90">#{block.id}</span>
-                    {block.status === 'bad' ? (
-                      <span className="font-extrabold text-[8px] bg-red-950/80 px-1 py-0.2 rounded border border-red-400/50">
-                        BAD
-                      </span>
-                    ) : (
-                      <span className="opacity-80 text-[8px]">
-                        {block.responseTimeMs > 0 ? `${block.responseTimeMs.toFixed(0)}ms` : '--'}
-                      </span>
-                    )}
-                  </div>
-
-                  {zoomLevel === 8 && (
-                    <div className="my-0.5 font-mono text-[8px] leading-none opacity-85 truncate">
-                      LBA {(block.lba / 1000000).toFixed(1)}M
-                    </div>
-                  )}
-
-                  <div className="text-[8px] sm:text-[9px] font-mono truncate font-semibold uppercase opacity-95">
-                    {block.status}
-                  </div>
-                </div>
-              );
-            }
-
-            // Compact / Standard Dot Rendering for 1x and 2x Zoom Levels
+          {visibleBlocks.map((block, localIdx) => {
+            const actualIndex = windowStartIdx + localIdx;
             return (
-              <div
+              <SectorTile
                 key={block.id}
-                onMouseEnter={() => setHoveredBlock(block)}
-                onMouseLeave={() => setHoveredBlock(null)}
-                onClick={() => onSelectBlock && onSelectBlock(block)}
-                className={`aspect-square rounded-xs cursor-pointer transition-all duration-75 border ${colorClass} ${opacity} hover:ring-1 hover:ring-white`}
-                title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()}) - ${block.status.toUpperCase()} ${block.responseTimeMs > 0 ? `(${block.responseTimeMs}ms)` : ''}`}
+                block={block}
+                isActive={actualIndex === activeBlockIndex}
+                isSelected={selectedBlock?.id === block.id}
+                zoomLevel={zoomLevel}
+                highlightFilter={highlightFilter}
+                onHoverBlock={handleHoverBlock}
+                onSelectBlock={onSelectBlock}
               />
             );
           })}
@@ -694,6 +738,42 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
                 <span>비트 카빙 수복</span>
               </button>
             )}
+
+            {/* Direct Raw LBA Hex Inspector Trigger */}
+            {onOpenHexInspector && (
+              <button
+                onClick={() => onOpenHexInspector(inspectedBlock.lba)}
+                className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-slate-800 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                title="이 블록 시작 LBA의 원시 바이트(Hex/ASCII)를 읽기 전용으로 검사"
+              >
+                <Binary className="w-2.5 h-2.5" />
+                <span>LBA 헥스 뷰어</span>
+              </button>
+            )}
+
+            {/* Direct Affected File Tracer Trigger */}
+            {onTraceLbaFile && (
+              <button
+                onClick={() => onTraceLbaFile(inspectedBlock.lba)}
+                className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-amber-600 hover:bg-amber-500 text-white font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                title="이 LBA를 점유하는 NTFS/FAT32/exFAT 손상 영향 파일 추적"
+              >
+                <FileSearch className="w-2.5 h-2.5" />
+                <span>영향 파일 추적</span>
+              </button>
+            )}
+
+            {/* Direct ddrescue LBA Cloner Trigger */}
+            {onCloneLbaRange && (
+              <button
+                onClick={() => onCloneLbaRange({ startLba: inspectedBlock.lba, endLba: inspectedBlock.endLba })}
+                className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-sky-600 hover:bg-sky-500 text-white font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                title="이 LBA 구간을 ddrescue 다중 패스 엔진으로 안전 이미지 백업"
+              >
+                <HardDriveDownload className="w-2.5 h-2.5" />
+                <span>이미지 백업</span>
+              </button>
+            )}
           </div>
 
         ) : (
@@ -705,4 +785,4 @@ export const SectorGrid: React.FC<SectorGridProps> = ({
       </div>
     </div>
   );
-};
+});

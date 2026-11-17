@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { DiskDrive, DiskHardwareSpecs } from '../types';
-import { measureNativeDriveIoBenchmark, NativeIoBenchmarkResult } from '../utils/nativeDriveEngine';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { DiskDrive, DiskHardwareSpecs, DriveIdentifySnapshot, DriveIdentifyField } from '../types';
+import { measureNativeDriveIoBenchmark, NativeIoBenchmarkResult, queryTauriDriveIdentify } from '../utils/nativeDriveEngine';
 import { classifyFutureDriveStandards } from '../utils/vendorDiagnostics';
 import {
   X,
@@ -13,7 +13,12 @@ import {
   CheckCircle2,
   Database,
   Play,
-  Info
+  Info,
+  Binary,
+  Search,
+  Copy,
+  Check,
+  Gauge
 } from 'lucide-react';
 
 interface DiskHardwareDetailsModalProps {
@@ -21,25 +26,102 @@ interface DiskHardwareDetailsModalProps {
   onClose: () => void;
   drive: DiskDrive;
   onRescanHardware?: () => Promise<void>;
+  onOpenBenchmarkProfiler?: () => void;
+  onOpenHexInspector?: (lba?: number) => void;
 }
 
 export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> = ({
   isOpen,
   onClose,
   drive,
-  onRescanHardware
+  onRescanHardware,
+  onOpenBenchmarkProfiler,
+  onOpenHexInspector
 }) => {
-  const [activeTab, setActiveTab] = useState<'architecture' | 'geometry' | 'endurance' | 'benchmark'>('architecture');
+  const [activeTab, setActiveTab] = useState<'architecture' | 'geometry' | 'endurance' | 'benchmark' | 'identify'>('architecture');
   const [isRescanning, setIsRescanning] = useState<boolean>(false);
   const [isBenchmarking, setIsBenchmarking] = useState<boolean>(false);
   const [rescanSuccess, setRescanSuccess] = useState<string | null>(null);
   const [liveBenchmark, setLiveBenchmark] = useState<NativeIoBenchmarkResult | null>(null);
+  const [identifySnapshot, setIdentifySnapshot] = useState<DriveIdentifySnapshot | null>(null);
+  const [identifyLoading, setIdentifyLoading] = useState<boolean>(false);
+  const [identifyCategory, setIdentifyCategory] = useState<'ALL' | DriveIdentifyField['category']>('ALL');
+  const [identifySearch, setIdentifySearch] = useState<string>('');
+  const [selectedByteRange, setSelectedByteRange] = useState<{ start: number; length: number } | null>(null);
+  const [hexCopied, setHexCopied] = useState<boolean>(false);
+
+  const driveRef = useRef<DiskDrive>(drive);
+  driveRef.current = drive;
+  const isMountedRef = useRef<boolean>(true);
+  const isOpenRef = useRef<boolean>(isOpen);
+  isOpenRef.current = isOpen;
+  const activeDriveIdRef = useRef<string>(drive.id);
+  activeDriveIdRef.current = drive.id;
+  const identifyReqIdRef = useRef<number>(0);
+  const benchReqIdRef = useRef<number>(0);
+  const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hexCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      identifyReqIdRef.current += 1;
+      benchReqIdRef.current += 1;
+      if (feedbackTimeoutRef.current) {
+        clearTimeout(feedbackTimeoutRef.current);
+        feedbackTimeoutRef.current = null;
+      }
+      if (hexCopyTimeoutRef.current) {
+        clearTimeout(hexCopyTimeoutRef.current);
+        hexCopyTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const loadIdentifyData = useCallback(async () => {
+    const reqId = ++identifyReqIdRef.current;
+    const targetDrive = driveRef.current;
+    const targetDriveId = targetDrive.id;
+    setIdentifyLoading(true);
+    try {
+      const snap = await queryTauriDriveIdentify(targetDrive);
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== targetDriveId ||
+        identifyReqIdRef.current !== reqId
+      ) {
+        return;
+      }
+      setIdentifySnapshot(snap);
+    } finally {
+      if (
+        isMountedRef.current &&
+        activeDriveIdRef.current === targetDriveId &&
+        identifyReqIdRef.current === reqId
+      ) {
+        setIdentifyLoading(false);
+      }
+    }
+  }, [drive.id]);
+
+  useEffect(() => {
+    identifyReqIdRef.current += 1;
+    benchReqIdRef.current += 1;
+    if (!isOpen) {
+      setIsRescanning(false);
+      setIsBenchmarking(false);
+      setIdentifyLoading(false);
+      return;
+    }
+    setLiveBenchmark(null);
+    setIdentifySnapshot(null);
+    setRescanSuccess(null);
     let mounted = true;
-    measureNativeDriveIoBenchmark(drive).then(info => {
-      if (mounted) {
+    const reqDriveId = drive.id;
+    measureNativeDriveIoBenchmark(driveRef.current).then(info => {
+      if (mounted && isMountedRef.current && isOpenRef.current && activeDriveIdRef.current === reqDriveId) {
         setLiveBenchmark(info);
       }
     }).catch(() => {});
@@ -48,6 +130,12 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     };
   }, [isOpen, drive.id]);
 
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'identify') return;
+    setSelectedByteRange(null);
+    void loadIdentifyData();
+  }, [isOpen, activeTab, drive.id, loadIdentifyData]);
+
   if (!isOpen) return null;
 
   const futureClass = classifyFutureDriveStandards(drive);
@@ -55,8 +143,15 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
   const getSmartRawNullable = (id: number): number | null => {
     const attr = drive.smartAttributes.find(a => a.id === id);
     if (!attr) return null;
-    const val = parseInt(attr.raw.replace(/[^0-9]/g, ''), 10);
-    return isNaN(val) ? null : val;
+    const s = String(attr.raw ?? '').trim();
+    if (!s) return null;
+    const headToken = s.split(/[\s(/,:]+/)[0] || '';
+    const val = /^0x[0-9a-f]+$/i.test(headToken)
+      ? parseInt(headToken, 16)
+      : /^\d+$/.test(headToken)
+      ? parseInt(headToken, 10)
+      : NaN;
+    return Number.isNaN(val) ? null : val;
   };
 
   const rawReadsVal = getSmartRawNullable(0xF2);
@@ -130,36 +225,74 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
 
   const handleRescanClick = async () => {
     if (isRescanning) return;
+    const reqId = ++benchReqIdRef.current;
+    const reqDrive = drive;
+    const reqDriveId = drive.id;
     setIsRescanning(true);
     setRescanSuccess(null);
     try {
       const [newBench] = await Promise.all([
-        measureNativeDriveIoBenchmark(drive),
+        measureNativeDriveIoBenchmark(reqDrive),
         onRescanHardware ? onRescanHardware() : Promise.resolve()
       ]);
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== reqDriveId ||
+        benchReqIdRef.current !== reqId
+      ) {
+        return;
+      }
       setLiveBenchmark(newBench);
       setRescanSuccess('디스크 장치 하드웨어 정보 및 실시간 Win32 IOCTL 프로브가 갱신되었습니다.');
-      setTimeout(() => setRescanSuccess(null), 3000);
+      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = setTimeout(() => {
+        feedbackTimeoutRef.current = null;
+        if (isMountedRef.current) setRescanSuccess(null);
+      }, 3000);
     } catch {
-      setRescanSuccess('하드웨어 재탐색 중 오류가 발생했습니다.');
+      if (isMountedRef.current && isOpenRef.current && activeDriveIdRef.current === reqDriveId) {
+        setRescanSuccess('하드웨어 재탐색 중 오류가 발생했습니다.');
+      }
     } finally {
-      setIsRescanning(false);
+      if (isMountedRef.current) {
+        setIsRescanning(false);
+      }
     }
   };
 
   const handleRunLiveBenchmark = async () => {
     if (isBenchmarking) return;
+    const reqId = ++benchReqIdRef.current;
+    const reqDrive = drive;
+    const reqDriveId = drive.id;
     setIsBenchmarking(true);
     setRescanSuccess(null);
     try {
-      const result = await measureNativeDriveIoBenchmark(drive);
+      const result = await measureNativeDriveIoBenchmark(reqDrive);
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== reqDriveId ||
+        benchReqIdRef.current !== reqId
+      ) {
+        return;
+      }
       setLiveBenchmark(result);
       setRescanSuccess(result.probeNote);
-      setTimeout(() => setRescanSuccess(null), 3500);
+      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = setTimeout(() => {
+        feedbackTimeoutRef.current = null;
+        if (isMountedRef.current) setRescanSuccess(null);
+      }, 3500);
     } catch {
-      setRescanSuccess('실측 벤치마크 실행 중 오류가 발생했습니다.');
+      if (isMountedRef.current && isOpenRef.current && activeDriveIdRef.current === reqDriveId) {
+        setRescanSuccess('실측 벤치마크 실행 중 오류가 발생했습니다.');
+      }
     } finally {
-      setIsBenchmarking(false);
+      if (isMountedRef.current) {
+        setIsBenchmarking(false);
+      }
     }
   };
 
@@ -202,6 +335,20 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {onOpenHexInspector && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenHexInspector(0);
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                title="LBA 원시 섹터 헥스 및 MBR/GPT 파티션 테이블 검사 열기"
+              >
+                <Binary className="w-3.5 h-3.5 text-indigo-500" />
+                <span className="hidden md:inline">헥스/파티션</span>
+              </button>
+            )}
             {onRescanHardware && (
               <button
                 onClick={handleRescanClick}
@@ -308,6 +455,18 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           >
             <Activity className="w-3.5 h-3.5" />
             <span>실측 스토리지 I/O 벤치마크</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('identify')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
+              activeTab === 'identify'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Binary className="w-3.5 h-3.5" />
+            <span>Identify (512B)</span>
           </button>
         </div>
 
@@ -598,7 +757,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                       실제 물리 디스크 LBA 버스트 읽기(64KB) 커널 응답 지연율 및 전송 대역폭을 직접 계측한 결과입니다.
                     </p>
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <button
                       onClick={handleRunLiveBenchmark}
                       disabled={isBenchmarking || isRescanning}
@@ -608,6 +767,20 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                       <Play className={`w-3.5 h-3.5 ${isBenchmarking ? 'animate-spin' : 'fill-current'}`} />
                       <span>{isBenchmarking ? '실시간 계측 중...' : '실측 벤치마크 즉시 실행'}</span>
                     </button>
+                    {onOpenBenchmarkProfiler && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenBenchmarkProfiler();
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-xs font-bold transition-colors cursor-pointer"
+                        title="디스크 전체 LBA 0~100% 구간 속도 커브 및 4K 랜덤 IOPS 프로파일러 열기"
+                      >
+                        <Gauge className="w-3.5 h-3.5" />
+                        <span>전체 구간 커브 프로파일러...</span>
+                      </button>
+                    )}
                     {onRescanHardware && (
                       <button
                         onClick={handleRescanClick}
@@ -685,6 +858,252 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
               </div>
             </div>
           )}
+
+          {/* TAB 5: IDENTIFY (512B) */}
+          {activeTab === 'identify' && (() => {
+            const rawBytes = identifySnapshot?.rawBytes ?? [];
+            const fields = identifySnapshot?.decodedFields ?? [];
+            const q = identifySearch.trim().toLowerCase();
+            const filteredFields = fields.filter(f => {
+              if (identifyCategory !== 'ALL' && f.category !== identifyCategory) return false;
+              if (!q) return true;
+              return (
+                f.name.toLowerCase().includes(q) ||
+                f.wordIndex.toLowerCase().includes(q) ||
+                f.decodedValue.toLowerCase().includes(q) ||
+                f.rawHex.toLowerCase().includes(q)
+              );
+            });
+
+            const handleCopyHexDump = () => {
+              if (rawBytes.length === 0) return;
+              const lines: string[] = [];
+              for (let off = 0; off < rawBytes.length; off += 16) {
+                const slice = rawBytes.slice(off, off + 16);
+                const hexPart = slice.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+                const asciiPart = slice.map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+                lines.push(`${off.toString(16).toUpperCase().padStart(4, '0')}: ${hexPart.padEnd(47, ' ')}  |${asciiPart}|`);
+              }
+              void navigator.clipboard?.writeText(lines.join('\n')).then(() => {
+                if (!isMountedRef.current) return;
+                setHexCopied(true);
+                if (hexCopyTimeoutRef.current) clearTimeout(hexCopyTimeoutRef.current);
+                hexCopyTimeoutRef.current = setTimeout(() => {
+                  hexCopyTimeoutRef.current = null;
+                  if (isMountedRef.current) setHexCopied(false);
+                }, 2000);
+              }).catch(() => {});
+            };
+
+            const isByteHighlighted = (idx: number) => {
+              if (!selectedByteRange) return false;
+              return idx >= selectedByteRange.start && idx < selectedByteRange.start + selectedByteRange.length;
+            };
+
+            return (
+              <div className="space-y-4">
+                <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                        <Binary className="w-4 h-4 text-indigo-500" />
+                        <span>Drive Identify 512바이트 원시 데이터 &amp; 워드 디코더</span>
+                        {identifySnapshot?.supported && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            {identifySnapshot.protocol}
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        ATA IDENTIFY DEVICE (0xEC) 또는 NVMe Identify Controller(CNS 01h) 원시 버퍼 디코딩 · 항목 클릭 시 하단 Hex 오프셋 강조
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => void loadIdentifyData()}
+                        disabled={identifyLoading}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${identifyLoading ? 'animate-spin' : ''}`} />
+                        <span>새로고침</span>
+                      </button>
+                      {rawBytes.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleCopyHexDump}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
+                        >
+                          {hexCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{hexCopied ? '복사됨' : 'Hex 복사'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {!identifyLoading && identifySnapshot && !identifySnapshot.supported ? (
+                    <div className="p-4 rounded-lg bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 text-center space-y-1 text-xs">
+                      <div className="flex items-center justify-center gap-1.5 font-bold text-slate-700 dark:text-slate-300">
+                        <Info className="w-4 h-4 text-indigo-500" />
+                        <span>512B Drive Identify 원시 버퍼 조회 불가</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {identifySnapshot.reason || 'Windows 관리자 권한의 Tauri 데스크톱 네이티브 IPC 환경에서 물리 디스크 Identify 구조를 직접 읽어 표시합니다.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Category Filters & Search */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+                        <div className="flex items-center gap-1 flex-wrap text-[11px]">
+                          {(['ALL', 'General', 'Geometry', 'Transfer', 'Power', 'Security'] as const).map(cat => (
+                            <button
+                              key={cat}
+                              type="button"
+                              onClick={() => setIdentifyCategory(cat)}
+                              className={`px-2 py-1 rounded border font-semibold cursor-pointer ${
+                                identifyCategory === cat
+                                  ? 'border-indigo-500 bg-indigo-600 text-white'
+                                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                              }`}
+                            >
+                              {cat === 'ALL' ? '전체' : cat}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="relative w-full sm:w-56">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={identifySearch}
+                            onChange={e => setIdentifySearch(e.target.value)}
+                            placeholder="Word / 필드 / 값 검색..."
+                            className="w-full pl-8 pr-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Decoded Fields Table */}
+                      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 max-h-64 overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-slate-100 dark:bg-slate-950 text-slate-500 font-semibold border-b border-slate-200 dark:border-slate-800 text-[11px]">
+                            <tr>
+                              <th className="px-2.5 py-1.5">Word / Offset</th>
+                              <th className="px-2.5 py-1.5">분류</th>
+                              <th className="px-2.5 py-1.5">항목</th>
+                              <th className="px-2.5 py-1.5">Raw Hex</th>
+                              <th className="px-2.5 py-1.5">디코딩 값</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-[11px] font-mono tabular-nums">
+                            {filteredFields.map((field, idx) => {
+                              const active =
+                                selectedByteRange?.start === field.byteOffsetStart &&
+                                selectedByteRange?.length === field.byteLength;
+                              return (
+                                <tr
+                                  key={`${field.wordIndex}-${idx}`}
+                                  onClick={() =>
+                                    setSelectedByteRange(
+                                      active ? null : { start: field.byteOffsetStart, length: field.byteLength }
+                                    )
+                                  }
+                                  className={`cursor-pointer transition-colors ${
+                                    active
+                                      ? 'bg-indigo-50 dark:bg-indigo-950/60'
+                                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                                  }`}
+                                >
+                                  <td className="px-2.5 py-1.5 text-indigo-600 dark:text-indigo-400 font-bold whitespace-nowrap">
+                                    {field.wordIndex}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 font-sans text-slate-500 dark:text-slate-400">
+                                    {field.category}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 font-sans font-semibold text-slate-800 dark:text-slate-200">
+                                    {field.name}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                                    {field.rawHex}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 font-sans text-slate-900 dark:text-slate-100">
+                                    {field.decodedValue}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* 512-byte Hex + ASCII Viewer */}
+                      {rawBytes.length > 0 && (
+                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-950 text-slate-200 p-3 overflow-x-auto">
+                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pb-2 mb-2 border-b border-slate-800">
+                            <span>RAW IDENTIFY BUFFER ({rawBytes.length} BYTES · 16 BYTES/ROW)</span>
+                            {selectedByteRange && (
+                              <span className="text-indigo-400 font-bold">
+                                선택 영역: 0x{selectedByteRange.start.toString(16).toUpperCase().padStart(4, '0')} ({selectedByteRange.length}B)
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-mono text-[11px] leading-5 tabular-nums space-y-0.5 min-w-[640px]">
+                            {Array.from({ length: Math.ceil(rawBytes.length / 16) }, (_, rowIdx) => {
+                              const offset = rowIdx * 16;
+                              const rowSlice = rawBytes.slice(offset, offset + 16);
+                              return (
+                                <div key={offset} className="flex items-center gap-3 hover:bg-slate-900/70 px-1 rounded">
+                                  <span className="text-slate-500 w-12 shrink-0 select-none">
+                                    0x{offset.toString(16).toUpperCase().padStart(4, '0')}
+                                  </span>
+                                  <div className="flex items-center gap-1 flex-1">
+                                    {rowSlice.map((b, col) => {
+                                      const absIdx = offset + col;
+                                      const hi = isByteHighlighted(absIdx);
+                                      return (
+                                        <span
+                                          key={absIdx}
+                                          className={`px-0.5 rounded ${
+                                            col === 8 ? 'ml-1.5 ' : ''
+                                          }${
+                                            hi
+                                              ? 'bg-indigo-600 text-white font-bold'
+                                              : b === 0
+                                              ? 'text-slate-600'
+                                              : 'text-slate-200'
+                                          }`}
+                                        >
+                                          {b.toString(16).toUpperCase().padStart(2, '0')}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="text-emerald-400/90 border-l border-slate-800 pl-3 tracking-wider shrink-0">
+                                    {rowSlice.map((b, col) => {
+                                      const absIdx = offset + col;
+                                      const ch = b >= 32 && b <= 126 ? String.fromCharCode(b) : '.';
+                                      return (
+                                        <span
+                                          key={absIdx}
+                                          className={isByteHighlighted(absIdx) ? 'bg-indigo-600 text-white font-bold' : ''}
+                                        >
+                                          {ch}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
         </div>
 

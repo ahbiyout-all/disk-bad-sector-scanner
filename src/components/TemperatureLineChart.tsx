@@ -122,7 +122,7 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
             하드웨어 온도 센서 미제공 (N/A)
           </div>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-lg mx-auto leading-relaxed">
-            브라우저 샌드박스 또는 USB 브릿지 장치에서는 물리 디스크의 서멀 센서 레지스터를 읽을 수 없으므로 가상 온도 곡선을 생성하지 않습니다.
+            일반 웹 브라우저 또는 패스스루 미지원 USB 브릿지 장치에서는 물리 디스크의 서멀 센서 레지스터를 읽을 수 없으므로 가상 온도 곡선을 생성하지 않습니다.
             Windows Tauri 데스크톱 관리자 권한으로 실행 시 실제 하드웨어 온도가 실시간 기록됩니다.
           </p>
         </div>

@@ -26,7 +26,7 @@ import {
   AlertOctagon
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
-import { executeRealZeroFillRepairBlock } from '../utils/nativeDriveEngine';
+import { executeRealZeroFillRepairBlock, isSystemOrBootDrive } from '../utils/nativeDriveEngine';
 
 interface SmartRemapModalProps {
   isOpen: boolean;
@@ -103,9 +103,42 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const prevIsOpenRef = useRef<boolean>(false);
+  const prevDriveIdRef = useRef<string>(activeDrive.id);
+  const isMountedRef = useRef<boolean>(true);
+  const isOpenRef = useRef<boolean>(isOpen);
+  isOpenRef.current = isOpen;
+  const repairRunIdRef = useRef<number>(0);
+  const lockWarnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (isOpen && !prevIsOpenRef.current) {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      repairRunIdRef.current += 1;
+      if (lockWarnTimeoutRef.current) {
+        clearTimeout(lockWarnTimeoutRef.current);
+        lockWarnTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const driveChanged = prevDriveIdRef.current !== activeDrive.id;
+    prevDriveIdRef.current = activeDrive.id;
+
+    if (!isOpen) {
+      repairRunIdRef.current += 1;
+      setIsRepairing(false);
+      if (lockWarnTimeoutRef.current) {
+        clearTimeout(lockWarnTimeoutRef.current);
+        lockWarnTimeoutRef.current = null;
+      }
+      prevIsOpenRef.current = false;
+      return;
+    }
+
+    if (!prevIsOpenRef.current || driveChanged) {
+      repairRunIdRef.current += 1;
       if (badBlocks.length > 0) {
         setSelectedBlockIds(badBlocks.map(b => b.id));
       } else if (slowBlocks.length > 0) {
@@ -122,9 +155,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
       setLastUnsupportedReason(null);
       setIsSafetyLocked(true);
       setShowLockWarning(false);
+      setShowBackupWarningModal(false);
     }
     prevIsOpenRef.current = isOpen;
-  }, [isOpen]);
+  }, [isOpen, activeDrive.id]);
 
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -146,11 +180,23 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   const reallocatedAttr = getSmartAttr(5);
   const pendingAttr = getSmartAttr(197);
 
+  const isProtectedSystemDrive = isSystemOrBootDrive(activeDrive);
+
   const handleStartRepair = () => {
+    if (isProtectedSystemDrive) {
+      soundManager.playBeep(400, 0.12);
+      setShowLockWarning(true);
+      return;
+    }
+
     if (isSafetyLocked) {
       soundManager.playBeep(400, 0.1);
       setShowLockWarning(true);
-      setTimeout(() => setShowLockWarning(false), 4000);
+      if (lockWarnTimeoutRef.current) clearTimeout(lockWarnTimeoutRef.current);
+      lockWarnTimeoutRef.current = setTimeout(() => {
+        lockWarnTimeoutRef.current = null;
+        if (isMountedRef.current) setShowLockWarning(false);
+      }, 4000);
       return;
     }
 
@@ -159,6 +205,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   };
 
   const handleConfirmAndExecuteRepair = async () => {
+    const runId = ++repairRunIdRef.current;
+    const driveSnapshot = activeDrive;
+    const blocksById = new Map<number, SectorBlock>(blocks.map(b => [b.id, b]));
     setShowBackupWarningModal(false);
     soundManager.playClick();
     setIsRepairing(true);
@@ -173,7 +222,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
     setRepairLogs([
       `[${new Date().toLocaleTimeString()}] === S.M.A.R.T. 섹터 제로필 수복 & 재할당 엔진 가동 ===`,
-      `[시스템] 드라이브 ID: ${activeDrive.name} (${activeDrive.model})`,
+      `[시스템] 드라이브 ID: ${driveSnapshot.name} (${driveSnapshot.model})`,
       `[시스템] 선택 수복 방식: ${repairMode === 'standard' ? '표준 0x00 제로필 (1.0x)' : repairMode === 'deep_ecc' ? '심층 ECC 패리티 정합성 (2.2x)' : '저수준 펌웨어 강제 치환 (4.0x)'}`,
       `[시스템] 대상 LBA 블록 개수: ${totalToRepair}개`
     ]);
@@ -183,14 +232,21 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     let firstFailureReason: string | null = null;
 
     for (let i = 0; i < totalToRepair; i++) {
+      if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
+        return;
+      }
       const targetBlockId = targetsSnapshot[i];
-      const targetBlock = blocks.find(b => b.id === targetBlockId);
+      const targetBlock = blocksById.get(targetBlockId);
       const lba = targetBlock ? targetBlock.lba : targetBlockId * 1000;
       setCurrentLba(lba);
       setProgress(Math.round(((i + 1) / totalToRepair) * 100));
 
       const timeStr = new Date().toLocaleTimeString();
-      const realResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, activeDrive);
+      const realResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, driveSnapshot);
+
+      if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
+        return;
+      }
 
       if (realResult.success && realResult.verifiedZeros) {
         succeededIds.push(targetBlockId);
@@ -214,6 +270,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
       await new Promise(r => setTimeout(r, 40));
     }
 
+    if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
+      return;
+    }
+
     setIsRepairing(false);
     setProgress(100);
     setRepairCompleted(true);
@@ -226,7 +286,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
         ...prev,
         `[${new Date().toLocaleTimeString()}] [완료] ${succeededIds.length}개 섹터 실제 0x00 검증 수복 완료 (실패/미지원 ${failedCount}개).`
       ]);
-      onRepairSectors(activeDrive.id, succeededIds);
+      onRepairSectors(driveSnapshot.id, succeededIds);
     } else {
       setRepairLogs(prev => [
         ...prev,
@@ -302,14 +362,20 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                    {isSafetyLocked
+                    {isProtectedSystemDrive
+                      ? 'OS 시스템/부트 드라이브(C: 또는 PhysicalDrive0)가 감지되었습니다. 시스템 파티션 손상을 방지하기 위해 제로필 쓰기가 차단됩니다.'
+                      : isSafetyLocked
                       ? 'S.M.A.R.T. 제로필 작업은 해당 LBA 섹터의 데이터를 0x00으로 덮어씁니다. 수복을 실행하려면 우측 버튼으로 잠금을 해제하세요.'
                       : '주의: 안전 잠금이 해제되었습니다. 쓰기 권한이 허용된 비시스템 물리 드라이브에 한해 실제 0x00 기록 및 검증을 수행합니다.'}
                   </p>
                   {showLockWarning && (
                     <div className="mt-2 p-2 rounded bg-rose-900/90 border border-rose-400 text-rose-100 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
                       <AlertTriangle className="w-4 h-4 text-amber-300 flex-shrink-0" />
-                      <span>[잠금 해제 (Unlock)] 버튼을 먼저 클릭해야 수복을 시작할 수 있습니다.</span>
+                      <span>
+                        {isProtectedSystemDrive
+                          ? 'OS 시스템/부트 드라이브에는 제로필 쓰기 수복을 실행할 수 없습니다. 외장 또는 보조 물리 디스크를 선택하세요.'
+                          : '[잠금 해제 (Unlock)] 버튼을 먼저 클릭해야 수복을 시작할 수 있습니다.'}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -318,19 +384,25 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
               <div className="flex items-center gap-2 self-end sm:self-center flex-shrink-0">
                 <button
                   type="button"
-                  disabled={isRepairing}
+                  disabled={isRepairing || isProtectedSystemDrive}
                   onClick={() => {
+                    if (isProtectedSystemDrive) return;
                     soundManager.playClick();
                     setIsSafetyLocked(!isSafetyLocked);
                     setShowLockWarning(false);
                   }}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition-all cursor-pointer shadow-md ${
+                  className={`px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition-all cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
                     isSafetyLocked
                       ? 'bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white border border-rose-500/40'
                       : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border border-emerald-500/40'
                   }`}
                 >
-                  {isSafetyLocked ? (
+                  {isProtectedSystemDrive ? (
+                    <>
+                      <Lock className="w-4 h-4" />
+                      <span>시스템 드라이브 보호</span>
+                    </>
+                  ) : isSafetyLocked ? (
                     <>
                       <Lock className="w-4 h-4" />
                       <span>잠금 해제 (Unlock)</span>
@@ -629,12 +701,12 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           </button>
 
           <button
-            disabled={isRepairing || selectedBlockIds.length === 0}
+            disabled={isRepairing || selectedBlockIds.length === 0 || isProtectedSystemDrive}
             onClick={handleStartRepair}
             className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50 ${
               isRepairing
                 ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
-                : isSafetyLocked
+                : isProtectedSystemDrive || isSafetyLocked
                   ? 'bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40'
                   : 'bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white ring-2 ring-rose-500/40'
             }`}
@@ -643,6 +715,11 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
                 <span>수복 진행 중... ({progress}%)</span>
+              </>
+            ) : isProtectedSystemDrive ? (
+              <>
+                <Lock className="w-3.5 h-3.5 text-rose-400" />
+                <span>시스템 드라이브 제로필 차단됨</span>
               </>
             ) : isSafetyLocked ? (
               <>

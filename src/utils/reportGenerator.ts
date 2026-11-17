@@ -99,15 +99,20 @@ export function createScanRecordFromSession(
  * Enhanced CSV Exporter with complete hardware metadata and UTF-8 BOM
  */
 export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[] = []) {
+  const csvCell = (value: unknown): string => {
+    const text = value === undefined || value === null ? '' : String(value);
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
   const metadataRows = [
     ['=== Disk Bad Sector Scanner 디스크 표면 무결성 진단 보고서 ==='],
     ['보고서 ID (Report ID)', record.id],
     ['검사 일시 (Scan Date)', record.date],
-    ['드라이브 모델 (Drive Model)', `"${record.driveModel}"`],
+    ['드라이브 모델 (Drive Model)', record.driveModel],
     ['시리얼 번호 (Serial Number)', record.driveSerial],
     ['전체 용량 (Capacity)', `${record.driveCapacityGb} GB`],
     ['검사 모드 (Scan Mode)', record.scanMode === 'quick' ? '빠른 검사 (Quick Scan)' : '정밀 검사 (Full Scan)'],
-    ['적용 검사 방식 (Method)', `"${record.scanMethodName || '표준 다이렉트 I/O'}"`],
+    ['적용 검사 방식 (Method)', record.scanMethodName || '표준 다이렉트 I/O'],
     ['검사 소요 시간 (Duration)', `${Math.floor(record.durationSeconds / 60)}분 ${Math.floor(record.durationSeconds % 60)}초`],
     ['종합 건강 지수 (Health Score)', `${record.healthScore}%`],
     ['총 블록 수 (Total Blocks)', String(record.totalBlocks)],
@@ -118,7 +123,7 @@ export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[
     ['물리/논리 배드섹터 (Bad Sectors)', String(record.badCount)],
     ['평균 응답 지연 (Avg Latency)', `${record.avgLatencyMs} ms`],
     ['최대 응답 지연 (Max Latency)', `${record.maxLatencyMs} ms`],
-    ['진단 소견 및 권장 조치', `"${record.recommendation.replace(/"/g, '""')}"`],
+    ['진단 소견 및 권장 조치', record.recommendation],
     ['공식 배포자', 'AhBiYout (CISNet - https://www.cisnet.co.kr)'],
     []
   ];
@@ -131,7 +136,7 @@ export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[
     record.smartSnapshot.forEach(attr => {
       smartRows.push([
         String(attr.id),
-        `"${attr.name}"`,
+        attr.name,
         String(attr.current),
         String(attr.worst),
         String(attr.threshold),
@@ -157,7 +162,7 @@ export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[
         String(b.endLba),
         b.status.toUpperCase(),
         String(b.responseTimeMs),
-        `"${b.errorCode || 'N/A'}"`
+        b.errorCode || 'N/A'
       ]);
     });
   } else {
@@ -165,9 +170,9 @@ export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[
   }
 
   const csvContent = '\uFEFF' + [
-    ...metadataRows.map(r => r.join(',')),
-    ...smartRows.map(r => r.join(',')),
-    ...blockRows.map(r => r.join(','))
+    ...metadataRows.map(r => r.map(csvCell).join(',')),
+    ...smartRows.map(r => r.map(csvCell).join(',')),
+    ...blockRows.map(r => r.map(csvCell).join(','))
   ].join('\n');
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
