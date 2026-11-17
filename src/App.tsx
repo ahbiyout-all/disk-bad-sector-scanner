@@ -316,6 +316,37 @@ export default function App() {
     void checkNativeEngineConnection();
   }, [checkNativeEngineConnection]);
 
+  // Keep local 127.0.0.1 Win32 launcher HTTP server alive while the UI tab remains open
+  useEffect(() => {
+    if (!bridgeDiagnostics.bridgeReachable || typeof window === 'undefined') return;
+    const host = window.location.hostname;
+    if (host !== '127.0.0.1' && host !== 'localhost') return;
+
+    let stopped = false;
+    const sendHeartbeat = () => {
+      if (stopped) return;
+      void fetch('/api/native/heartbeat', {
+        cache: 'no-store',
+        keepalive: true
+      }).catch(() => {});
+    };
+
+    sendHeartbeat();
+    const timerId = window.setInterval(sendHeartbeat, 15000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        sendHeartbeat();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timerId);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [bridgeDiagnostics.bridgeReachable]);
+
   const handleEjectDrive = useCallback((ejectDriveId: string) => {
     setDrives(prev => {
       const remaining = prev.filter(d => d.id !== ejectDriveId);

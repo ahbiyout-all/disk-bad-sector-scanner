@@ -26,6 +26,7 @@ namespace DiskSentinel
     {
         private const string AppVersion = "4.6.0";
         private const string EngineVersion = "4.6.0";
+        private const int DedicatedLauncherPort = 29088;
 
         private static bool _dllLoaded = false;
         private static bool _isElevated = false;
@@ -295,11 +296,13 @@ namespace DiskSentinel
         static void Main(string[] args)
         {
             bool noUac = false;
+            int preferredPort = DedicatedLauncherPort;
             if (args != null && args.Length > 0)
             {
                 for (int i = 0; i < args.Length; i++)
                 {
-                    string flag = args[i].ToLowerInvariant();
+                    string rawArg = args[i];
+                    string flag = rawArg.ToLowerInvariant();
                     if (flag == "-v" || flag == "--version")
                     {
                         MessageBox.Show(
@@ -313,6 +316,14 @@ namespace DiskSentinel
                     {
                         noUac = true;
                     }
+                    if (flag.StartsWith("--port="))
+                    {
+                        int parsedPort;
+                        if (int.TryParse(rawArg.Substring(7), out parsedPort) && parsedPort > 0 && parsedPort <= 65535)
+                        {
+                            preferredPort = parsedPort;
+                        }
+                    }
                 }
             }
 
@@ -323,7 +334,9 @@ namespace DiskSentinel
                 {
                     ProcessStartInfo elevPsi = new ProcessStartInfo();
                     elevPsi.FileName = Application.ExecutablePath;
-                    elevPsi.Arguments = "--elevated-attempt";
+                    elevPsi.Arguments = preferredPort != DedicatedLauncherPort
+                        ? string.Format("--elevated-attempt --port={0}", preferredPort)
+                        : "--elevated-attempt";
                     elevPsi.Verb = "runas";
                     elevPsi.UseShellExecute = true;
                     Process.Start(elevPsi);
@@ -355,28 +368,41 @@ namespace DiskSentinel
                 return;
             }
 
-            int port = FindAvailablePort();
-            string baseUrl = string.Format("http://127.0.0.1:{0}/", port);
-
-            HttpListener listener = null;
-            try
+            string baseUrl;
+            HttpListener listener = TryStartDedicatedListener(preferredPort, out baseUrl);
+            if (listener == null)
             {
-                listener = new HttpListener();
-                listener.Prefixes.Add(baseUrl);
-                listener.Start();
-            }
-            catch
-            {
-                // Fallback to direct file:/// if HttpListener fails on restricted machine
-                LaunchFallbackFileUrl(htmlPath);
-                return;
+                if (IsExistingBridgeResponding(preferredPort))
+                {
+                    string existingUrl = string.Format("http://127.0.0.1:{0}/", preferredPort);
+                    Process existingEdge = LaunchEdgeAppWindow(existingUrl);
+                    if (existingEdge == null)
+                    {
+                        try { Process.Start(existingUrl); } catch { }
+                    }
+                    return;
+                }
+
+                int fallbackPort = FindAvailablePort();
+                string fallbackUrl = string.Format("http://127.0.0.1:{0}/", fallbackPort);
+                listener = TryStartDedicatedListener(fallbackPort, out baseUrl);
+                if (listener == null)
+                {
+                    // Fallback to direct file:/// if HttpListener fails on restricted machine
+                    LaunchFallbackFileUrl(htmlPath);
+                    return;
+                }
+                baseUrl = fallbackUrl;
             }
 
+            Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
             Thread serverThread = new Thread(delegate() { RunHttpLoop(listener, htmlPath); });
             serverThread.IsBackground = true;
             serverThread.Start();
 
+            DateTime launchedAt = DateTime.UtcNow;
             Process edgeProc = LaunchEdgeAppWindow(baseUrl);
+            bool waitHeartbeatFallback = (edgeProc == null);
             if (edgeProc != null)
             {
                 try
@@ -384,16 +410,28 @@ namespace DiskSentinel
                     edgeProc.WaitForExit();
                 }
                 catch { }
+                // If Edge handed the --app window off to an existing Edge process, edgeProc exits immediately.
+                // Keep the 127.0.0.1 HTTP server alive via heartbeat fallback instead of refusing the connection.
+                double runSeconds = (DateTime.UtcNow - launchedAt).TotalSeconds;
+                long idleSinceLastRequest = (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) / TimeSpan.TicksPerSecond;
+                if (runSeconds < 15.0 || idleSinceLastRequest < 15)
+                {
+                    waitHeartbeatFallback = true;
+                }
             }
             else
             {
-                // Default browser fallback: stay alive while heartbeat stays active
+                // Default browser fallback: open default browser when Edge executable is unavailable
                 try { Process.Start(baseUrl); } catch { }
+            }
+
+            if (waitHeartbeatFallback)
+            {
                 while (_keepRunning)
                 {
                     Thread.Sleep(2000);
                     long elapsedSec = (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) / TimeSpan.TicksPerSecond;
-                    if (elapsedSec > 60)
+                    if (elapsedSec > 300)
                     {
                         break;
                     }
@@ -435,6 +473,53 @@ namespace DiskSentinel
                 }
             }
             return null;
+        }
+
+        private static HttpListener TryStartDedicatedListener(int port, out string baseUrl)
+        {
+            baseUrl = string.Format("http://127.0.0.1:{0}/", port);
+            HttpListener candidate = null;
+            try
+            {
+                candidate = new HttpListener();
+                candidate.Prefixes.Add(baseUrl);
+                candidate.Start();
+                return candidate;
+            }
+            catch
+            {
+                try
+                {
+                    if (candidate != null) candidate.Close();
+                }
+                catch { }
+                return null;
+            }
+        }
+
+        private static bool IsExistingBridgeResponding(int port)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(string.Format("http://127.0.0.1:{0}/api/native/status", port));
+                req.Method = "GET";
+                req.Timeout = 700;
+                req.ReadWriteTimeout = 700;
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (Stream stream = resp.GetResponseStream())
+                {
+                    if (stream == null) return false;
+                    using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                    {
+                        string body = reader.ReadToEnd();
+                        return body != null && body.IndexOf("win32-native-bridge", StringComparison.OrdinalIgnoreCase) >= 0;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static int FindAvailablePort()
@@ -546,6 +631,7 @@ namespace DiskSentinel
             {
                 string rawPath = req.Url != null ? Uri.UnescapeDataString(req.Url.AbsolutePath) : "/";
                 string path = rawPath.ToLowerInvariant();
+                Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
                 res.Headers.Add("Cache-Control", "no-store, no-cache, must-revalidate");
                 res.Headers.Add("Access-Control-Allow-Origin", "*");
 
@@ -559,6 +645,7 @@ namespace DiskSentinel
 
                 if (path == "/" || path == "/index.html")
                 {
+                    Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
                     res.ContentType = "text/html; charset=utf-8";
                     res.ContentLength64 = htmlBytes.Length;
                     res.OutputStream.Write(htmlBytes, 0, htmlBytes.Length);

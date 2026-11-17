@@ -4,7 +4,7 @@
   "version": "4.6.0",
   "identifier": "com.disksentinel.pro",
   "build": {
-    "beforeDevCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../dist"
