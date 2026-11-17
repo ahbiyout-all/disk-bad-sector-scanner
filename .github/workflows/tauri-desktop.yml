@@ -1,0 +1,59 @@
+name: Tauri Desktop App Build (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-tauri-windows:
+    name: Build Tauri v2 Desktop App (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Frontend & Tauri CLI Dependencies
+        run: npm install
+
+      - name: Run TypeScript Type Check
+        run: npm run lint
+
+      - name: Build Tauri v2 Desktop Executable & Bundles
+        run: npm run tauri:build
+
+      - name: Upload Tauri Desktop Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: disk-bad-sector-scanner-tauri-windows
+          retention-days: 30
+          path: |
+            src-tauri/target/release/DiskBadSectorScanner.exe
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
