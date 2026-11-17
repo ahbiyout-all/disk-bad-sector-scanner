@@ -46,17 +46,28 @@ if errorlevel 1 (
     goto END_FAIL
 )
 
-echo [STEP 1] Installing npm dependencies ^(including @tauri-apps/cli^)...
+echo [STEP 1] Cleaning old caches and installing npm dependencies cleanly (npm ci)...
+if exist "node_modules" rmdir /s /q "node_modules"
+if exist "package-lock.json" del /f /q "package-lock.json"
 call npm install
-if errorlevel 1 goto END_FAIL
+if errorlevel 1 (
+    echo [ERROR] npm install failed.
+    goto END_FAIL
+)
 
-echo [STEP 2] Running TypeScript verification ^(npm run lint^)...
+echo [STEP 2] Running TypeScript verification (npm run lint)...
 call npm run lint
-if errorlevel 1 goto END_FAIL
+if errorlevel 1 (
+    echo [ERROR] TypeScript lint check failed.
+    goto END_FAIL
+)
 
-echo [STEP 3] Building Tauri v2 Desktop Executable ^& Windows Installers ^(NSIS / MSI^)...
+echo [STEP 3] Building Tauri v2 Desktop Executable & Windows Installers (NSIS / MSI)...
 call npm run tauri:build
-if errorlevel 1 goto END_FAIL
+if errorlevel 1 (
+    echo [ERROR] Tauri build failed.
+    goto END_FAIL
+)
 
 echo.
 echo ===================================================================
