@@ -62,7 +62,6 @@ fn find_app_html() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn is_elevated() -> bool {
-    use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};

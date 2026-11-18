@@ -240,7 +240,6 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
             STORAGE_DEVICE_DESCRIPTOR, DEVICE_SEEK_PENALTY_DESCRIPTOR, DEVICE_TRIM_DESCRIPTOR,
             STORAGE_TEMPERATURE_DATA_DESCRIPTOR,
             IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX,
-            BusTypeNvme, BusTypeSata, BusTypeUsb, BusTypeScsi, BusTypeSas,
         };
         use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -346,10 +345,7 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
                 16 => copy_str_to_fixed_bytes("Storage Spaces", &mut detail.bus_type),
                 18 => { copy_str_to_fixed_bytes("SCM", &mut detail.bus_type); detail.is_ssd = true; },
                 19 => { copy_str_to_fixed_bytes("UFS", &mut detail.bus_type); detail.is_ssd = true; },
-                _ => {
-                    let _ = (BusTypeNvme, BusTypeSata, BusTypeUsb, BusTypeScsi, BusTypeSas);
-                    copy_str_to_fixed_bytes("Standard Storage", &mut detail.bus_type);
-                },
+                _ => copy_str_to_fixed_bytes("Standard Storage", &mut detail.bus_type),
             }
         }
 
@@ -759,7 +755,7 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Ioctl::{
-            SMART_GET_VERSION, SMART_RCV_DRIVE_DATA, SMART_READ_ATTRIBUTE_VALUES,
+            SMART_GET_VERSION, SMART_RCV_DRIVE_DATA,
             IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
             StorageDeviceTemperatureProperty, PropertyStandardQuery, STORAGE_TEMPERATURE_DATA_DESCRIPTOR,
             GETVERSIONINPARAMS, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
@@ -823,10 +819,10 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
                 }
             }
 
-            // Request Attribute Values (0xD0)
+            // Request Attribute Values (ATA SMART subcommand 0xD0 = READ_ATTRIBUTES)
             let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
             scip.cBufferSize = 512;
-            scip.irDriveRegs.bFeaturesReg = SMART_READ_ATTRIBUTE_VALUES;
+            scip.irDriveRegs.bFeaturesReg = 0xD0; // READ_ATTRIBUTES
             scip.irDriveRegs.bSectorCountReg = 1;
             scip.irDriveRegs.bSectorNumberReg = 1;
             scip.irDriveRegs.bCylLowReg = 0x4F;
@@ -1470,7 +1466,7 @@ pub unsafe extern "system" fn DS_ScanMultipleDrivesParallel(
 
                 let mut total_bad = 0u32;
                 let mut total_scanned = 0u64;
-                let mut status = 0u32;
+                let status: u32;
                 let mut completed = false;
                 let step = target.burst_step.max(1);
 
@@ -2005,7 +2001,7 @@ pub unsafe extern "system" fn DS_GetSmartSelfTestStatus(
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Ioctl::{
-            SMART_RCV_DRIVE_DATA, SMART_READ_ATTRIBUTE_VALUES, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
+            SMART_RCV_DRIVE_DATA, SENDCMDINPARAMS, SENDCMDOUTPARAMS,
         };
         use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -2016,7 +2012,7 @@ pub unsafe extern "system" fn DS_GetSmartSelfTestStatus(
 
         let mut scip: SENDCMDINPARAMS = std::mem::zeroed();
         scip.cBufferSize = 512;
-        scip.irDriveRegs.bFeaturesReg = SMART_READ_ATTRIBUTE_VALUES;
+        scip.irDriveRegs.bFeaturesReg = 0xD0; // READ_ATTRIBUTES
         scip.irDriveRegs.bSectorCountReg = 1;
         scip.irDriveRegs.bSectorNumberReg = 1;
         scip.irDriveRegs.bCylLowReg = 0x4F;
