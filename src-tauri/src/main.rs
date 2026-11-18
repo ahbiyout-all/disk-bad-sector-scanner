@@ -2011,6 +2011,7 @@ fn start_ddrescue_backup(
 
     let worker_runtime = runtime.clone();
     let mut local_intervals = initial_intervals;
+    let worker_initial_snapshot = initial_snapshot.clone();
     std::thread::spawn(move || {
         use std::io::{Seek, SeekFrom, Write};
 
@@ -2085,7 +2086,7 @@ fn start_ddrescue_backup(
                 guard.snapshot.drive_serial = serial_str;
                 guard.snapshot.clone()
             } else {
-                initial_snapshot
+                worker_initial_snapshot
             }
         };
 
