@@ -817,7 +817,7 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
           blockIndex: activeBlockIndex >= 0 ? activeBlockIndex : 0,
           lba: currentLba,
-          status: 'critical' as any,
+          status: 'critical',
           latencyMs: 0,
           errorCode: 'OVERHEAT_ALERT',
           description: `🚨 [과열 경고] 현재 저장장치 내부 온도가 ${currentTemp.toFixed(1)}°C에 도달하여 안전 임계치(60.0°C)를 초과했습니다! 수명 단축 및 스로틀링 유발 위험이 있습니다.`,

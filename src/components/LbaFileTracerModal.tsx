@@ -218,6 +218,18 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
   const [hoveredHeatmapCellIdx, setHoveredHeatmapCellIdx] = useState<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const repairCancelledRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
+  const isOpenRef = useRef<boolean>(isOpen);
+  isOpenRef.current = isOpen;
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      repairCancelledRef.current = true;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const tauriActive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
 
@@ -526,13 +538,21 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
         maxMftRecords,
         signal: controller.signal,
         onProgress: (count, note) => {
+          if (abortControllerRef.current !== controller || !isOpenRef.current || !isMountedRef.current) {
+            return;
+          }
           setScannedCount(count);
           setProgressNote(note);
         }
       });
+      if (abortControllerRef.current !== controller || !isOpenRef.current || !isMountedRef.current) {
+        return;
+      }
       setTraceResult(res);
     } finally {
-      setIsTracing(false);
+      if (abortControllerRef.current === controller && isMountedRef.current) {
+        setIsTracing(false);
+      }
     }
   };
 
@@ -548,6 +568,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
     setLbaInput(String(safeLba));
     void runTrace(safeLba);
     return () => {
+      abortControllerRef.current?.abort();
       repairCancelledRef.current = true;
     };
   }, [isOpen, initialLba, drive.id]);
@@ -642,10 +663,14 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
 
   const handleExecuteRepairSelected = async () => {
     if (isRepairingSelected || selectedBulkBadTargets.length === 0) return;
+    const targetDrive = drive;
+    const targets = [...selectedBulkBadTargets];
+    const selectedFilesCount = selectedBulkEntries.length;
+
     setConfirmRepairOpen(false);
     setIsRepairingSelected(true);
     setRepairFeedback(null);
-    setRepairProgress({ current: 0, total: selectedBulkBadTargets.length });
+    setRepairProgress({ current: 0, total: targets.length });
 
     const succeededBlockIds: number[] = [];
     let succeededCount = 0;
@@ -654,15 +679,14 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
 
     repairCancelledRef.current = false;
     try {
-      for (let i = 0; i < selectedBulkBadTargets.length; i++) {
-        if (repairCancelledRef.current) break;
-        const target = selectedBulkBadTargets[i];
+      for (let i = 0; i < targets.length; i++) {
+        if (repairCancelledRef.current || !isMountedRef.current || !isOpenRef.current) break;
+        const target = targets[i];
         const res = await executeRealZeroFillRepairBlock(
           target.blockId >= 0 ? target.blockId : i,
           target.lba,
-          drive
+          targetDrive
         );
-        if (repairCancelledRef.current) break;
 
         if (res.success && res.verifiedZeros) {
           succeededCount++;
@@ -676,17 +700,20 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
           }
         }
 
-        setRepairProgress({ current: i + 1, total: selectedBulkBadTargets.length });
+        if (repairCancelledRef.current || !isMountedRef.current || !isOpenRef.current) break;
+        setRepairProgress({ current: i + 1, total: targets.length });
       }
 
       if (succeededBlockIds.length > 0 && onRepairSectors) {
-        onRepairSectors(drive.id, Array.from(new Set(succeededBlockIds)));
+        onRepairSectors(targetDrive.id, Array.from(new Set(succeededBlockIds)));
       }
+
+      if (!isMountedRef.current || !isOpenRef.current) return;
 
       if (succeededCount > 0 && failedCount === 0) {
         setRepairFeedback({
           type: 'success',
-          message: `선택된 ${selectedBulkEntries.length}개 파일 범위의 ${succeededCount}개 배드 섹터에 대해 S.M.A.R.T. 제로필 재할당(0x00 기록 및 검증)을 완료했습니다.`
+          message: `선택된 ${selectedFilesCount}개 파일 범위의 ${succeededCount}개 배드 섹터에 대해 S.M.A.R.T. 제로필 재할당(0x00 기록 및 검증)을 완료했습니다.`
         });
       } else if (succeededCount > 0) {
         setRepairFeedback({
@@ -700,8 +727,10 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
         });
       }
     } finally {
-      setIsRepairingSelected(false);
-      setRepairProgress(null);
+      if (isMountedRef.current) {
+        setIsRepairingSelected(false);
+        setRepairProgress(null);
+      }
     }
   };
 

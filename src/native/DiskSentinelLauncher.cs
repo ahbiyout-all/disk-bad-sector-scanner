@@ -312,7 +312,7 @@ namespace DiskSentinel
                             MessageBoxIcon.Information);
                         return;
                     }
-                    if (flag == "--no-uac")
+                    if (flag == "--no-uac" || flag == "--elevated-attempt")
                     {
                         noUac = true;
                     }
@@ -413,8 +413,7 @@ namespace DiskSentinel
                 // If Edge handed the --app window off to an existing Edge process, edgeProc exits immediately.
                 // Keep the 127.0.0.1 HTTP server alive via heartbeat fallback instead of refusing the connection.
                 double runSeconds = (DateTime.UtcNow - launchedAt).TotalSeconds;
-                long idleSinceLastRequest = (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) / TimeSpan.TicksPerSecond;
-                if (runSeconds < 15.0 || idleSinceLastRequest < 15)
+                if (runSeconds < 15.0)
                 {
                     waitHeartbeatFallback = true;
                 }
@@ -582,6 +581,10 @@ namespace DiskSentinel
         private static void RunHttpLoop(HttpListener listener, string htmlPath)
         {
             string webRoot = Path.GetFullPath(Path.GetDirectoryName(htmlPath));
+            if (!webRoot.EndsWith(Path.DirectorySeparatorChar.ToString()))
+            {
+                webRoot += Path.DirectorySeparatorChar;
+            }
             byte[] htmlBytes = File.ReadAllBytes(htmlPath);
             while (_keepRunning && listener.IsListening)
             {
@@ -704,7 +707,7 @@ namespace DiskSentinel
                 {
                     // Serve static bundle assets (e.g. /assets/*.js, /assets/*.css, icons) safely from webRoot
                     string relPath = rawPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
-                    if (!string.IsNullOrEmpty(relPath))
+                    if (!string.IsNullOrEmpty(relPath) && relPath.IndexOf("..", StringComparison.Ordinal) < 0 && relPath.IndexOf(':') < 0)
                     {
                         string candidate = Path.GetFullPath(Path.Combine(webRoot, relPath));
                         if (candidate.StartsWith(webRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(candidate))
@@ -1463,7 +1466,32 @@ namespace DiskSentinel
         private static string JsonEscape(string s)
         {
             if (string.IsNullOrEmpty(s)) return "";
-            return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", " ");
+            StringBuilder sb = new StringBuilder(s.Length + 8);
+            for (int i = 0; i < s.Length; i++)
+            {
+                char ch = s[i];
+                switch (ch)
+                {
+                    case '\\': sb.Append("\\\\"); break;
+                    case '"': sb.Append("\\\""); break;
+                    case '\r': break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    default:
+                        if (ch < 0x20)
+                        {
+                            sb.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            sb.Append(ch);
+                        }
+                        break;
+                }
+            }
+            return sb.ToString();
         }
 
         private static uint ExtractJsonUInt(string json, string key, uint fallback)

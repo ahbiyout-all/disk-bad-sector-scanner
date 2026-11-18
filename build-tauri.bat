@@ -46,7 +46,7 @@ if errorlevel 1 (
     goto END_FAIL
 )
 
-echo [STEP 1] Cleaning old caches and installing npm dependencies cleanly (npm ci)...
+echo [STEP 1] Cleaning old caches and installing npm dependencies cleanly (clean npm install)...
 if exist "node_modules" rmdir /s /q "node_modules"
 if exist "package-lock.json" del /f /q "package-lock.json"
 call npm install

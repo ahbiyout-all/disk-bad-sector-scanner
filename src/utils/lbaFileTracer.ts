@@ -336,6 +336,9 @@ export async function traceAffectedFilesForLba(
   // 1. Read LBA 0..33 to locate partition containing targetLba
   options.onProgress?.(0, 'MBR/GPT 파티션 테이블 판독 중...');
   const ptRes = await queryTauriRawSectorRange(drive, 0, 34);
+  if (options.signal?.aborted) {
+    return makeEmpty('사용자 요청으로 추적이 중단되었습니다.', { aborted: true, supported: true });
+  }
   if (!ptRes.supported || ptRes.bytes.length < 512) {
     return makeEmpty(
       ptRes.reason || '물리 디스크 LBA 0~33 파티션 테이블을 읽을 수 없습니다 (관리자 권한 확인 필요).'
@@ -364,6 +367,16 @@ export async function traceAffectedFilesForLba(
   // 2. Read Partition VBR at partitionStartLba
   options.onProgress?.(0, `파티션 VBR (LBA #${matchingPartition.startLba.toLocaleString()}) 분석 중...`);
   const vbrRes = await queryTauriRawSectorRange(drive, matchingPartition.startLba, 1);
+  if (options.signal?.aborted) {
+    return makeEmpty('사용자 요청으로 추적이 중단되었습니다.', {
+      aborted: true,
+      supported: true,
+      sectorSize: secSize,
+      partitionName: matchingPartition.name,
+      partitionStartLba: matchingPartition.startLba,
+      partitionEndLba: matchingPartition.endLba
+    });
+  }
   if (!vbrRes.supported || vbrRes.bytes.length < 512) {
     return makeEmpty(
       vbrRes.reason || `파티션 VBR (LBA #${matchingPartition.startLba})을 읽을 수 없습니다.`,
@@ -461,6 +474,7 @@ export async function traceAffectedFilesForLba(
         const clusters: number[] = [];
         let cur = firstCluster;
         while (cur >= 2 && cur < 0x0ffffff8 && !visited.has(cur) && clusters.length < 16384) {
+          if (options.signal?.aborted) break;
           visited.add(cur);
           clusters.push(cur);
           cur = await readFat32NextCluster(cur);
@@ -515,6 +529,7 @@ export async function traceAffectedFilesForLba(
         const entryCount = Math.floor(dirRes.bytes.length / 32);
         let lfnParts: string[] = [];
         for (let idx = 0; idx < entryCount; idx++) {
+          if (options.signal?.aborted) break;
           const eOff = idx * 32;
           const firstByte = dirRes.bytes[eOff];
           if (firstByte === 0x00) break;
@@ -584,6 +599,7 @@ export async function traceAffectedFilesForLba(
       }
     }
 
+    const fatAborted = Boolean(options.signal?.aborted);
     return {
       supported: true,
       targetLba,
@@ -597,12 +613,13 @@ export async function traceAffectedFilesForLba(
       targetLcn: targetCluster,
       mftRecordsScanned: 0,
       elapsedMs: Math.round(performance.now() - startMs),
-      aborted: false,
+      aborted: fatAborted,
       affectedFiles,
-      diagnosticNote:
-        affectedFiles.length > 0
-          ? `${fsType} 볼륨 클러스터 #${targetCluster ?? 'Meta'} 매핑 완료 (${affectedFiles.length}건 식별)`
-          : `${fsType} 볼륨 클러스터 #${targetCluster ?? 'N/A'}에 대응하는 파일 엔트리를 찾지 못했습니다 (비할당 클러스터 또는 심층 서브폴더).`
+      diagnosticNote: fatAborted
+        ? `사용자 요청으로 ${fsType} 볼륨 추적이 중단되었습니다.`
+        : affectedFiles.length > 0
+        ? `${fsType} 볼륨 클러스터 #${targetCluster ?? 'Meta'} 매핑 완료 (${affectedFiles.length}건 식별)`
+        : `${fsType} 볼륨 클러스터 #${targetCluster ?? 'N/A'}에 대응하는 파일 엔트리를 찾지 못했습니다 (비할당 클러스터 또는 심층 서브폴더).`
     };
   }
 
@@ -636,22 +653,27 @@ export async function traceAffectedFilesForLba(
     }
   }
 
-  // Build map: recordIndex -> absolute LBA inside $MFT Data Runs
+  // Build map: recordIndex -> absolute LBA + intra-sector byte skip inside $MFT Data Runs (supports both 512e and 4Kn drives)
   const mftRecordsPerCluster = Math.max(1, Math.floor(vbrInfo.clusterSizeBytes / mftRecordSize));
-  const resolveMftBatchLba = (firstRecordIdx: number): { lba: number; availableRecords: number } | null => {
+  const resolveMftBatchLba = (
+    firstRecordIdx: number
+  ): { lba: number; byteSkip: number; availableRecords: number } | null => {
     const targetClusterOffset = Math.floor(firstRecordIdx / mftRecordsPerCluster);
     let passedClusters = 0;
     for (const run of mftRuns) {
       if (targetClusterOffset < passedClusters + run.clusterCount) {
         const intraRunCluster = targetClusterOffset - passedClusters;
         const intraClusterRecord = firstRecordIdx % mftRecordsPerCluster;
+        const byteOffInCluster = intraClusterRecord * mftRecordSize;
+        const secOffInCluster = Math.floor(byteOffInCluster / secSize);
+        const byteSkip = byteOffInCluster % secSize;
         const lba =
           matchingPartition.startLba +
           (run.lcnStart + intraRunCluster) * spc +
-          intraClusterRecord * sectorsPerRecord;
+          secOffInCluster;
         const remRecordsInRun =
           (run.clusterCount - intraRunCluster) * mftRecordsPerCluster - intraClusterRecord;
-        return { lba, availableRecords: Math.max(1, remRecordsInRun) };
+        return { lba, byteSkip, availableRecords: Math.max(1, remRecordsInRun) };
       }
       passedClusters += run.clusterCount;
     }
@@ -661,10 +683,13 @@ export async function traceAffectedFilesForLba(
   const nameCache = new Map<number, { name: string; parent: number }>();
   const matchedRecords: ParsedNtfsRecord[] = [];
   let scanned = 0;
-  let aborted = false;
+  let aborted = Boolean(options.signal?.aborted);
 
   const maxBatchSectors = 512;
-  const batchRecords = Math.max(8, Math.min(256, Math.floor(maxBatchSectors / sectorsPerRecord)));
+  const batchRecords = Math.max(
+    1,
+    Math.min(256, Math.floor((maxBatchSectors * secSize) / mftRecordSize) - 1)
+  );
   let recCursor = 0;
 
   while (recCursor < maxMftRecords) {
@@ -677,17 +702,20 @@ export async function traceAffectedFilesForLba(
     if (!loc) break;
 
     const readRecordsNow = Math.min(batchRecords, loc.availableRecords, maxMftRecords - recCursor);
-    const readSectors = Math.min(maxBatchSectors, readRecordsNow * sectorsPerRecord);
+    const neededBytes = loc.byteSkip + readRecordsNow * mftRecordSize;
+    const readSectors = Math.min(maxBatchSectors, Math.ceil(neededBytes / secSize));
     const batchRes = await queryTauriRawSectorBytes(drive, loc.lba, readSectors);
-    if (!batchRes.supported || batchRes.bytes.length < mftRecordSize) {
+    if (!batchRes.supported || batchRes.bytes.length < loc.byteSkip + mftRecordSize) {
       recCursor += readRecordsNow;
       continue;
     }
 
-    const actualCount = Math.floor(batchRes.bytes.length / mftRecordSize);
+    const availableBytes = Math.max(0, batchRes.bytes.length - loc.byteSkip);
+    const actualCount = Math.min(readRecordsNow, Math.floor(availableBytes / mftRecordSize));
     for (let i = 0; i < actualCount; i++) {
       const idx = recCursor + i;
-      const slice = batchRes.bytes.subarray(i * mftRecordSize, (i + 1) * mftRecordSize);
+      const recByteStart = loc.byteSkip + i * mftRecordSize;
+      const slice = batchRes.bytes.subarray(recByteStart, recByteStart + mftRecordSize);
       const parsed = parseNtfsMftRecord(slice, idx, true);
       scanned++;
       if (!parsed) continue;
@@ -704,8 +732,8 @@ export async function traceAffectedFilesForLba(
         r => targetLcn >= r.lcnStart && targetLcn < r.lcnStart + r.clusterCount
       );
       // Also check if targetLba directly falls inside this specific $MFT record itself!
-      const recordLbaStart = loc.lba + i * sectorsPerRecord;
-      const recordLbaEnd = recordLbaStart + sectorsPerRecord - 1;
+      const recordLbaStart = loc.lba + Math.floor(recByteStart / secSize);
+      const recordLbaEnd = loc.lba + Math.floor((recByteStart + mftRecordSize - 1) / secSize);
       const hitsResidentRecord = targetLba >= recordLbaStart && targetLba <= recordLbaEnd;
 
       if (hitsExtent || hitsResidentRecord) {
@@ -727,15 +755,28 @@ export async function traceAffectedFilesForLba(
 
   // On-demand resolve any missing parent directory MFT records so full hierarchy paths are complete
   for (const rec of matchedRecords) {
+    if (options.signal?.aborted) {
+      aborted = true;
+      break;
+    }
     let curParent = rec.parentRecordNumber;
     let depth = 0;
     while (curParent !== 5 && !nameCache.has(curParent) && depth < 16) {
+      if (options.signal?.aborted) {
+        aborted = true;
+        break;
+      }
       depth++;
       const pLoc = resolveMftBatchLba(curParent);
       if (!pLoc) break;
-      const pRes = await queryTauriRawSectorBytes(drive, pLoc.lba, sectorsPerRecord);
-      if (!pRes.supported || pRes.bytes.length < mftRecordSize) break;
-      const parsedParent = parseNtfsMftRecord(pRes.bytes.subarray(0, mftRecordSize), curParent, true);
+      const pNeededSectors = Math.ceil((pLoc.byteSkip + mftRecordSize) / secSize);
+      const pRes = await queryTauriRawSectorBytes(drive, pLoc.lba, pNeededSectors);
+      if (!pRes.supported || pRes.bytes.length < pLoc.byteSkip + mftRecordSize) break;
+      const parsedParent = parseNtfsMftRecord(
+        pRes.bytes.subarray(pLoc.byteSkip, pLoc.byteSkip + mftRecordSize),
+        curParent,
+        true
+      );
       if (!parsedParent || !parsedParent.fileName) break;
       nameCache.set(parsedParent.recordNumber, {
         name: parsedParent.fileName,

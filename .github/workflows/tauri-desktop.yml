@@ -39,7 +39,36 @@ jobs:
           workspaces: src-tauri
 
       - name: Install Frontend & Tauri CLI Dependencies
-        run: npm install
+        shell: pwsh
+        run: |
+          Remove-Item -Force -ErrorAction SilentlyContinue package-lock.json
+          npm install --include=optional
+          $verifyScript = @"
+          const fs = require('fs');
+          const path = require('path');
+          const { execFileSync } = require('child_process');
+          const checks = [
+            { optionalPkg: '@rollup/rollup-win32-x64-msvc', parentPkg: 'rollup' },
+            { optionalPkg: '@tailwindcss/oxide-win32-x64-msvc', parentPkg: '@tailwindcss/oxide' },
+            { optionalPkg: '@tauri-apps/cli-win32-x64-msvc', parentPkg: '@tauri-apps/cli' },
+            { optionalPkg: '@esbuild/win32-x64', parentPkg: 'esbuild' }
+          ];
+          const missing = [];
+          for (const c of checks) {
+            try {
+              require.resolve(c.optionalPkg);
+            } catch {
+              const parentPkgPath = path.join('node_modules', ...c.parentPkg.split('/'), 'package.json');
+              const ver = JSON.parse(fs.readFileSync(parentPkgPath, 'utf8')).version;
+              missing.push(c.optionalPkg + '@' + ver);
+            }
+          }
+          if (missing.length > 0) {
+            console.log('Installing missing Windows native optional packages:', missing.join(', '));
+            execFileSync('npm', ['install', '--no-save', '--include=optional', ...missing], { stdio: 'inherit', shell: true });
+          }
+          "@
+          node -e $verifyScript
 
       - name: Run TypeScript Type Check
         run: npm run lint
