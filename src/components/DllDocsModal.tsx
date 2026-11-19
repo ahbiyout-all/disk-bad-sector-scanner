@@ -84,7 +84,31 @@ DS_API bool  DS_CALL DS_RunTrayGuardianCheck(DSTrayGuardianStatus* outStatus);
 DS_API bool  DS_CALL DS_ExecuteBitCarvingRecovery(void* hDrive, uint64_t targetLba, uint32_t clusterSpan, DSCarvedSectorResult* outResult);
 
 // 15. [고도화 하드웨어 정보 획득] 물리 디스크 열거 및 4K AF, TRIM, 지오메트리 심층 프로브
-DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDrives, uint32_t maxDrives);`;
+DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDrives, uint32_t maxDrives);
+
+// 16~19. [하드웨어 검증 · 자가진단 · 단일 핸들 상세 조회]
+DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult);
+DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode);
+DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct);
+DS_API bool DS_CALL DS_GetDriveDetails(void* hDrive, DSPhysicalDriveDetail* outDetail);
+
+// 20~25. [Memory-Mapped Zero-Copy & Direct DMA 파이프라인]
+DS_API void* DS_CALL DS_OpenMappedTarget(const char* utf8Path, uint32_t sectorSize, uint32_t accessMode, uint64_t initialSizeBytes);
+DS_API bool DS_CALL DS_MapSectorWindow(void* hMapped, uint64_t startLba, uint32_t sectorCount, DSMappedSectorWindow* outWindow);
+DS_API bool DS_CALL DS_UnmapSectorWindow(DSMappedSectorWindow* window);
+DS_API void DS_CALL DS_CloseMappedTarget(void* hMapped);
+DS_API bool DS_CALL DS_ScanMappedLbaRange(void* hMapped, uint64_t startLba, uint64_t sectorCount, uint32_t windowSectors, uint32_t* outCrc32, uint64_t* outParity, uint64_t* outZeroSectors);
+DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(void* hDrive, uint64_t startLba, uint64_t totalSectors, const char* destUtf8Path, uint64_t destStartLba, uint32_t chunkSectors, uint64_t* outBytesCopied, uint32_t* outWin32Error);
+
+// ---------------------------------------------------------------------------
+// DiskSentinelForensics.h - Pure Creative Compute & Forensics DLL (DiskSentinelForensics.dll)
+// ---------------------------------------------------------------------------
+DSF_API bool DSF_CALL DSF_GetForensicsEngineInfo(DSFEngineInfo* outInfo);
+DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(const DSFTelemetrySample* samples, uint32_t sampleCount, double baselineExpectedMs, uint32_t maxBlockIdGap, DSFZScoreReport* outReport, DSFContiguousZone* outZones, uint32_t maxZones, uint32_t* outWrittenZones);
+DSF_API bool DSF_CALL DSF_ComputeExtentBadDensityHeatmap(const DSFExtentInput* extents, uint32_t extentCount, const uint64_t* badLbas, uint32_t badLbaCount, bool badLbasAlreadySorted, uint32_t cellCount, uint32_t* outCellBadCounts, double* outCellDensityPct, DSFHeatmapSummary* outSummary);
+DSF_API bool DSF_CALL DSF_ComputeSectorEntropyAndPattern(const uint8_t* pBuffer, uint32_t bufferLength, DSFSectorEntropyResult* outResult);
+DSF_API bool DSF_CALL DSF_InspectBootAndPartitionTable(const uint8_t* rawLbaBuffer, uint32_t bufferLength, uint32_t sectorSize, DSFPartitionTableReport* outReport, DSFPartitionRecord* outPartitions, uint32_t maxPartitions);
+DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, uint32_t bufferLength, DSFVbrInfo* outInfo);`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
@@ -99,14 +123,14 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                  DiskSentinelNativeCore.dll 기술 명세서
+                  DiskSentinelNativeCore.dll &amp; Forensics.dll 기술 명세서
                 </h2>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                   순수 창작 네이티브 DLL
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                초저지연 비동기 다이렉트 I/O 배드섹터 정밀 진단 및 하드웨어 텔레메트리 코어 엔진
+                초저지연 다이렉트 I/O 코어 엔진 + 무의존성 Z-Score·엔트로피·GPT CRC32 포렌식 엔진
               </p>
             </div>
           </div>
@@ -166,7 +190,7 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
-            C/C++ API 명세 (8종)
+            C/C++ API 명세 (31종)
           </button>
 
           <button
@@ -201,24 +225,20 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
 
               {/* Architecture Diagram */}
               <div className="bg-slate-900 text-slate-100 p-4 rounded-lg font-mono text-[11px] overflow-x-auto border border-slate-800 leading-snug">
-                <div className="text-emerald-400 font-bold mb-2">┌─── DiskSentinelNativeCore.dll 4-Layer Architecture ───┐</div>
-                <div>│                                                         │</div>
-                <div>│  <span className="text-indigo-400">[Layer 1] DirectStorageRawIO Engine</span>                │</div>
-                <div>│  └─ CreateFileW(\\.\PhysicalDrive, FILE_FLAG_NO_BUFFERING) │</div>
-                <div>│  └─ Memory Aligned 4096-Byte Direct DMA Buffers    │</div>
-                <div>│  └─ QueryPerformanceCounter (Sub-microsecond QPC) │</div>
-                <div>│                                                         │</div>
-                <div>│  <span className="text-purple-400">[Layer 2] AdaptiveBurstSeeker Algorithm (순수 독자 창작)</span> │</div>
-                <div>│  └─ Fast Zone: 1MB Multi-Block High-Speed Burst Scan    │</div>
-                <div>│  └─ Slow/Bad Zone: Auto-Trigger Binary Micro-LBA Step  │</div>
-                <div>│                                                         │</div>
-                <div>│  <span className="text-cyan-400">[Layer 3] Low-Level PassThrough Telemetry</span>          │</div>
-                <div>│  └─ IOCTL_STORAGE_PROTOCOL_COMMAND (NVMe Log Page 02h) │</div>
-                <div>│  └─ IOCTL_ATA_PASS_THROUGH_DIRECT (ATA SFF-8035i SMART)│</div>
-                <div>│                                                         │</div>
-                <div>│  <span className="text-amber-400">[Layer 4] Non-Destructive Soft Bad Sector Repair</span> │</div>
-                <div>│  └─ ECC Parity Re-evaluation & Firmware Reallocation    │</div>
-                <div className="text-emerald-400 font-bold mt-2">└─────────────────────────────────────────────────────────┘</div>
+                <div className="text-emerald-400 font-bold mb-2">┌─── Dual Pure Creative DLL Architecture (Core + Forensics) ───┐</div>
+                <div>│                                                                 │</div>
+                <div>│  <span className="text-indigo-400">[DiskSentinelNativeCore.dll] Kernel Direct DMA &amp; mmap Engine</span> │</div>
+                <div>│  └─ Physical: FILE_FLAG_NO_BUFFERING + VirtualAlloc MDL Buffers │</div>
+                <div>│  └─ Image/Clone: CreateFileMappingW / MapViewOfFile Zero-Copy   │</div>
+                <div>│  └─ O(log K) AdaptiveBurstSeeker + ATA/NVMe Log Page 02h        │</div>
+                <div>│  └─ Single-Pass Fused Zero/Parity + 256-Entry LUT CRC32         │</div>
+                <div>│                                                                 │</div>
+                <div>│  <span className="text-purple-400">[DiskSentinelForensics.dll] Zero-Handle Analytics Engine (신규)</span>│</div>
+                <div>│  └─ Welford One-Pass Z-Score &amp; Contiguous Cluster Detector      │</div>
+                <div>│  └─ O(N log M) File-Extent Bad-Density Heatmap Mapper           │</div>
+                <div>│  └─ Shannon Entropy H=-Σp·log2(p) &amp; Erased-NAND Classifier      │</div>
+                <div>│  └─ MBR/GPT Header &amp; Array IEEE CRC32 Validator + VBR Decoder   │</div>
+                <div className="text-emerald-400 font-bold mt-2">└─────────────────────────────────────────────────────────────────┘</div>
               </div>
             </div>
           )}
@@ -229,20 +249,20 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
               <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
                 <div className="flex items-center gap-2 font-bold text-indigo-600 dark:text-indigo-400 text-xs">
                   <HardDrive className="w-4 h-4 shrink-0" />
-                  <span>1. DirectStorageRawIO 엔진</span>
+                  <span>1. Direct DMA &amp; Memory-Mapped Zero-Copy</span>
                 </div>
                 <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
-                  `FILE_FLAG_NO_BUFFERING`과 `_aligned_malloc(4096)`을 적용하여 Windows 메모리 캐시를 원천 우회하고, 하드웨어 물리 셀의 순수 I/O 지연시간을 0.1µs 해상도로 측정합니다.
+                  물리 디스크는 `VirtualAlloc` 64KB 정렬 버퍼·`MaximumTransferLength` 스케일링·순차 시크 생략으로 Direct DMA를 극대화하고, 이미지/복제 파일은 `CreateFileMappingW`/`MapViewOfFile`(`mmap`)로 커널-유저 버퍼 복사를 제거합니다.
                 </p>
               </div>
 
               <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
                 <div className="flex items-center gap-2 font-bold text-purple-600 dark:text-purple-400 text-xs">
                   <Zap className="w-4 h-4 shrink-0" />
-                  <span>2. AdaptiveBurstSeeker (독자 창작)</span>
+                  <span>2. AdaptiveBurstSeeker (O(log K) 이진 분할)</span>
                 </div>
                 <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
-                  정상 영역은 1MB 버스트 단위로 85% 빠르게 통과하고, 응답 지연(150ms 초과)이나 CRC 에러 감지 시 즉시 1 LBA(512B/4KB) 미세 분해 모드로 전환하여 배드섹터 위치를 핀포인트합니다.
+                  정상 영역은 하드웨어 최적 버스트 단위로 고속 통과하고, 응답 지연이나 CRC 에러 감지 시 반복 이진 분할(Binary Subdivision)로 정상 절반을 건너뛰며 1 LBA 결함을 최소 시스템 콜로 핀포인트합니다.
                 </p>
               </div>
 
@@ -263,6 +283,26 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
                 </div>
                 <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
                   ECC 패리티 불일치로 인한 논리적 소프트 배드섹터에 대해 원자적 재기록 검증을 수행하여 드라이브 펌웨어의 자율 예비 블록 치환(Reallocation 0x05)을 유도합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-amber-600 dark:text-amber-400 text-xs">
+                  <Activity className="w-4 h-4 shrink-0" />
+                  <span>5. Welford Z-Score &amp; 익스텐트 히트맵 (Forensics.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  단일 패스 Welford 점화식으로 대량 섹터 레이턴시의 평균·표준편차를 수치 안정적으로 계산해 연속 열화 클러스터를 탐지하고, O(N log M) 이진 탐색으로 파일 익스텐트 배드 밀도를 산출합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-rose-600 dark:text-rose-400 text-xs">
+                  <Binary className="w-4 h-4 shrink-0" />
+                  <span>6. 섀넌 엔트로피 &amp; GPT CRC32 검증 (Forensics.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  256-bin 엔트로피(0~8 bits/byte)와 0xFF 소거 NAND/반복 패턴을 분류하며, LBA 0~33 원시 버퍼에서 GPT 헤더 및 파티션 배열의 IEEE 802.3 CRC32와 NTFS/FAT32/exFAT VBR 구조를 검증합니다.
                 </p>
               </div>
             </div>
@@ -311,9 +351,33 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
 
                   <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <span className="font-bold text-teal-500 mr-2">[v4.5.0 고도화]</span>
-                    <strong className="text-slate-900 dark:text-slate-100">32개 물리 드라이브 슬롯 전수 탐색 & 볼륨 역매핑:</strong>
+                    <strong className="text-slate-900 dark:text-slate-100">32개 물리 드라이브 슬롯 전수 탐색 &amp; 볼륨 역매핑:</strong>
                     <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                       기존 12~16개 탐색 제한을 32개(<code>PhysicalDrive0 ~ 31</code>)로 전면 확장하여 외장 USB 독/카드 리더기의 비연속 높은 슬롯 인덱스 장치를 완벽 검출하고, <code>FILE_SHARE_DELETE</code> 플래그를 추가해 OS 보안 프로세스 점유로 인한 공유 위반을 차단하며, <code>IOCTL_STORAGE_GET_DEVICE_NUMBER</code>로 Windows 볼륨 문자(C:, D:, E: 등)를 1:1 매핑합니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-cyan-500 mr-2">[v4.6.0 감사 수정]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">DS_GetDriveDetails 누락 익스포트 복구 · LUT CRC32 가속 · 경계 보안 강화:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      <code>DiskSentinelLauncher.cs</code>에서 호출하던 <code>DS_GetDriveDetails</code>가 DLL 헤더/구현에 누락되어 있던 결함을 공통 헬퍼(<code>PopulateDriveDetailFromHandle</code>)로 정식 구현·익스포트하고, 비트별 O(8N) CRC32를 256-엔트리 룩업 테이블 + 8바이트 언롤 패리티로 고속화했으며, <code>DS_GetNvmeDeepTelemetry</code> 사전 오프셋 경계 검증, <code>StorageAccessAlignmentProperty(6)</code>/<code>StorageDeviceWriteCacheProperty(4)</code> 실측 및 <code>DS_VerifyLbaBlock</code> DWORD 오버플로 청크 분할을 반영했습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-purple-500 mr-2">[v4.6.0 신규 DLL]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">DiskSentinelForensics.dll 순수 창작 포렌식·수리연산 엔진 출범:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      커널 핸들 비의존 알고리즘(Welford Z-Score 군집 탐지, O(N log M) 익스텐트 히트맵, 섀넌 엔트로피·소거 NAND 판별, GPT IEEE 802.3 CRC32 검증, VBR 디코더) 6종 API를 독립 DLL로 분리해 런처(<code>/api/native/forensics/entropy</code>)와 Inno Setup 패키징에 통합했습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-sky-500 mr-2">[v4.6.1 Zero-Copy DMA]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">Memory-Mapped Files &amp; Direct DMA 대용량 I/O 최적화 (C++ / Rust):</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      물리 드라이브 스캔에는 <code>VirtualAlloc</code> 64KB 정렬 스크래치 재사용, <code>StorageAdapterProperty</code>(<code>MaximumTransferLength</code>) 기반 1~4MB 버스트 스케일링, 순차 LBA 읽기 시 <code>SetFilePointerEx</code> 생략 및 <code>O(log K)</code> 이진 분할을 적용했습니다. 디스크 이미지/복제 경로에는 <code>CreateFileMappingW</code>/<code>MapViewOfFile</code>(POSIX <code>mmap</code>) 영속 섹션 매핑과 <code>ReadFile</code>→매핑 페이지 Direct DMA 기록(<code>DS_OpenMappedTarget</code>~<code>DS_CopyLbaRangeToMappedFile</code>, Rust <code>DS_CopyLbaRangeChunk</code>)을 탑재해 불필요한 버퍼 복사를 제거했습니다.
                     </p>
                   </div>
                 </div>
@@ -326,7 +390,7 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-[11px] font-bold text-indigo-500">
-                  DiskSentinelEngine.h (Standard C ABI Export)
+                  DiskSentinelEngine.h + DiskSentinelForensics.h (Standard C ABI Export)
                 </span>
                 <button
                   onClick={() => copyToClipboard(headerCodeSample, 'header-code')}
@@ -354,11 +418,13 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(DSPhysicalDriveDetail* outDri
               </p>
 
               <div className="bg-slate-900 text-slate-200 p-3 rounded-lg font-mono text-[10px] space-y-1 border border-slate-800">
-                <div className="text-slate-400">// Python ctypes 호출 예시:</div>
-                <div>from ctypes import cdll, c_uint32, c_void_p, byref</div>
-                <div>dll = cdll.LoadLibrary('./DiskSentinelNativeCore.dll')</div>
+                <div className="text-slate-400">// Python ctypes 호출 예시 (Core + Forensics):</div>
+                <div>from ctypes import cdll, c_uint32, c_uint8, byref</div>
+                <div>core_dll = cdll.LoadLibrary('./DiskSentinelNativeCore.dll')</div>
+                <div>forensics_dll = cdll.LoadLibrary('./DiskSentinelForensics.dll')</div>
                 <div>sector_size = c_uint32(0)</div>
-                <div>h_drive = dll.DS_OpenDriveDirect(0, byref(sector_size))</div>
+                <div>h_drive = core_dll.DS_OpenDriveDirect(0, byref(sector_size))</div>
+                <div># forensics_dll.DSF_ComputeSectorEntropyAndPattern(buf, 512, byref(entropy_res))</div>
               </div>
             </div>
           )}

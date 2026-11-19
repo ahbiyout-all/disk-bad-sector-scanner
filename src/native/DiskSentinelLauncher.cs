@@ -29,6 +29,7 @@ namespace DiskSentinel
         private const int DedicatedLauncherPort = 29088;
 
         private static bool _dllLoaded = false;
+        private static bool _forensicsDllLoaded = false;
         private static bool _isElevated = false;
         private static long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
         private static bool _keepRunning = true;
@@ -236,6 +237,51 @@ namespace DiskSentinel
         [DllImport("DiskSentinelNativeCore.dll", CallingConvention = CallingConvention.StdCall)]
         private static extern void DS_CloseDrive(IntPtr hDrive);
 
+        [StructLayout(LayoutKind.Sequential, Pack = 8)]
+        private struct DSFEngineInfo
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 48)]
+            public byte[] engineName;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] version;
+            public uint capabilitiesMask;
+            public uint crc32SelfTestValue;
+            public byte crc32SelfTestPassed;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 7)]
+            public byte[] reserved;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 8)]
+        private struct DSFSectorEntropyResult
+        {
+            public uint inspectedBytes;
+            public uint crc32;
+            public uint repeatingWord32;
+            public uint sectorClass;
+            public double shannonEntropy;
+            public double zeroByteRatio;
+            public double ffByteRatio;
+            public double printableRatio;
+            public byte hasRepeatingPattern;
+            public byte isAllZero;
+            public byte isAllFF;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)]
+            public byte[] reserved;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 48)]
+            public byte[] classificationLabel;
+        }
+
+        [DllImport("DiskSentinelForensics.dll", CallingConvention = CallingConvention.StdCall)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private static extern bool DSF_GetForensicsEngineInfo(out DSFEngineInfo outInfo);
+
+        [DllImport("DiskSentinelForensics.dll", CallingConvention = CallingConvention.StdCall)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private static extern bool DSF_ComputeSectorEntropyAndPattern(
+            [In] byte[] pBuffer,
+            uint bufferLength,
+            out DSFSectorEntropyResult outResult);
+
         [StructLayout(LayoutKind.Sequential)]
         private struct STORAGE_DEVICE_NUMBER
         {
@@ -355,6 +401,12 @@ namespace DiskSentinel
             {
                 IntPtr hMod = LoadLibraryW(dllPath);
                 _dllLoaded = (hMod != IntPtr.Zero);
+            }
+            string forensicsDllPath = Path.Combine(baseDir, "DiskSentinelForensics.dll");
+            if (File.Exists(forensicsDllPath))
+            {
+                IntPtr hFor = LoadLibraryW(forensicsDllPath);
+                _forensicsDllLoaded = (hFor != IntPtr.Zero);
             }
 
             string htmlPath = FindHtmlEntry(baseDir);
@@ -657,10 +709,11 @@ namespace DiskSentinel
                 {
                     string json = string.Format(
                         CultureInfo.InvariantCulture,
-                        "{{\"available\":true,\"host\":\"win32-native-bridge\",\"version\":\"{0}\",\"elevated\":{1},\"dllLoaded\":{2}}}",
+                        "{{\"available\":true,\"host\":\"win32-native-bridge\",\"version\":\"{0}\",\"elevated\":{1},\"dllLoaded\":{2},\"forensicsDllLoaded\":{3}}}",
                         AppVersion,
                         _isElevated ? "true" : "false",
-                        _dllLoaded ? "true" : "false"
+                        _dllLoaded ? "true" : "false",
+                        _forensicsDllLoaded ? "true" : "false"
                     );
                     WriteJsonResponse(res, json);
                 }
@@ -702,6 +755,14 @@ namespace DiskSentinel
                     ulong lba = ExtractJsonULong(body, "lba", 0);
                     uint size = ExtractJsonUInt(body, "size", 512);
                     WriteJsonResponse(res, ExecuteReadSectorJson(driveIdx, lba, size));
+                }
+                else if (path == "/api/native/forensics/entropy")
+                {
+                    string body = ReadRequestBody(req);
+                    uint driveIdx = ExtractJsonUInt(body, "driveIndex", 0);
+                    ulong lba = ExtractJsonULong(body, "lba", 0);
+                    uint size = ExtractJsonUInt(body, "size", 512);
+                    WriteJsonResponse(res, ExecuteForensicsEntropyJson(driveIdx, lba, size));
                 }
                 else
                 {
@@ -1194,45 +1255,56 @@ namespace DiskSentinel
             StringBuilder sb = new StringBuilder();
             sb.Append("[");
             bool first = true;
+            bool usedDllTemps = false;
             if (_dllLoaded)
             {
-                for (uint i = 0; i < 32; i++)
+                try
                 {
-                    uint outSec = 512;
-                    IntPtr h = DS_OpenDriveDirect(i, out outSec);
-                    if (h == IntPtr.Zero) continue;
-                    int tempC = 0;
-                    DSPhysicalDriveDetail detail;
-                    if (DS_GetDriveDetails(h, out detail) && detail.temperatureCelsius > 0 && detail.temperatureCelsius < 150)
+                    for (uint i = 0; i < 32; i++)
                     {
-                        tempC = (int)detail.temperatureCelsius;
-                    }
-                    if (tempC == 0)
-                    {
-                        DSSmartEntry[] entries = new DSSmartEntry[32];
-                        int cnt = DS_GetSmartTelemetry(h, entries, 32);
-                        for (int j = 0; j < cnt; j++)
+                        uint outSec = 512;
+                        IntPtr h = DS_OpenDriveDirect(i, out outSec);
+                        if (h == IntPtr.Zero) continue;
+                        int tempC = 0;
+                        DSPhysicalDriveDetail detail;
+                        if (DS_GetDriveDetails(h, out detail) && detail.temperatureCelsius > 0 && detail.temperatureCelsius < 150)
                         {
-                            if (entries[j].attributeId == 0xC2 || entries[j].attributeId == 0xBE)
+                            tempC = (int)detail.temperatureCelsius;
+                        }
+                        if (tempC == 0)
+                        {
+                            DSSmartEntry[] entries = new DSSmartEntry[32];
+                            int cnt = DS_GetSmartTelemetry(h, entries, 32);
+                            for (int j = 0; j < cnt; j++)
                             {
-                                int t = (int)(entries[j].rawValue & 0xFF);
-                                if (t > 0 && t < 150) { tempC = t; break; }
+                                if (entries[j].attributeId == 0xC2 || entries[j].attributeId == 0xBE)
+                                {
+                                    int t = (int)(entries[j].rawValue & 0xFF);
+                                    if (t > 0 && t < 150) { tempC = t; break; }
+                                }
                             }
                         }
-                    }
-                    DS_CloseDrive(h);
+                        DS_CloseDrive(h);
 
-                    if (!first) sb.Append(",");
-                    first = false;
-                    sb.AppendFormat(
-                        CultureInfo.InvariantCulture,
-                        "{{\"driveIndex\":{0},\"temperatureC\":{1}}}",
-                        i,
-                        tempC > 0 ? tempC.ToString(CultureInfo.InvariantCulture) : "null"
-                    );
+                        if (!first) sb.Append(",");
+                        first = false;
+                        sb.AppendFormat(
+                            CultureInfo.InvariantCulture,
+                            "{{\"driveIndex\":{0},\"temperatureC\":{1}}}",
+                            i,
+                            tempC > 0 ? tempC.ToString(CultureInfo.InvariantCulture) : "null"
+                        );
+                    }
+                    usedDllTemps = true;
+                }
+                catch
+                {
+                    sb.Length = 1;
+                    first = true;
+                    usedDllTemps = false;
                 }
             }
-            else
+            if (!usedDllTemps)
             {
                 IntPtr qPtr = Marshal.AllocHGlobal(12);
                 for (int b = 0; b < 12; b++) Marshal.WriteByte(qPtr, b, 0);
@@ -1436,6 +1508,102 @@ namespace DiskSentinel
                 }
                 sb.Append("]}");
                 return sb.ToString();
+            }
+            finally
+            {
+                CloseHandle(hRaw);
+            }
+        }
+
+        private static string ExecuteForensicsEntropyJson(uint driveIndex, ulong lba, uint requestedSize)
+        {
+            uint alignedSize = ((Math.Max(512U, Math.Min(65536U, requestedSize)) + 511U) / 512U) * 512U;
+            string devPath = string.Format("\\\\.\\PhysicalDrive{0}", driveIndex);
+            IntPtr hRaw = CreateFileW(
+                devPath,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                IntPtr.Zero,
+                OPEN_EXISTING,
+                FILE_FLAG_NO_BUFFERING,
+                IntPtr.Zero
+            );
+            if (hRaw == INVALID_HANDLE_VALUE)
+            {
+                return "{\"ok\":false,\"error\":\"open_failed\"}";
+            }
+
+            try
+            {
+                long offset = (long)(lba * 512UL);
+                long newPos;
+                IntPtr buf = Marshal.AllocHGlobal((int)alignedSize + 4096);
+                IntPtr aligned = new IntPtr(((buf.ToInt64() + 4095L) / 4096L) * 4096L);
+                uint bytesRead = 0;
+                bool ok = SetFilePointerEx(hRaw, offset, out newPos, 0) &&
+                          ReadFile(hRaw, aligned, alignedSize, out bytesRead, IntPtr.Zero) &&
+                          bytesRead > 0;
+                byte[] data = null;
+                if (ok)
+                {
+                    uint count = Math.Min(requestedSize, bytesRead);
+                    data = new byte[count];
+                    Marshal.Copy(aligned, data, 0, (int)count);
+                }
+                Marshal.FreeHGlobal(buf);
+
+                if (data == null || data.Length == 0)
+                {
+                    return "{\"ok\":false,\"error\":\"read_failed\"}";
+                }
+
+                if (_forensicsDllLoaded)
+                {
+                    try
+                    {
+                        DSFSectorEntropyResult ent;
+                        if (DSF_ComputeSectorEntropyAndPattern(data, (uint)data.Length, out ent))
+                        {
+                            return string.Format(
+                                CultureInfo.InvariantCulture,
+                                "{{\"ok\":true,\"source\":\"DiskSentinelForensics.dll\",\"inspectedBytes\":{0},\"crc32\":\"0x{1:X8}\",\"sectorClass\":{2},\"shannonEntropy\":{3:F4},\"zeroByteRatio\":{4:F4},\"ffByteRatio\":{5:F4},\"printableRatio\":{6:F4},\"hasRepeatingPattern\":{7},\"repeatingWord32\":\"0x{8:X8}\",\"classificationLabel\":\"{9}\"}}",
+                                ent.inspectedBytes,
+                                ent.crc32,
+                                ent.sectorClass,
+                                ent.shannonEntropy,
+                                ent.zeroByteRatio,
+                                ent.ffByteRatio,
+                                ent.printableRatio,
+                                ent.hasRepeatingPattern != 0 ? "true" : "false",
+                                ent.repeatingWord32,
+                                JsonEscape(BytesToAscii(ent.classificationLabel))
+                            );
+                        }
+                    }
+                    catch { }
+                }
+
+                // Pure C# managed fallback if DiskSentinelForensics.dll is not co-located
+                int[] hist = new int[256];
+                for (int i = 0; i < data.Length; i++) hist[data[i]]++;
+                double entropy = 0.0;
+                double n = (double)data.Length;
+                for (int k = 0; k < 256; k++)
+                {
+                    if (hist[k] > 0)
+                    {
+                        double p = hist[k] / n;
+                        entropy -= p * Math.Log(p, 2.0);
+                    }
+                }
+                return string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{{\"ok\":true,\"source\":\"managed-fallback\",\"inspectedBytes\":{0},\"shannonEntropy\":{1:F4},\"zeroByteRatio\":{2:F4},\"ffByteRatio\":{3:F4}}}",
+                    data.Length,
+                    entropy,
+                    hist[0] / n,
+                    hist[255] / n
+                );
             }
             finally
             {

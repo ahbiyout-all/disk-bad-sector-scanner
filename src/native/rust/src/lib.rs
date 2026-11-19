@@ -155,25 +155,100 @@ pub struct DSPhysicalDriveDetail {
     pub health_score: u32,
 }
 
+// Memory-Mapped File Access Mode
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum DSMappedAccessMode {
+    ReadOnly = 0,
+    ReadWrite = 1,
+}
+
+// Zero-Copy Memory-Mapped Sector Window Descriptor
+#[repr(C, packed(8))]
+#[derive(Debug, Copy, Clone)]
+pub struct DSMappedSectorWindow {
+    pub view_ptr: *mut c_void,
+    pub internal_base_ptr: *mut c_void,
+    pub file_offset_bytes: u64,
+    pub mapped_length_bytes: u32,
+    pub sector_size: u32,
+    pub is_section_mapped: u8,
+    pub is_read_only: u8,
+    pub reserved: [u8; 6],
+}
+
+// Compile-time 256-entry IEEE 802.3 CRC32 lookup table (0xEDB88320)
+const fn generate_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut i = 0u32;
+    while i < 256 {
+        let mut c = i;
+        let mut k = 0;
+        while k < 8 {
+            c = if (c & 1) != 0 {
+                (c >> 1) ^ 0xEDB8_8320
+            } else {
+                c >> 1
+            };
+            k += 1;
+        }
+        table[i as usize] = c;
+        i += 1;
+    }
+    table
+}
+
+static DS_CRC32_TABLE: [u32; 256] = generate_crc32_table();
+
 // Internal drive handle representation
 pub struct DriveContext {
     pub drive_index: u32,
     pub sector_size: u32,
+    pub max_transfer_bytes: u32,
     #[cfg(windows)]
     pub raw_handle: *mut c_void,
+    #[cfg(windows)]
+    dma_scratch: std::sync::Mutex<Option<AlignedSectorBuffer>>,
+    last_byte_offset: std::sync::atomic::AtomicU64,
+    offset_valid: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(windows)]
 struct AlignedSectorBuffer {
     ptr: *mut u8,
-    layout: std::alloc::Layout,
+    layout: Option<std::alloc::Layout>,
+    is_virtual_alloc: bool,
     len: usize,
 }
+
+#[cfg(windows)]
+unsafe impl Send for AlignedSectorBuffer {}
 
 #[cfg(windows)]
 impl AlignedSectorBuffer {
     fn new(size: usize, align: usize) -> Option<Self> {
         let safe_size = size.max(1);
+        if safe_size >= 65536 {
+            use windows_sys::Win32::System::Memory::{
+                VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
+            };
+            let vptr = unsafe {
+                VirtualAlloc(
+                    std::ptr::null(),
+                    safe_size,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                )
+            } as *mut u8;
+            if !vptr.is_null() {
+                return Some(Self {
+                    ptr: vptr,
+                    layout: None,
+                    is_virtual_alloc: true,
+                    len: safe_size,
+                });
+            }
+        }
         let safe_align = align.max(4096).next_power_of_two();
         let layout = std::alloc::Layout::from_size_align(safe_size, safe_align).ok()?;
         let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
@@ -182,7 +257,45 @@ impl AlignedSectorBuffer {
         }
         Some(Self {
             ptr,
-            layout,
+            layout: Some(layout),
+            is_virtual_alloc: false,
+            len: safe_size,
+        })
+    }
+
+    fn new_unzeroed(size: usize, align: usize) -> Option<Self> {
+        let safe_size = size.max(1);
+        if safe_size >= 65536 {
+            use windows_sys::Win32::System::Memory::{
+                VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
+            };
+            let vptr = unsafe {
+                VirtualAlloc(
+                    std::ptr::null(),
+                    safe_size,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                )
+            } as *mut u8;
+            if !vptr.is_null() {
+                return Some(Self {
+                    ptr: vptr,
+                    layout: None,
+                    is_virtual_alloc: true,
+                    len: safe_size,
+                });
+            }
+        }
+        let safe_align = align.max(4096).next_power_of_two();
+        let layout = std::alloc::Layout::from_size_align(safe_size, safe_align).ok()?;
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Self {
+            ptr,
+            layout: Some(layout),
+            is_virtual_alloc: false,
             len: safe_size,
         })
     }
@@ -203,7 +316,17 @@ impl AlignedSectorBuffer {
 #[cfg(windows)]
 impl Drop for AlignedSectorBuffer {
     fn drop(&mut self) {
-        unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+        if self.ptr.is_null() {
+            return;
+        }
+        if self.is_virtual_alloc {
+            use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+            unsafe {
+                VirtualFree(self.ptr as *mut c_void, 0, MEM_RELEASE);
+            }
+        } else if let Some(layout) = self.layout {
+            unsafe { std::alloc::dealloc(self.ptr, layout) };
+        }
     }
 }
 
@@ -437,7 +560,11 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
             CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING,
             FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH
         };
-        use windows_sys::Win32::System::Ioctl::{IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX};
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX,
+            IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
+            StorageAdapterProperty, PropertyStandardQuery, STORAGE_ADAPTER_DESCRIPTOR,
+        };
         use windows_sys::Win32::System::IO::DeviceIoControl;
 
         let path_str = format!("\\\\.\\PhysicalDrive{}\0", drive_index);
@@ -500,6 +627,35 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
             detected_sector_size = geom.Geometry.BytesPerSector;
         }
 
+        // Query StorageAdapterProperty to scale DMA window up to hardware MaximumTransferLength (1MB..4MB)
+        let mut optimal_burst_bytes = 2u32 * 1024 * 1024;
+        let mut adapter_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        adapter_query.PropertyId = StorageAdapterProperty;
+        adapter_query.QueryType = PropertyStandardQuery;
+        let mut adapter_desc: STORAGE_ADAPTER_DESCRIPTOR = std::mem::zeroed();
+        let mut adapter_bytes: u32 = 0;
+        if DeviceIoControl(
+            handle as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &adapter_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            &mut adapter_desc as *mut _ as _,
+            std::mem::size_of::<STORAGE_ADAPTER_DESCRIPTOR>() as u32,
+            &mut adapter_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && adapter_bytes >= 16 && adapter_desc.MaximumTransferLength >= 512 * 1024 {
+            let aligned_max = (adapter_desc.MaximumTransferLength / detected_sector_size) * detected_sector_size;
+            let clamped = aligned_max.clamp(1024 * 1024, 4 * 1024 * 1024);
+            if clamped >= 1024 * 1024 {
+                optimal_burst_bytes = clamped;
+            }
+        }
+
+        let prealloc_scratch = AlignedSectorBuffer::new_unzeroed(
+            optimal_burst_bytes as usize,
+            detected_sector_size.max(4096) as usize,
+        );
+
         if !out_sector_size.is_null() {
             *out_sector_size = detected_sector_size;
         }
@@ -507,7 +663,11 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
         let ctx = Box::new(DriveContext {
             drive_index,
             sector_size: detected_sector_size,
+            max_transfer_bytes: optimal_burst_bytes,
             raw_handle: handle as *mut c_void,
+            dma_scratch: std::sync::Mutex::new(prealloc_scratch),
+            last_byte_offset: std::sync::atomic::AtomicU64::new(0),
+            offset_valid: std::sync::atomic::AtomicBool::new(false),
         });
         Box::into_raw(ctx) as *mut c_void
     }
@@ -517,6 +677,9 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
         let ctx = Box::new(DriveContext {
             drive_index,
             sector_size: 512,
+            max_transfer_bytes: 2 * 1024 * 1024,
+            last_byte_offset: std::sync::atomic::AtomicU64::new(0),
+            offset_valid: std::sync::atomic::AtomicBool::new(false),
         });
         Box::into_raw(ctx) as *mut c_void
     }
@@ -546,9 +709,9 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
         let ctx = &*(drive_handle as *const DriveContext);
         let sec_size = ctx.sector_size.max(512);
         let safe_count = count.max(1);
-        let byte_offset = match lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
-            Some(off) => off,
-            None => {
+        let byte_offset_u64 = match lba.checked_mul(sec_size as u64) {
+            Some(off) if i64::try_from(off).is_ok() => off,
+            _ => {
                 let res = &mut *out_result;
                 res.start_lba = lba;
                 res.sector_count = safe_count as u64;
@@ -559,31 +722,82 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
                 return false;
             }
         };
-        let buffer_size = (safe_count as usize).saturating_mul(sec_size as usize);
-        let mut aligned_buf = match AlignedSectorBuffer::new(buffer_size, sec_size.max(4096) as usize) {
-            Some(b) => b,
-            None => return false,
-        };
-        let mut bytes_read: u32 = 0;
+        let total_bytes = (safe_count as u64).saturating_mul(sec_size as u64);
+        let max_chunk = (ctx.max_transfer_bytes.max(sec_size) as usize).min(total_bytes as usize);
+        let align = sec_size.max(4096) as usize;
 
-        let seek_ok = SetFilePointerEx(
-            ctx.raw_handle as _,
-            byte_offset,
-            std::ptr::null_mut(),
-            FILE_BEGIN,
-        );
-
-        let read_ok = if seek_ok != 0 {
-            ReadFile(
-                ctx.raw_handle as _,
-                aligned_buf.as_mut_ptr(),
-                buffer_size as u32,
-                &mut bytes_read,
-                std::ptr::null_mut(),
-            )
+        // Reuse VirtualAlloc DMA buffer when available; avoid zero-init overhead
+        let mut scratch_guard = ctx.dma_scratch.lock().ok();
+        let mut fallback_buf: Option<AlignedSectorBuffer> = None;
+        let dma_buf_ptr: *mut u8 = if let Some(ref mut guard) = scratch_guard {
+            let needs_alloc = match guard.as_ref() {
+                Some(b) => b.len < max_chunk,
+                None => true,
+            };
+            if needs_alloc {
+                **guard = AlignedSectorBuffer::new_unzeroed(max_chunk.max(ctx.max_transfer_bytes as usize), align);
+            }
+            match guard.as_mut() {
+                Some(b) => b.as_mut_ptr(),
+                None => return false,
+            }
         } else {
-            0
+            fallback_buf = AlignedSectorBuffer::new_unzeroed(max_chunk, align);
+            match fallback_buf.as_mut() {
+                Some(b) => b.as_mut_ptr(),
+                None => return false,
+            }
         };
+
+        // Skip redundant SetFilePointerEx syscall when reading sequentially from previous position
+        let is_sequential = ctx.offset_valid.load(Ordering::Relaxed)
+            && ctx.last_byte_offset.load(Ordering::Relaxed) == byte_offset_u64;
+        let seek_ok = if is_sequential {
+            1
+        } else {
+            SetFilePointerEx(
+                ctx.raw_handle as _,
+                byte_offset_u64 as i64,
+                std::ptr::null_mut(),
+                FILE_BEGIN,
+            )
+        };
+
+        let mut remaining = total_bytes;
+        let mut cursor = byte_offset_u64;
+        let mut read_ok = if seek_ok != 0 { 1 } else { 0 };
+        let mut last_err: u32 = 0;
+
+        if seek_ok == 0 {
+            ctx.offset_valid.store(false, Ordering::Relaxed);
+            last_err = GetLastError();
+        } else {
+            while remaining > 0 {
+                let chunk_bytes = remaining.min(ctx.max_transfer_bytes.max(sec_size) as u64) as u32;
+                let mut bytes_read: u32 = 0;
+                let ok = ReadFile(
+                    ctx.raw_handle as _,
+                    dma_buf_ptr,
+                    chunk_bytes,
+                    &mut bytes_read,
+                    std::ptr::null_mut(),
+                );
+                if ok == 0 || bytes_read != chunk_bytes {
+                    read_ok = 0;
+                    last_err = if ok == 0 { GetLastError() } else { 38 };
+                    ctx.offset_valid.store(false, Ordering::Relaxed);
+                    break;
+                }
+                cursor = cursor.saturating_add(chunk_bytes as u64);
+                remaining -= chunk_bytes as u64;
+            }
+            if read_ok != 0 {
+                ctx.last_byte_offset.store(cursor, Ordering::Relaxed);
+                ctx.offset_valid.store(true, Ordering::Relaxed);
+            }
+        }
+        drop(fallback_buf);
+        drop(scratch_guard);
 
         let elapsed = start.elapsed();
         let latency_ms = elapsed.as_secs_f64() * 1000.0;
@@ -593,7 +807,7 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
         res.sector_count = safe_count as u64;
         res.latency_ms = latency_ms;
 
-        if read_ok != 0 && bytes_read == buffer_size as u32 {
+        if seek_ok != 0 && read_ok != 0 {
             res.win32_error_code = 0;
             copy_str_to_fixed_bytes("NO_ERROR", &mut res.error_mnemonic);
             res.status_code = match latency_ms {
@@ -605,9 +819,8 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
             };
             true
         } else {
-            let err = if seek_ok == 0 || read_ok == 0 { GetLastError() } else { 38 }; // ERROR_HANDLE_EOF on partial read
-            res.win32_error_code = err;
-            copy_str_to_fixed_bytes(&format!("WIN32_ERR_{}", err), &mut res.error_mnemonic);
+            res.win32_error_code = last_err;
+            copy_str_to_fixed_bytes(&format!("WIN32_ERR_{}", last_err), &mut res.error_mnemonic);
             res.status_code = DSSectorStatus::Bad as u32;
             false
         }
@@ -621,7 +834,7 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
 }
 
 // ---------------------------------------------------------------------------
-// 2.1. DS_ReadRawSector (Read raw bytes from physical sector with NO_BUFFERING alignment)
+// 2.1. DS_ReadRawSector (Direct Zero-Copy fast path when caller buffer is sector-aligned)
 // ---------------------------------------------------------------------------
 #[no_mangle]
 pub unsafe extern "system" fn DS_ReadRawSector(
@@ -644,13 +857,7 @@ pub unsafe extern "system" fn DS_ReadRawSector(
             Some(off) => off,
             None => return false,
         };
-        // FILE_FLAG_NO_BUFFERING requires both pointer alignment and sector-multiple read size
-        let aligned_read_len = (buffer_size as usize).div_ceil(sec_size) * sec_size;
-        let mut aligned_buf = match AlignedSectorBuffer::new(aligned_read_len, sec_size.max(4096)) {
-            Some(b) => b,
-            None => return false,
-        };
-        let mut bytes_read: u32 = 0;
+        ctx.offset_valid.store(false, Ordering::Relaxed);
 
         let seek_ok = SetFilePointerEx(
             ctx.raw_handle as _,
@@ -658,19 +865,46 @@ pub unsafe extern "system" fn DS_ReadRawSector(
             std::ptr::null_mut(),
             FILE_BEGIN,
         );
+        if seek_ok == 0 {
+            return false;
+        }
 
-        if seek_ok != 0 {
+        // Zero-Copy fast path: if caller buffer is page/sector-aligned & sector-multiple, DMA straight into out_buffer
+        let align = sec_size.max(4096);
+        let is_ptr_aligned = ((out_buffer as usize) & (align - 1)) == 0;
+        let is_len_multiple = (buffer_size as usize) % sec_size == 0;
+        if is_ptr_aligned && is_len_multiple {
+            let mut bytes_read: u32 = 0;
             let read_ok = ReadFile(
                 ctx.raw_handle as _,
-                aligned_buf.as_mut_ptr(),
-                aligned_read_len as u32,
+                out_buffer,
+                buffer_size,
                 &mut bytes_read,
                 std::ptr::null_mut(),
             );
-            if read_ok != 0 && bytes_read >= buffer_size {
-                std::ptr::copy_nonoverlapping(aligned_buf.as_ptr(), out_buffer, buffer_size as usize);
+            if read_ok != 0 && bytes_read == buffer_size {
                 return true;
             }
+        }
+
+        // Aligned DMA fallback via pre-allocated unzeroed buffer
+        let aligned_read_len = (buffer_size as usize).div_ceil(sec_size) * sec_size;
+        let mut aligned_buf = match AlignedSectorBuffer::new_unzeroed(aligned_read_len, align) {
+            Some(b) => b,
+            None => return false,
+        };
+        let mut bytes_read: u32 = 0;
+        let _ = SetFilePointerEx(ctx.raw_handle as _, byte_offset, std::ptr::null_mut(), FILE_BEGIN);
+        let read_ok = ReadFile(
+            ctx.raw_handle as _,
+            aligned_buf.as_mut_ptr(),
+            aligned_read_len as u32,
+            &mut bytes_read,
+            std::ptr::null_mut(),
+        );
+        if read_ok != 0 && bytes_read >= buffer_size {
+            std::ptr::copy_nonoverlapping(aligned_buf.as_ptr(), out_buffer, buffer_size as usize);
+            return true;
         }
         false
     }
@@ -683,7 +917,7 @@ pub unsafe extern "system" fn DS_ReadRawSector(
 }
 
 // ---------------------------------------------------------------------------
-// 3. DS_AdaptiveScanChunk (Adaptive Burst & Micro-LBA Seeker)
+// 3. DS_AdaptiveScanChunk (Adaptive Burst & O(log K) Binary Subdivision Seeker)
 // ---------------------------------------------------------------------------
 #[no_mangle]
 pub unsafe extern "system" fn DS_AdaptiveScanChunk(
@@ -718,16 +952,62 @@ pub unsafe extern "system" fn DS_AdaptiveScanChunk(
         let sectors_to_read = ((end_lba - current_lba) as u32).min(step);
         let ok = DS_ScanLbaBlock(drive_handle, current_lba, sectors_to_read, &mut temp_result);
 
-        // If burst fails or is critical (> 500ms or BAD), subdivide into single sectors
-        if !ok || temp_result.status_code >= (DSSectorStatus::Critical as u32) {
-            for sub_lba in current_lba..(current_lba + sectors_to_read as u64) {
-                let mut sub_result = temp_result;
-                let sub_ok = DS_ScanLbaBlock(drive_handle, sub_lba, 1, &mut sub_result);
-                if !sub_ok || sub_result.status_code >= (DSSectorStatus::Critical as u32) {
-                    if !out_bad_results.is_null() && detected < max_bad_results {
-                        *out_bad_results.add(detected as usize) = sub_result;
+        if ok && temp_result.status_code < (DSSectorStatus::Critical as u32) {
+            current_lba += sectors_to_read as u64;
+            continue;
+        }
+
+        // Iterative LIFO binary subdivision down to 1-sector resolution (O(log K) syscalls)
+        let mut stack: [(u64, u32); 64] = [(0, 0); 64];
+        let mut sp = 0usize;
+        if sectors_to_read > 4 {
+            let half = sectors_to_read >> 1;
+            stack[sp] = (current_lba + half as u64, sectors_to_read - half);
+            sp += 1;
+            stack[sp] = (current_lba, half);
+            sp += 1;
+        } else {
+            stack[sp] = (current_lba, sectors_to_read);
+            sp += 1;
+        }
+
+        while sp > 0 {
+            sp -= 1;
+            let (sub_start, sub_count) = stack[sp];
+            if sub_count <= 4 {
+                for k in 0..sub_count {
+                    let mut sub_result = temp_result;
+                    let sub_ok = DS_ScanLbaBlock(drive_handle, sub_start + k as u64, 1, &mut sub_result);
+                    if !sub_ok || sub_result.status_code >= (DSSectorStatus::Critical as u32) {
+                        if !out_bad_results.is_null() && detected < max_bad_results {
+                            *out_bad_results.add(detected as usize) = sub_result;
+                        }
+                        detected += 1;
                     }
-                    detected += 1;
+                }
+            } else {
+                let mut sub_res = temp_result;
+                let sub_ok = DS_ScanLbaBlock(drive_handle, sub_start, sub_count, &mut sub_res);
+                if sub_ok && sub_res.status_code < (DSSectorStatus::Critical as u32) {
+                    continue; // Healthy half skipped in 1 syscall
+                }
+                if sp + 2 <= stack.len() {
+                    let half = sub_count >> 1;
+                    stack[sp] = (sub_start + half as u64, sub_count - half);
+                    sp += 1;
+                    stack[sp] = (sub_start, half);
+                    sp += 1;
+                } else {
+                    for k in 0..sub_count {
+                        let mut sub_result = temp_result;
+                        let s_ok = DS_ScanLbaBlock(drive_handle, sub_start + k as u64, 1, &mut sub_result);
+                        if !s_ok || sub_result.status_code >= (DSSectorStatus::Critical as u32) {
+                            if !out_bad_results.is_null() && detected < max_bad_results {
+                                *out_bad_results.add(detected as usize) = sub_result;
+                            }
+                            detected += 1;
+                        }
+                    }
                 }
             }
         }
@@ -1029,7 +1309,7 @@ pub unsafe extern "system" fn DS_EvaluateDriveReliability(
 }
 
 // ---------------------------------------------------------------------------
-// 6. DS_CalculateParityChecksum (Fast ECC Parity & CRC32 Generator)
+// 6. DS_CalculateParityChecksum (Fast ECC Parity & 256-entry LUT CRC32)
 // ---------------------------------------------------------------------------
 #[no_mangle]
 pub unsafe extern "system" fn DS_CalculateParityChecksum(
@@ -1044,29 +1324,30 @@ pub unsafe extern "system" fn DS_CalculateParityChecksum(
 
     let slice = std::slice::from_raw_parts(buffer, length as usize);
 
-    // Fast Bitwise Parity Accumulator
     let mut parity: u64 = 0;
+    let mut crc: u32 = 0xFFFFFFFF;
     let chunks = slice.chunks_exact(8);
     let remainder = chunks.remainder();
 
     for chunk in chunks {
         let val = u64::from_le_bytes(chunk.try_into().unwrap());
         parity ^= val;
+        crc = DS_CRC32_TABLE[((crc ^ chunk[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
     }
 
     if !remainder.is_empty() {
         let mut rem_buf = [0u8; 8];
         rem_buf[..remainder.len()].copy_from_slice(remainder);
         parity ^= u64::from_le_bytes(rem_buf);
-    }
-
-    // Standard IEEE 802.3 CRC-32 (0xEDB88320)
-    let mut crc: u32 = 0xFFFFFFFF;
-    for &byte in slice {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB88320 & mask);
+        for &byte in remainder {
+            crc = DS_CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
         }
     }
 
@@ -1094,6 +1375,7 @@ pub unsafe extern "system" fn DS_AttemptSoftSectorRepair(
         use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, WriteFile, ReadFile, FILE_BEGIN};
 
         let ctx = &*(drive_handle as *const DriveContext);
+        ctx.offset_valid.store(false, Ordering::Relaxed);
         let sec_size = ctx.sector_size.max(512);
         let safe_count = count.max(1);
         let byte_offset = match bad_lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
@@ -1335,41 +1617,39 @@ pub unsafe extern "system" fn DS_CalculateAvx2ChecksumAndZeroCheck(
         }
     }
 
-    // High performance 64-bit scalar fallback
+    // Single-pass 64-bit fused Zero-Check + Parity + 256-entry LUT CRC32 fallback
     let mut parity: u64 = 0;
-    let mut all_zeros = true;
+    let mut zero_acc: u64 = 0;
+    let mut crc: u32 = 0xFFFFFFFF;
     let chunks = slice.chunks_exact(8);
     let remainder = chunks.remainder();
 
     for chunk in chunks {
         let val = u64::from_le_bytes(chunk.try_into().unwrap());
-        if val != 0 {
-            all_zeros = false;
-        }
+        zero_acc |= val;
         parity ^= val;
+        crc = DS_CRC32_TABLE[((crc ^ chunk[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ chunk[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
     }
 
     if !remainder.is_empty() {
         let mut rem_buf = [0u8; 8];
         rem_buf[..remainder.len()].copy_from_slice(remainder);
         let val = u64::from_le_bytes(rem_buf);
-        if val != 0 {
-            all_zeros = false;
-        }
+        zero_acc |= val;
         parity ^= val;
-    }
-
-    // CRC32 IEEE 802.3
-    let mut crc: u32 = 0xFFFFFFFF;
-    for &byte in slice {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB88320 & mask);
+        for &byte in remainder {
+            crc = DS_CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
         }
     }
 
-    *out_is_all_zeros = all_zeros;
+    *out_is_all_zeros = zero_acc == 0;
     *out_avx_parity = parity;
     *out_crc32 = !crc;
     true
@@ -1417,13 +1697,22 @@ unsafe fn avx2_compute_inner(slice: &[u8]) -> (bool, u64, u32) {
         parity ^= u64::from_le_bytes(t);
     }
 
+    // 8-byte unrolled IEEE 802.3 CRC32 LUT
     let mut crc: u32 = 0xFFFFFFFF;
-    for &byte in slice {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB88320 & mask);
-        }
+    let crc_chunks = slice.chunks_exact(8);
+    let crc_rem = crc_chunks.remainder();
+    for c in crc_chunks {
+        crc = DS_CRC32_TABLE[((crc ^ c[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = DS_CRC32_TABLE[((crc ^ c[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    for &byte in crc_rem {
+        crc = DS_CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
     }
 
     (is_zero_32 && rem_is_zero, parity, !crc)
@@ -1754,6 +2043,7 @@ pub unsafe extern "system" fn DS_ExecuteBitCarvingRecovery(
     {
         use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
         if !ctx.raw_handle.is_null() {
+            ctx.offset_valid.store(false, Ordering::Relaxed);
             if let Some(offset) = target_lba.checked_mul(sector_bytes as u64).and_then(|v| i64::try_from(v).ok()) {
                 let mut new_pos: i64 = 0;
                 if SetFilePointerEx(ctx.raw_handle as _, offset, &mut new_pos, FILE_BEGIN) != 0 {
@@ -2708,6 +2998,7 @@ pub unsafe extern "system" fn DS_RunLbaBenchmarkProbe(
             };
 
             let t0 = Instant::now();
+            ctx.offset_valid.store(false, Ordering::Relaxed);
             let seek_ok = SetFilePointerEx(
                 ctx.raw_handle as _,
                 byte_offset,
@@ -2823,6 +3114,214 @@ pub unsafe extern "system" fn DS_CopyLbaRangeChunk(
         }
     };
 
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, GetFileSizeEx, ReadFile, SetEndOfFile, SetFilePointerEx,
+            FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_FLAG_SEQUENTIAL_SCAN,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
+        };
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
+        };
+        use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+        let sec_size = if !drive_handle.is_null() {
+            let ctx = &*(drive_handle as *const DriveContext);
+            ctx.sector_size.max(512) as usize
+        } else {
+            512usize
+        };
+        let clamped_sectors = (sector_count as usize).min((4 * 1024 * 1024) / sec_size).max(1);
+        let op_len = clamped_sectors.saturating_mul(sec_size);
+        let required_end = match dest_byte_offset.checked_add(op_len as u64) {
+            Some(end) if i64::try_from(end).is_ok() => end,
+            _ => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = 87;
+                }
+                return false;
+            }
+        };
+
+        // Try Zero-Copy CreateFileMappingW + MapViewOfFile direct target window
+        let mut wide: Vec<u16> = dest_path.encode_utf16().collect();
+        wide.push(0);
+        let h_dest = CreateFileW(
+            wide.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+            0,
+        );
+        if h_dest != INVALID_HANDLE_VALUE {
+            let mut cur_size: i64 = 0;
+            let mut size_ok = GetFileSizeEx(h_dest, &mut cur_size) != 0;
+            let cur_size_u64 = cur_size.max(0) as u64;
+            if size_ok && required_end > cur_size_u64 {
+                if SetFilePointerEx(h_dest, required_end as i64, std::ptr::null_mut(), FILE_BEGIN) == 0
+                    || SetEndOfFile(h_dest) == 0
+                {
+                    size_ok = false;
+                }
+            }
+            let map_total = required_end.max(cur_size_u64);
+            let h_map = if size_ok && map_total > 0 {
+                CreateFileMappingW(
+                    h_dest,
+                    std::ptr::null(),
+                    PAGE_READWRITE,
+                    (map_total >> 32) as u32,
+                    (map_total & 0xFFFF_FFFF) as u32,
+                    std::ptr::null(),
+                )
+            } else {
+                0
+            };
+
+            if h_map != 0 {
+                let mut sys_info: SYSTEM_INFO = std::mem::zeroed();
+                GetSystemInfo(&mut sys_info);
+                let gran = (sys_info.dwAllocationGranularity as u64).max(4096);
+                let aligned_off = dest_byte_offset & !(gran - 1);
+                let delta = (dest_byte_offset - aligned_off) as usize;
+                let map_len = delta + op_len;
+
+                let mapped = MapViewOfFile(
+                    h_map,
+                    FILE_MAP_WRITE,
+                    (aligned_off >> 32) as u32,
+                    (aligned_off & 0xFFFF_FFFF) as u32,
+                    map_len,
+                );
+                if !mapped.Value.is_null() {
+                    let dst_ptr = (mapped.Value as *mut u8).add(delta);
+                    if write_zeros_on_input {
+                        std::ptr::write_bytes(dst_ptr, 0, op_len);
+                        UnmapViewOfFile(mapped);
+                        CloseHandle(h_map);
+                        CloseHandle(h_dest);
+                        if !out_bytes_written.is_null() {
+                            *out_bytes_written = op_len as u64;
+                        }
+                        if !out_status_code.is_null() {
+                            *out_status_code = DSSectorStatus::Good as u32;
+                        }
+                        return true;
+                    }
+
+                    if !drive_handle.is_null() {
+                        let ctx = &*(drive_handle as *const DriveContext);
+                        if !ctx.raw_handle.is_null() {
+                            let byte_offset = match start_lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+                                Some(off) => off,
+                                None => {
+                                    UnmapViewOfFile(mapped);
+                                    CloseHandle(h_map);
+                                    CloseHandle(h_dest);
+                                    if !out_win32_error.is_null() {
+                                        *out_win32_error = 87;
+                                    }
+                                    return false;
+                                }
+                            };
+                            ctx.offset_valid.store(false, Ordering::Relaxed);
+                            if SetFilePointerEx(ctx.raw_handle as _, byte_offset, std::ptr::null_mut(), FILE_BEGIN) == 0 {
+                                let err = GetLastError();
+                                UnmapViewOfFile(mapped);
+                                CloseHandle(h_map);
+                                CloseHandle(h_dest);
+                                if !out_win32_error.is_null() {
+                                    *out_win32_error = err;
+                                }
+                                return false;
+                            }
+
+                            // Attempt Direct DMA ReadFile straight into MapViewOfFile destination pages
+                            let align = sec_size.max(4096);
+                            let mut bytes_read: u32 = 0;
+                            let mut dma_done = false;
+                            if ((dst_ptr as usize) & (align - 1)) == 0 {
+                                let r = ReadFile(
+                                    ctx.raw_handle as _,
+                                    dst_ptr,
+                                    op_len as u32,
+                                    &mut bytes_read,
+                                    std::ptr::null_mut(),
+                                );
+                                if r != 0 && bytes_read > 0 {
+                                    dma_done = true;
+                                } else {
+                                    let err = GetLastError();
+                                    if err != 87 && err != 998 {
+                                        UnmapViewOfFile(mapped);
+                                        CloseHandle(h_map);
+                                        CloseHandle(h_dest);
+                                        if !out_win32_error.is_null() {
+                                            *out_win32_error = err;
+                                        }
+                                        return false;
+                                    }
+                                    // Re-seek before VirtualAlloc DMA fallback
+                                    let _ = SetFilePointerEx(ctx.raw_handle as _, byte_offset, std::ptr::null_mut(), FILE_BEGIN);
+                                }
+                            }
+
+                            if !dma_done {
+                                let mut scratch = match AlignedSectorBuffer::new_unzeroed(op_len, align) {
+                                    Some(b) => b,
+                                    None => {
+                                        UnmapViewOfFile(mapped);
+                                        CloseHandle(h_map);
+                                        CloseHandle(h_dest);
+                                        return false;
+                                    }
+                                };
+                                let r = ReadFile(
+                                    ctx.raw_handle as _,
+                                    scratch.as_mut_ptr(),
+                                    op_len as u32,
+                                    &mut bytes_read,
+                                    std::ptr::null_mut(),
+                                );
+                                if r == 0 || bytes_read == 0 {
+                                    let err = GetLastError();
+                                    UnmapViewOfFile(mapped);
+                                    CloseHandle(h_map);
+                                    CloseHandle(h_dest);
+                                    if !out_win32_error.is_null() {
+                                        *out_win32_error = err;
+                                    }
+                                    return false;
+                                }
+                                let valid = (bytes_read as usize).min(op_len);
+                                std::ptr::copy_nonoverlapping(scratch.as_ptr(), dst_ptr, valid);
+                                bytes_read = valid as u32;
+                            }
+
+                            UnmapViewOfFile(mapped);
+                            CloseHandle(h_map);
+                            CloseHandle(h_dest);
+                            if !out_bytes_written.is_null() {
+                                *out_bytes_written = bytes_read as u64;
+                            }
+                            if !out_status_code.is_null() {
+                                *out_status_code = DSSectorStatus::Good as u32;
+                            }
+                            return true;
+                        }
+                    }
+                    UnmapViewOfFile(mapped);
+                }
+                CloseHandle(h_map);
+            }
+            CloseHandle(h_dest);
+        }
+    }
+
     use std::io::{Seek, SeekFrom, Write};
 
     let write_buf_to_file = |data: &[u8]| -> Result<u64, u32> {
@@ -2835,8 +3334,6 @@ pub unsafe extern "system" fn DS_CopyLbaRangeChunk(
         file.seek(SeekFrom::Start(dest_byte_offset))
             .map_err(|e| e.raw_os_error().unwrap_or(29) as u32)?;
         file.write_all(data)
-            .map_err(|e| e.raw_os_error().unwrap_or(29) as u32)?;
-        file.flush()
             .map_err(|e| e.raw_os_error().unwrap_or(29) as u32)?;
         Ok(data.len() as u64)
     };
@@ -2903,11 +3400,12 @@ pub unsafe extern "system" fn DS_CopyLbaRangeChunk(
             }
         };
 
-        let mut aligned_buf = match AlignedSectorBuffer::new(read_len, sec_size.max(4096)) {
+        let mut aligned_buf = match AlignedSectorBuffer::new_unzeroed(read_len, sec_size.max(4096)) {
             Some(b) => b,
             None => return false,
         };
 
+        ctx.offset_valid.store(false, Ordering::Relaxed);
         let seek_ok = SetFilePointerEx(
             ctx.raw_handle as _,
             byte_offset,
@@ -3289,6 +3787,29 @@ pub unsafe extern "system" fn DS_ReadRawSectorWithError(
 
         let aligned_read_len = (buffer_size as usize).div_ceil(sec_size) * sec_size;
         let align = sec_size.max(4096);
+        ctx.offset_valid.store(false, Ordering::Relaxed);
+
+        // Zero-Copy fast path: when caller out_buffer is aligned & sector-multiple, DMA straight into out_buffer
+        let is_ptr_aligned = ((out_buffer as usize) & (align - 1)) == 0;
+        let is_len_multiple = (buffer_size as usize) % sec_size == 0;
+        if is_ptr_aligned && is_len_multiple {
+            if SetFilePointerEx(ctx.raw_handle as _, byte_offset, std::ptr::null_mut(), FILE_BEGIN) != 0 {
+                let mut bytes_read: u32 = 0;
+                let read_ok = ReadFile(
+                    ctx.raw_handle as _,
+                    out_buffer,
+                    buffer_size,
+                    &mut bytes_read,
+                    std::ptr::null_mut(),
+                );
+                if read_ok != 0 && bytes_read == buffer_size {
+                    if !out_bytes_read.is_null() {
+                        *out_bytes_read = buffer_size;
+                    }
+                    return true;
+                }
+            }
+        }
 
         ALIGNED_SCRATCH.with(|cell| {
             let mut slot = cell.borrow_mut();
@@ -3297,7 +3818,7 @@ pub unsafe extern "system" fn DS_ReadRawSectorWithError(
                 None => true,
             };
             if needs_realloc {
-                *slot = AlignedSectorBuffer::new(aligned_read_len, align);
+                *slot = AlignedSectorBuffer::new_unzeroed(aligned_read_len, align);
             }
             let Some(aligned_buf) = slot.as_mut() else {
                 if !out_win32_error.is_null() {
@@ -3345,6 +3866,652 @@ pub unsafe extern "system" fn DS_ReadRawSectorWithError(
     #[cfg(not(windows))]
     {
         let _ = (lba, out_buffer, buffer_size);
+        if !out_win32_error.is_null() {
+            *out_win32_error = 50;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 23. Zero-Copy Memory-Mapped Target Exports (#20-#25 matching C ABI)
+// ---------------------------------------------------------------------------
+#[cfg(windows)]
+struct DSMappedTargetContext {
+    h_file: isize,
+    h_mapping: isize,
+    file_size_bytes: u64,
+    sector_size: u32,
+    allocation_granularity: u32,
+    is_read_only: bool,
+}
+
+#[cfg(not(windows))]
+struct DSMappedTargetContext {
+    file: std::fs::File,
+    file_size_bytes: u64,
+    sector_size: u32,
+    is_read_only: bool,
+}
+
+#[cfg(not(windows))]
+struct PosixWindowBacking {
+    data: Vec<u8>,
+    file_offset: u64,
+    len: usize,
+    is_read_only: bool,
+    target_ptr: *mut DSMappedTargetContext,
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_OpenMappedTarget(
+    utf8_path: *const std::ffi::c_char,
+    sector_size: u32,
+    access_mode: u32,
+    initial_size_bytes: u64,
+) -> *mut c_void {
+    if utf8_path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let c_str = std::ffi::CStr::from_ptr(utf8_path);
+    let path_str = match c_str.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return std::ptr::null_mut(),
+    };
+    let safe_sec = if sector_size >= 512 && sector_size.is_power_of_two() {
+        sector_size
+    } else {
+        512
+    };
+    let read_only = access_mode == DSMappedAccessMode::ReadOnly as u32;
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, GetFileSizeEx, SetEndOfFile, SetFilePointerEx,
+            FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_FLAG_SEQUENTIAL_SCAN,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS, OPEN_EXISTING,
+        };
+        use windows_sys::Win32::System::Memory::{CreateFileMappingW, PAGE_READONLY, PAGE_READWRITE};
+        use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+        let mut wide: Vec<u16> = path_str.encode_utf16().collect();
+        wide.push(0);
+        let desired_access = if read_only { GENERIC_READ } else { GENERIC_READ | GENERIC_WRITE };
+        let disp = if read_only { OPEN_EXISTING } else { OPEN_ALWAYS };
+        let h_file = CreateFileW(
+            wide.as_ptr(),
+            desired_access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            disp,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+            0,
+        );
+        if h_file == INVALID_HANDLE_VALUE {
+            return std::ptr::null_mut();
+        }
+
+        let mut file_size: i64 = 0;
+        if GetFileSizeEx(h_file, &mut file_size) == 0 {
+            CloseHandle(h_file);
+            return std::ptr::null_mut();
+        }
+        let mut effective_size = file_size.max(0) as u64;
+        if !read_only && initial_size_bytes > effective_size {
+            if i64::try_from(initial_size_bytes).is_err()
+                || SetFilePointerEx(h_file, initial_size_bytes as i64, std::ptr::null_mut(), FILE_BEGIN) == 0
+                || SetEndOfFile(h_file) == 0
+            {
+                CloseHandle(h_file);
+                return std::ptr::null_mut();
+            }
+            effective_size = initial_size_bytes;
+        }
+        if effective_size == 0 {
+            CloseHandle(h_file);
+            return std::ptr::null_mut();
+        }
+
+        let fl_protect = if read_only { PAGE_READONLY } else { PAGE_READWRITE };
+        let h_mapping = CreateFileMappingW(
+            h_file,
+            std::ptr::null(),
+            fl_protect,
+            (effective_size >> 32) as u32,
+            (effective_size & 0xFFFF_FFFF) as u32,
+            std::ptr::null(),
+        );
+        if h_mapping == 0 {
+            CloseHandle(h_file);
+            return std::ptr::null_mut();
+        }
+
+        let mut sys_info: SYSTEM_INFO = std::mem::zeroed();
+        GetSystemInfo(&mut sys_info);
+        let gran = (sys_info.dwAllocationGranularity).max(4096);
+
+        let ctx = Box::new(DSMappedTargetContext {
+            h_file,
+            h_mapping,
+            file_size_bytes: effective_size,
+            sector_size: safe_sec,
+            allocation_granularity: gran,
+            is_read_only: read_only,
+        });
+        Box::into_raw(ctx) as *mut c_void
+    }
+
+    #[cfg(not(windows))]
+    {
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(!read_only)
+            .create(!read_only)
+            .open(path_str)
+        {
+            Ok(f) => f,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let mut effective_size = match file.metadata() {
+            Ok(m) => m.len(),
+            Err(_) => return std::ptr::null_mut(),
+        };
+        if !read_only && initial_size_bytes > effective_size {
+            if file.set_len(initial_size_bytes).is_err() {
+                return std::ptr::null_mut();
+            }
+            effective_size = initial_size_bytes;
+        }
+        if effective_size == 0 {
+            return std::ptr::null_mut();
+        }
+        let ctx = Box::new(DSMappedTargetContext {
+            file,
+            file_size_bytes: effective_size,
+            sector_size: safe_sec,
+            is_read_only: read_only,
+        });
+        Box::into_raw(ctx) as *mut c_void
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_MapSectorWindow(
+    h_mapped: *mut c_void,
+    start_lba: u64,
+    sector_count: u32,
+    out_window: *mut DSMappedSectorWindow,
+) -> bool {
+    if h_mapped.is_null() || out_window.is_null() || sector_count == 0 {
+        return false;
+    }
+    *out_window = std::mem::zeroed();
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Memory::{MapViewOfFile, FILE_MAP_READ, FILE_MAP_WRITE};
+
+        let ctx = &*(h_mapped as *const DSMappedTargetContext);
+        let req_offset = match start_lba.checked_mul(ctx.sector_size as u64) {
+            Some(off) if off < ctx.file_size_bytes => off,
+            _ => return false,
+        };
+        let mut req_bytes = (sector_count as u64).saturating_mul(ctx.sector_size as u64);
+        let avail = ctx.file_size_bytes - req_offset;
+        if req_bytes > avail {
+            req_bytes = avail;
+        }
+        if req_bytes > 0x4000_0000 {
+            req_bytes = 0x4000_0000;
+        }
+
+        let gran_mask = (ctx.allocation_granularity as u64) - 1;
+        let aligned_offset = req_offset & !gran_mask;
+        let delta = (req_offset - aligned_offset) as usize;
+        let map_bytes = delta + (req_bytes as usize);
+        let access = if ctx.is_read_only { FILE_MAP_READ } else { FILE_MAP_WRITE };
+
+        let mapped = MapViewOfFile(
+            ctx.h_mapping,
+            access,
+            (aligned_offset >> 32) as u32,
+            (aligned_offset & 0xFFFF_FFFF) as u32,
+            map_bytes,
+        );
+        if mapped.Value.is_null() {
+            return false;
+        }
+
+        let win = &mut *out_window;
+        win.internal_base_ptr = mapped.Value;
+        win.view_ptr = (mapped.Value as *mut u8).add(delta) as *mut c_void;
+        win.file_offset_bytes = req_offset;
+        win.mapped_length_bytes = req_bytes as u32;
+        win.sector_size = ctx.sector_size;
+        win.is_section_mapped = 1;
+        win.is_read_only = if ctx.is_read_only { 1 } else { 0 };
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let ctx_ptr = h_mapped as *mut DSMappedTargetContext;
+        let ctx = &mut *ctx_ptr;
+        let req_offset = match start_lba.checked_mul(ctx.sector_size as u64) {
+            Some(off) if off < ctx.file_size_bytes => off,
+            _ => return false,
+        };
+        let req_bytes = (sector_count as u64)
+            .saturating_mul(ctx.sector_size as u64)
+            .min(ctx.file_size_bytes - req_offset)
+            .min(64 * 1024 * 1024) as usize;
+
+        if ctx.file.seek(SeekFrom::Start(req_offset)).is_err() {
+            return false;
+        }
+        let mut data = vec![0u8; req_bytes];
+        if ctx.file.read_exact(&mut data).is_err() {
+            return false;
+        }
+
+        let mut backing = Box::new(PosixWindowBacking {
+            data,
+            file_offset: req_offset,
+            len: req_bytes,
+            is_read_only: ctx.is_read_only,
+            target_ptr: ctx_ptr,
+        });
+        let data_ptr = backing.data.as_mut_ptr() as *mut c_void;
+        let backing_ptr = Box::into_raw(backing) as *mut c_void;
+
+        let win = &mut *out_window;
+        win.view_ptr = data_ptr;
+        win.internal_base_ptr = backing_ptr;
+        win.file_offset_bytes = req_offset;
+        win.mapped_length_bytes = req_bytes as u32;
+        win.sector_size = ctx.sector_size;
+        win.is_section_mapped = 0;
+        win.is_read_only = if ctx.is_read_only { 1 } else { 0 };
+        true
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_UnmapSectorWindow(window: *mut DSMappedSectorWindow) -> bool {
+    if window.is_null() || (*window).internal_base_ptr.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+        let addr = MEMORY_MAPPED_VIEW_ADDRESS {
+            Value: (*window).internal_base_ptr,
+        };
+        let ok = UnmapViewOfFile(addr) != 0;
+        *window = std::mem::zeroed();
+        ok
+    }
+
+    #[cfg(not(windows))]
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let backing = Box::from_raw((*window).internal_base_ptr as *mut PosixWindowBacking);
+        let mut ok = true;
+        if !backing.is_read_only && !backing.target_ptr.is_null() {
+            let ctx = &mut *backing.target_ptr;
+            if ctx.file.seek(SeekFrom::Start(backing.file_offset)).is_err()
+                || ctx.file.write_all(&backing.data[..backing.len]).is_err()
+            {
+                ok = false;
+            }
+        }
+        *window = std::mem::zeroed();
+        ok
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_CloseMappedTarget(h_mapped: *mut c_void) {
+    if h_mapped.is_null() {
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
+
+        let ctx = Box::from_raw(h_mapped as *mut DSMappedTargetContext);
+        if ctx.h_mapping != 0 {
+            CloseHandle(ctx.h_mapping);
+        }
+        if ctx.h_file != 0 {
+            if !ctx.is_read_only {
+                FlushFileBuffers(ctx.h_file);
+            }
+            CloseHandle(ctx.h_file);
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let ctx = Box::from_raw(h_mapped as *mut DSMappedTargetContext);
+        if !ctx.is_read_only {
+            let _ = ctx.file.sync_all();
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_ScanMappedLbaRange(
+    h_mapped: *mut c_void,
+    start_lba: u64,
+    sector_count: u64,
+    window_sectors: u32,
+    out_crc32: *mut u32,
+    out_parity: *mut u64,
+    out_zero_sectors: *mut u64,
+) -> bool {
+    if h_mapped.is_null() || sector_count == 0 {
+        return false;
+    }
+    let ctx = &*(h_mapped as *const DSMappedTargetContext);
+    let sec_size = ctx.sector_size as usize;
+    let win_secs = if window_sectors == 0 {
+        ((16 * 1024 * 1024) / sec_size).max(1) as u32
+    } else {
+        window_sectors
+    };
+
+    let mut crc: u32 = 0xFFFFFFFF;
+    let mut parity: u64 = 0;
+    let mut zero_sectors: u64 = 0;
+    let mut remaining = sector_count;
+    let mut cur_lba = start_lba;
+
+    while remaining > 0 {
+        let batch = remaining.min(win_secs as u64) as u32;
+        let mut win: DSMappedSectorWindow = std::mem::zeroed();
+        if !DS_MapSectorWindow(h_mapped, cur_lba, batch, &mut win) {
+            return false;
+        }
+        let slice = std::slice::from_raw_parts(win.view_ptr as *const u8, win.mapped_length_bytes as usize);
+        let full_secs = slice.len() / sec_size;
+        for sec in slice.chunks_exact(sec_size) {
+            let mut zero_acc: u64 = 0;
+            let chunks = sec.chunks_exact(8);
+            let rem = chunks.remainder();
+            for c in chunks {
+                let w = u64::from_le_bytes(c.try_into().unwrap());
+                zero_acc |= w;
+                parity ^= w;
+                crc = DS_CRC32_TABLE[((crc ^ c[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_TABLE[((crc ^ c[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
+            }
+            for (idx, &b) in rem.iter().enumerate() {
+                zero_acc |= b as u64;
+                parity ^= (b as u64) << ((idx & 7) * 8);
+                crc = DS_CRC32_TABLE[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+            }
+            if zero_acc == 0 {
+                zero_sectors += 1;
+            }
+        }
+        DS_UnmapSectorWindow(&mut win);
+        if full_secs == 0 {
+            break;
+        }
+        cur_lba += full_secs as u64;
+        remaining -= full_secs as u64;
+    }
+
+    if !out_crc32.is_null() {
+        *out_crc32 = !crc;
+    }
+    if !out_parity.is_null() {
+        *out_parity = parity;
+    }
+    if !out_zero_sectors.is_null() {
+        *out_zero_sectors = zero_sectors;
+    }
+    true
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_CopyLbaRangeToMappedFile(
+    drive_handle: *mut c_void,
+    start_lba: u64,
+    total_sectors: u64,
+    dest_utf8_path: *const std::ffi::c_char,
+    dest_start_lba: u64,
+    chunk_sectors: u32,
+    out_bytes_copied: *mut u64,
+    out_win32_error: *mut u32,
+) -> bool {
+    if !out_bytes_copied.is_null() {
+        *out_bytes_copied = 0;
+    }
+    if !out_win32_error.is_null() {
+        *out_win32_error = 0;
+    }
+    if drive_handle.is_null() || total_sectors == 0 || dest_utf8_path.is_null() {
+        if !out_win32_error.is_null() {
+            *out_win32_error = 87;
+        }
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        if ctx.raw_handle.is_null() {
+            if !out_win32_error.is_null() {
+                *out_win32_error = 6;
+            }
+            return false;
+        }
+
+        let sec_size = ctx.sector_size.max(512) as u64;
+        let total_dest_end = match dest_start_lba
+            .checked_add(total_sectors)
+            .and_then(|s| s.checked_mul(sec_size))
+        {
+            Some(v) if i64::try_from(v).is_ok() => v,
+            _ => {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = 87;
+                }
+                return false;
+            }
+        };
+
+        let h_mapped = DS_OpenMappedTarget(
+            dest_utf8_path,
+            sec_size as u32,
+            DSMappedAccessMode::ReadWrite as u32,
+            total_dest_end,
+        );
+        if h_mapped.is_null() {
+            if !out_win32_error.is_null() {
+                *out_win32_error = GetLastError();
+            }
+            return false;
+        }
+
+        let default_secs = ((16 * 1024 * 1024) / sec_size).max(1) as u32;
+        let step_secs = if chunk_sectors > 0 { chunk_sectors } else { default_secs };
+        let mut remaining = total_sectors;
+        let mut src_lba = start_lba;
+        let mut dst_lba = dest_start_lba;
+        let mut copied_bytes: u64 = 0;
+        let mut all_ok = true;
+
+        while remaining > 0 {
+            let batch = remaining.min(step_secs as u64) as u32;
+            let mut win: DSMappedSectorWindow = std::mem::zeroed();
+            if !DS_MapSectorWindow(h_mapped, dst_lba, batch, &mut win) {
+                if !out_win32_error.is_null() {
+                    *out_win32_error = GetLastError();
+                }
+                all_ok = false;
+                break;
+            }
+
+            let mut src_byte_offset = match src_lba.checked_mul(sec_size).and_then(|v| i64::try_from(v).ok().map(|_| v)) {
+                Some(off) => off,
+                None => {
+                    ctx.offset_valid.store(false, Ordering::Relaxed);
+                    if !out_win32_error.is_null() {
+                        *out_win32_error = 87;
+                    }
+                    DS_UnmapSectorWindow(&mut win);
+                    all_ok = false;
+                    break;
+                }
+            };
+            let is_seq = ctx.offset_valid.load(Ordering::Relaxed)
+                && ctx.last_byte_offset.load(Ordering::Relaxed) == src_byte_offset;
+            if !is_seq
+                && SetFilePointerEx(
+                    ctx.raw_handle as _,
+                    src_byte_offset as i64,
+                    std::ptr::null_mut(),
+                    FILE_BEGIN,
+                ) == 0
+            {
+                ctx.offset_valid.store(false, Ordering::Relaxed);
+                if !out_win32_error.is_null() {
+                    *out_win32_error = GetLastError();
+                }
+                DS_UnmapSectorWindow(&mut win);
+                all_ok = false;
+                break;
+            }
+
+            let mut bytes_left = win.mapped_length_bytes;
+            let mut dst_ptr = win.view_ptr as *mut u8;
+            let mut view_aligned = ((dst_ptr as usize) & ((sec_size as usize) - 1)) == 0;
+            let mut chunk_ok = true;
+
+            if view_aligned {
+                while bytes_left > 0 {
+                    let io_chunk = bytes_left.min(0x0400_0000);
+                    let mut bytes_read: u32 = 0;
+                    if ReadFile(
+                        ctx.raw_handle as _,
+                        dst_ptr,
+                        io_chunk,
+                        &mut bytes_read,
+                        std::ptr::null_mut(),
+                    ) == 0
+                        || bytes_read != io_chunk
+                    {
+                        let err = GetLastError();
+                        ctx.offset_valid.store(false, Ordering::Relaxed);
+                        if err == 87 || err == 998 {
+                            view_aligned = false;
+                            break;
+                        }
+                        if !out_win32_error.is_null() {
+                            *out_win32_error = err;
+                        }
+                        chunk_ok = false;
+                        break;
+                    }
+                    dst_ptr = dst_ptr.add(bytes_read as usize);
+                    bytes_left -= bytes_read;
+                    src_byte_offset += bytes_read as u64;
+                    ctx.last_byte_offset.store(src_byte_offset, Ordering::Relaxed);
+                    ctx.offset_valid.store(true, Ordering::Relaxed);
+                }
+            }
+
+            if chunk_ok && !view_aligned {
+                if SetFilePointerEx(
+                    ctx.raw_handle as _,
+                    src_byte_offset as i64,
+                    std::ptr::null_mut(),
+                    FILE_BEGIN,
+                ) == 0
+                {
+                    ctx.offset_valid.store(false, Ordering::Relaxed);
+                    if !out_win32_error.is_null() {
+                        *out_win32_error = GetLastError();
+                    }
+                    chunk_ok = false;
+                } else {
+                    let mut fallback = AlignedSectorBuffer::new_unzeroed(
+                        ctx.max_transfer_bytes.max(sec_size as u32) as usize,
+                        (sec_size as usize).max(4096),
+                    );
+                    if let Some(ref mut buf) = fallback {
+                        while bytes_left > 0 {
+                            let io_chunk = bytes_left.min(buf.len as u32);
+                            let mut bytes_read: u32 = 0;
+                            if ReadFile(
+                                ctx.raw_handle as _,
+                                buf.as_mut_ptr(),
+                                io_chunk,
+                                &mut bytes_read,
+                                std::ptr::null_mut(),
+                            ) == 0
+                                || bytes_read != io_chunk
+                            {
+                                ctx.offset_valid.store(false, Ordering::Relaxed);
+                                if !out_win32_error.is_null() {
+                                    *out_win32_error = GetLastError();
+                                }
+                                chunk_ok = false;
+                                break;
+                            }
+                            std::ptr::copy_nonoverlapping(buf.as_ptr(), dst_ptr, bytes_read as usize);
+                            dst_ptr = dst_ptr.add(bytes_read as usize);
+                            bytes_left -= bytes_read;
+                            src_byte_offset += bytes_read as u64;
+                            ctx.last_byte_offset.store(src_byte_offset, Ordering::Relaxed);
+                            ctx.offset_valid.store(true, Ordering::Relaxed);
+                        }
+                    } else {
+                        chunk_ok = false;
+                    }
+                }
+            }
+
+            copied_bytes += (win.mapped_length_bytes - bytes_left) as u64;
+            DS_UnmapSectorWindow(&mut win);
+            if !chunk_ok {
+                all_ok = false;
+                break;
+            }
+            src_lba += batch as u64;
+            dst_lba += batch as u64;
+            remaining -= batch as u64;
+        }
+
+        DS_CloseMappedTarget(h_mapped);
+        if !out_bytes_copied.is_null() {
+            *out_bytes_copied = copied_bytes;
+        }
+        all_ok
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (start_lba, dest_start_lba, chunk_sectors);
         if !out_win32_error.is_null() {
             *out_win32_error = 50;
         }

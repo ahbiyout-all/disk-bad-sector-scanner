@@ -52,9 +52,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Unpacked Multi-File Individual Installation (strictly runtime files only; no docs/portable/temp files)
 Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "README*,LICENSE*,CHANGELOG*,WORKLOG*,PATCHNOTES*,*.md,*.txt,*.zip,*.7z,*.tar,*.gz,*.tmp,*.log,*.bak,*Portable*,*portable*,.gitignore,aistudio\*,*.bat,*.vbs"
-; Primary native desktop executable host & core DLL
+; Primary native desktop executable host & core/forensics DLLs
 Source: "bin\native\DiskBadSectorScanner.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "bin\native\DiskSentinelNativeCore.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "bin\native\DiskSentinelForensics.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\Disk Bad Sector Scanner"; Filename: "{app}\DiskBadSectorScanner.exe"; WorkingDir: "{app}"

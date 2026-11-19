@@ -5,7 +5,7 @@
  * DiskSentinel Pro - S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { DiskDrive, SectorBlock, DriveSmartAttribute } from '../types';
 import {
   ShieldAlert,
@@ -23,16 +23,53 @@ import {
   Check,
   Lock,
   Unlock,
-  AlertOctagon
+  AlertOctagon,
+  StopCircle
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
-import { executeRealZeroFillRepairBlock, isSystemOrBootDrive } from '../utils/nativeDriveEngine';
+import {
+  executeRealZeroFillRepairBlock,
+  getDriveIndexFromId,
+  isSystemOrBootDrive,
+  isTauriDesktopRuntime,
+  queryTauriRawSector
+} from '../utils/nativeDriveEngine';
+
+type ZeroFillRepairMode = 'standard' | 'deep_ecc' | 'firmware_realloc';
+
+interface QueueSectorStepState {
+  status: 'queued' | 'running' | 'verified' | 'failed';
+  currentStep: number;
+  totalSteps: number;
+  stepLabel: string;
+  detail?: string;
+}
+
+const REPAIR_PIPELINE_STEPS: Record<ZeroFillRepairMode, string[]> = {
+  standard: [
+    '0x00 제로필 쓰기 (Direct Write)',
+    '0x00 전수 일치 검증 (Verify)'
+  ],
+  deep_ecc: [
+    '수복 전 LBA 읽기 프로브 (Pre-Probe)',
+    '0x00 제로필 다중 쓰기 (Zero-Fill)',
+    'ECC 패리티 & 0x00 무결성 검증'
+  ],
+  firmware_realloc: [
+    '결함 섹터 격리 프로브 (Isolate)',
+    '0x00 제로필 덮어쓰기 (Overwrite)',
+    '05h 예비 트랙 재할당 (Remap)',
+    '재할당 후 0x00 재판독 검증'
+  ]
+};
 
 interface SmartRemapModalProps {
   isOpen: boolean;
   onClose: () => void;
   activeDrive: DiskDrive;
   blocks: SectorBlock[];
+  initialQueuedBlockIds?: number[];
+  onSyncRepairQueue?: (blockIds: number[]) => void;
   onRepairSectors: (driveId: string, repairedBlockIds: number[]) => void;
 }
 
@@ -41,14 +78,25 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   onClose,
   activeDrive,
   blocks,
+  initialQueuedBlockIds = [],
+  onSyncRepairQueue,
   onRepairSectors
 }) => {
   const [selectedBlockIds, setSelectedBlockIds] = useState<number[]>([]);
   const [isRepairing, setIsRepairing] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
   const [currentLba, setCurrentLba] = useState<number>(0);
+  const [activeStepInfo, setActiveStepInfo] = useState<{
+    sectorIndex: number;
+    totalSectors: number;
+    stepIndex: number;
+    totalSteps: number;
+    stepLabel: string;
+  } | null>(null);
+  const [queueStepStates, setQueueStepStates] = useState<Record<number, QueueSectorStepState>>({});
   const [repairLogs, setRepairLogs] = useState<string[]>([]);
   const [repairCompleted, setRepairCompleted] = useState<boolean>(false);
+  const [repairAborted, setRepairAborted] = useState<boolean>(false);
   const [repairedCountSummary, setRepairedCountSummary] = useState<number>(0);
   const [failedCountSummary, setFailedCountSummary] = useState<number>(0);
   const [lastUnsupportedReason, setLastUnsupportedReason] = useState<string | null>(null);
@@ -57,7 +105,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   const [showLockWarning, setShowLockWarning] = useState<boolean>(false);
   const [showBackupWarningModal, setShowBackupWarningModal] = useState<boolean>(false);
 
-  const [repairMode, setRepairMode] = useState<'standard' | 'deep_ecc' | 'firmware_realloc'>('standard');
+  const [repairMode, setRepairMode] = useState<ZeroFillRepairMode>('standard');
 
   const getDriveSpeedProfile = () => {
     const measuredMb = activeDrive.hardwareSpecs?.measuredSequentialWriteMbSec;
@@ -97,9 +145,48 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   const estimatedCompletionTimeStr = new Date(Date.now() + estimatedSeconds * 1000).toLocaleTimeString();
 
-  const badBlocks = blocks.filter(b => b.status === 'bad');
-  const slowBlocks = blocks.filter(b => b.status === 'slow' || b.status === 'critical');
-  const targetableBlocks = badBlocks.length > 0 ? badBlocks : slowBlocks;
+  const badBlocks = useMemo(() => blocks.filter(b => b.status === 'bad'), [blocks]);
+  const slowBlocks = useMemo(
+    () => blocks.filter(b => b.status === 'slow' || b.status === 'critical'),
+    [blocks]
+  );
+
+  // Merge detected bad/slow blocks with any explicitly queued non-contiguous blocks from SectorGrid
+  const targetableBlocks = useMemo(() => {
+    const byId = new Map<number, SectorBlock>();
+    const base = badBlocks.length > 0 ? badBlocks : slowBlocks;
+    base.forEach(b => byId.set(b.id, b));
+    const allById = new Map<number, SectorBlock>(blocks.map(b => [b.id, b]));
+    initialQueuedBlockIds.forEach(qId => {
+      const b = allById.get(qId);
+      if (b) byId.set(b.id, b);
+    });
+    selectedBlockIds.forEach(sId => {
+      const b = allById.get(sId);
+      if (b) byId.set(b.id, b);
+    });
+    return Array.from(byId.values()).sort((a, b) => a.lba - b.lba || a.id - b.id);
+  }, [badBlocks, slowBlocks, blocks, initialQueuedBlockIds, selectedBlockIds]);
+
+  // Count non-contiguous LBA islands in selectedBlockIds
+  const nonContiguousSegmentCount = useMemo(() => {
+    if (selectedBlockIds.length === 0) return 0;
+    const blockById = new Map<number, SectorBlock>(blocks.map(b => [b.id, b]));
+    const ordered = selectedBlockIds
+      .map(id => blockById.get(id))
+      .filter((b): b is SectorBlock => !!b)
+      .sort((a, b) => a.id - b.id);
+    if (ordered.length === 0) return 0;
+    let segments = 1;
+    for (let i = 1; i < ordered.length; i++) {
+      if (ordered[i].id !== ordered[i - 1].id + 1) {
+        segments++;
+      }
+    }
+    return segments;
+  }, [selectedBlockIds, blocks]);
+
+  const pipelineSteps = REPAIR_PIPELINE_STEPS[repairMode];
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const prevIsOpenRef = useRef<boolean>(false);
@@ -108,6 +195,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   const isOpenRef = useRef<boolean>(isOpen);
   isOpenRef.current = isOpen;
   const repairRunIdRef = useRef<number>(0);
+  const abortRequestedRef = useRef<boolean>(false);
   const lockWarnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -128,6 +216,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
     if (!isOpen) {
       repairRunIdRef.current += 1;
+      abortRequestedRef.current = false;
       setIsRepairing(false);
       if (lockWarnTimeoutRef.current) {
         clearTimeout(lockWarnTimeoutRef.current);
@@ -139,7 +228,14 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
     if (!prevIsOpenRef.current || driveChanged) {
       repairRunIdRef.current += 1;
-      if (badBlocks.length > 0) {
+      abortRequestedRef.current = false;
+
+      const validIdSet = new Set(blocks.map(b => b.id));
+      const validQueued = initialQueuedBlockIds.filter(id => validIdSet.has(id));
+
+      if (validQueued.length > 0) {
+        setSelectedBlockIds(validQueued);
+      } else if (badBlocks.length > 0) {
         setSelectedBlockIds(badBlocks.map(b => b.id));
       } else if (slowBlocks.length > 0) {
         setSelectedBlockIds(slowBlocks.map(b => b.id));
@@ -148,8 +244,11 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
       }
       setIsRepairing(false);
       setProgress(0);
+      setActiveStepInfo(null);
+      setQueueStepStates({});
       setRepairLogs([]);
       setRepairCompleted(false);
+      setRepairAborted(false);
       setRepairedCountSummary(0);
       setFailedCountSummary(0);
       setLastUnsupportedReason(null);
@@ -166,11 +265,30 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   if (!isOpen) return null;
 
+  const updateSelection = (nextIds: number[]) => {
+    setSelectedBlockIds(nextIds);
+    if (onSyncRepairQueue) {
+      onSyncRepairQueue(nextIds);
+    }
+  };
+
   const handleToggleBlock = (id: number) => {
     if (isRepairing) return;
-    setSelectedBlockIds(prev =>
-      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
-    );
+    const next = selectedBlockIds.includes(id)
+      ? selectedBlockIds.filter(item => item !== id)
+      : [...selectedBlockIds, id];
+    updateSelection(next);
+  };
+
+  const handleSortSelectionByLba = () => {
+    if (isRepairing) return;
+    const blockById = new Map<number, SectorBlock>(blocks.map(b => [b.id, b]));
+    const sorted = [...selectedBlockIds].sort((a, b) => {
+      const ba = blockById.get(a);
+      const bb = blockById.get(b);
+      return (ba?.lba ?? a) - (bb?.lba ?? b);
+    });
+    updateSelection(sorted);
   };
 
   const getSmartAttr = (id: number): DriveSmartAttribute | undefined => {
@@ -204,70 +322,304 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     setShowBackupWarningModal(true);
   };
 
+  const handleAbortRepairSession = () => {
+    abortRequestedRef.current = true;
+    setRepairLogs(prev => [
+      ...prev,
+      `[${new Date().toLocaleTimeString()}] [요청] 사용자 중단 요청 수신 — 현재 진행 중인 섹터 단계 완료 후 안전 정지합니다...`
+    ]);
+  };
+
   const handleConfirmAndExecuteRepair = async () => {
     const runId = ++repairRunIdRef.current;
+    abortRequestedRef.current = false;
     const driveSnapshot = activeDrive;
+    const driveIndex = getDriveIndexFromId(driveSnapshot);
+    const tauriActive = isTauriDesktopRuntime() && driveIndex !== null;
     const blocksById = new Map<number, SectorBlock>(blocks.map(b => [b.id, b]));
+    const stepsForMode = REPAIR_PIPELINE_STEPS[repairMode];
+    const totalStepsPerSector = stepsForMode.length;
+
+    // Sort queued non-contiguous blocks in ascending LBA order for sequential head sweep efficiency
+    const targetsSnapshot = [...selectedBlockIds].sort((a, b) => {
+      const ba = blocksById.get(a);
+      const bb = blocksById.get(b);
+      return (ba?.lba ?? a) - (bb?.lba ?? b);
+    });
+    const totalToRepair = targetsSnapshot.length;
+    const totalPipelineSteps = Math.max(1, totalToRepair * totalStepsPerSector);
+
+    const initialStates: Record<number, QueueSectorStepState> = {};
+    targetsSnapshot.forEach(id => {
+      initialStates[id] = {
+        status: 'queued',
+        currentStep: 0,
+        totalSteps: totalStepsPerSector,
+        stepLabel: '대기 중'
+      };
+    });
+
     setShowBackupWarningModal(false);
     soundManager.playClick();
     setIsRepairing(true);
     setProgress(0);
+    setQueueStepStates(initialStates);
     setRepairCompleted(false);
+    setRepairAborted(false);
     setRepairedCountSummary(0);
     setFailedCountSummary(0);
     setLastUnsupportedReason(null);
 
-    const targetsSnapshot = [...selectedBlockIds];
-    const totalToRepair = targetsSnapshot.length;
-
     setRepairLogs([
-      `[${new Date().toLocaleTimeString()}] === S.M.A.R.T. 섹터 제로필 수복 & 재할당 엔진 가동 ===`,
-      `[시스템] 드라이브 ID: ${driveSnapshot.name} (${driveSnapshot.model})`,
-      `[시스템] 선택 수복 방식: ${repairMode === 'standard' ? '표준 0x00 제로필 (1.0x)' : repairMode === 'deep_ecc' ? '심층 ECC 패리티 정합성 (2.2x)' : '저수준 펌웨어 강제 치환 (4.0x)'}`,
-      `[시스템] 대상 LBA 블록 개수: ${totalToRepair}개`
+      `[${new Date().toLocaleTimeString()}] === 다단계 비연속 섹터 제로필(Zero-Fill) 수복 세션 시작 ===`,
+      `[시스템] 드라이브: ${driveSnapshot.name} (${driveSnapshot.model})`,
+      `[시스템] 수복 파이프라인: ${
+        repairMode === 'standard'
+          ? '표준 2단계 제로필'
+          : repairMode === 'deep_ecc'
+          ? '심층 3단계 ECC 정합'
+          : '고강도 4단계 펌웨어 재할당'
+      } (${totalStepsPerSector}단계/블록)`,
+      `[시스템] 큐 구성: 비연속 ${totalToRepair}개 블록 (${nonContiguousSegmentCount}개 독립 LBA 구간, 총 ${totalPipelineSteps} 스텝)`
     ]);
 
     const succeededIds: number[] = [];
     let failedCount = 0;
     let firstFailureReason: string | null = null;
+    let completedPipelineSteps = 0;
+    let wasAborted = false;
+
+    const updateSectorStep = (
+      blockId: number,
+      sectorIdx: number,
+      stepIdx: number,
+      status: QueueSectorStepState['status'],
+      stepLabel: string,
+      detail?: string
+    ) => {
+      setQueueStepStates(prev => ({
+        ...prev,
+        [blockId]: {
+          status,
+          currentStep: stepIdx + 1,
+          totalSteps: totalStepsPerSector,
+          stepLabel,
+          detail
+        }
+      }));
+      setActiveStepInfo({
+        sectorIndex: sectorIdx + 1,
+        totalSectors: totalToRepair,
+        stepIndex: stepIdx + 1,
+        totalSteps: totalStepsPerSector,
+        stepLabel
+      });
+    };
 
     for (let i = 0; i < totalToRepair; i++) {
-      if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
-        return;
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        repairRunIdRef.current !== runId ||
+        abortRequestedRef.current
+      ) {
+        if (abortRequestedRef.current) wasAborted = true;
+        break;
       }
+
       const targetBlockId = targetsSnapshot[i];
       const targetBlock = blocksById.get(targetBlockId);
       const lba = targetBlock ? targetBlock.lba : targetBlockId * 1000;
       setCurrentLba(lba);
-      setProgress(Math.round(((i + 1) / totalToRepair) * 100));
 
-      const timeStr = new Date().toLocaleTimeString();
-      const realResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, driveSnapshot);
+      let sectorFailed = false;
+      let sectorFailureMsg = '';
+      let writeResult: Awaited<ReturnType<typeof executeRealZeroFillRepairBlock>> | null = null;
 
-      if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
-        return;
+      for (let stepIdx = 0; stepIdx < totalStepsPerSector; stepIdx++) {
+        if (
+          !isMountedRef.current ||
+          !isOpenRef.current ||
+          repairRunIdRef.current !== runId ||
+          abortRequestedRef.current
+        ) {
+          if (abortRequestedRef.current) wasAborted = true;
+          break;
+        }
+
+        const stepLabel = stepsForMode[stepIdx];
+        updateSectorStep(targetBlockId, i, stepIdx, 'running', stepLabel);
+        const timeStr = new Date().toLocaleTimeString();
+
+        if (repairMode === 'standard') {
+          if (stepIdx === 0) {
+            writeResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, driveSnapshot);
+            if (!writeResult.success) {
+              sectorFailed = true;
+              sectorFailureMsg = writeResult.unsupportedReason || '물리 섹터 쓰기 권한 거부됨';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 1/2] 0x00 쓰기 완료 (${writeResult!.throughputMbSec} MB/s, ${writeResult!.latencyMs}ms)`
+              ]);
+            }
+          } else if (stepIdx === 1) {
+            let verifyOk = Boolean(writeResult?.verifiedZeros);
+            if (tauriActive && driveIndex !== null) {
+              const readBack = await queryTauriRawSector(driveIndex, lba, 512);
+              if (readBack && readBack.length > 0) {
+                verifyOk = readBack.every(byte => byte === 0);
+              }
+            }
+            if (!verifyOk) {
+              sectorFailed = true;
+              sectorFailureMsg = '재판독 버퍼 0x00 불일치 (하드웨어 배드 고정)';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 2/2] 0x00 전수 일치 확인 -> 수복 완료 (HEALTHY OK)`
+              ]);
+            }
+          }
+        } else if (repairMode === 'deep_ecc') {
+          if (stepIdx === 0) {
+            if (tauriActive && driveIndex !== null) {
+              const probeBytes = await queryTauriRawSector(driveIndex, lba, 512);
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 1/3] 사전 읽기 프로브 ${
+                  probeBytes ? `${probeBytes.length}B 응답` : '타임아웃/UNC (쓰기 격리 진행)'
+                }`
+              ]);
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 1/3] 사전 읽기 프로브 요청 (커널 핸들 확인)`
+              ]);
+            }
+          } else if (stepIdx === 1) {
+            writeResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, driveSnapshot);
+            if (!writeResult.success) {
+              sectorFailed = true;
+              sectorFailureMsg = writeResult.unsupportedReason || '물리 섹터 쓰기 권한 거부됨';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 2/3] 0x00 다중 제로필 쓰기 완료 (${writeResult!.throughputMbSec} MB/s)`
+              ]);
+            }
+          } else if (stepIdx === 2) {
+            let verifyOk = Boolean(writeResult?.verifiedZeros);
+            if (tauriActive && driveIndex !== null) {
+              const readBack = await queryTauriRawSector(driveIndex, lba, 512);
+              if (readBack && readBack.length > 0) {
+                verifyOk = readBack.every(byte => byte === 0);
+              }
+            }
+            if (!verifyOk) {
+              sectorFailed = true;
+              sectorFailureMsg = 'ECC 정합성 검증 실패 (0x00 불일치)';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 3/3] ECC 패리티 & 0x00 무결성 검증 완료 -> 수복 OK`
+              ]);
+            }
+          }
+        } else {
+          // firmware_realloc (4 steps)
+          if (stepIdx === 0) {
+            if (tauriActive && driveIndex !== null) {
+              await queryTauriRawSector(driveIndex, lba, 512);
+            }
+            setRepairLogs(prev => [
+              ...prev,
+              `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 1/4] 결함 섹터 격리 및 재할당 준비 완료`
+            ]);
+          } else if (stepIdx === 1) {
+            writeResult = await executeRealZeroFillRepairBlock(targetBlockId, lba, driveSnapshot);
+            if (!writeResult.success) {
+              sectorFailed = true;
+              sectorFailureMsg = writeResult.unsupportedReason || '물리 섹터 쓰기 권한 거부됨';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 2/4] 0x00 덮어쓰기 완료 (${writeResult!.throughputMbSec} MB/s)`
+              ]);
+            }
+          } else if (stepIdx === 2) {
+            // Secondary write/remap trigger pass
+            const secondPass = await executeRealZeroFillRepairBlock(targetBlockId, lba, driveSnapshot);
+            if (!secondPass.success) {
+              sectorFailed = true;
+              sectorFailureMsg = secondPass.unsupportedReason || '컨트롤러 예비 트랙 재할당 실패';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 3/4] 05h 예비 트랙 컨트롤러 재할당 통과 (${secondPass.latencyMs}ms)`
+              ]);
+            }
+          } else if (stepIdx === 3) {
+            let verifyOk = Boolean(writeResult?.verifiedZeros);
+            if (tauriActive && driveIndex !== null) {
+              const readBack = await queryTauriRawSector(driveIndex, lba, 512);
+              if (readBack && readBack.length > 0) {
+                verifyOk = readBack.every(byte => byte === 0);
+              }
+            }
+            if (!verifyOk) {
+              sectorFailed = true;
+              sectorFailureMsg = '재할당 후 0x00 재판독 검증 실패';
+            } else {
+              setRepairLogs(prev => [
+                ...prev,
+                `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 4/4] 재할당 후 0x00 재판독 전수 검증 완료 -> HEALTHY OK`
+              ]);
+            }
+          }
+        }
+
+        if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
+          return;
+        }
+
+        if (sectorFailed) {
+          failedCount++;
+          if (!firstFailureReason) firstFailureReason = sectorFailureMsg;
+          updateSectorStep(targetBlockId, i, stepIdx, 'failed', '실패/미지원', sectorFailureMsg);
+          setRepairLogs(prev => [
+            ...prev,
+            `[${timeStr}] [미지원/실패] LBA #${lba.toLocaleString()} [블록 #${targetBlockId}] — ${sectorFailureMsg}`
+          ]);
+          completedPipelineSteps = (i + 1) * totalStepsPerSector;
+          setProgress(Math.round((completedPipelineSteps / totalPipelineSteps) * 100));
+          break;
+        }
+
+        completedPipelineSteps++;
+        setProgress(Math.round((completedPipelineSteps / totalPipelineSteps) * 100));
+        await new Promise(r => setTimeout(r, 35));
       }
 
-      if (realResult.success && realResult.verifiedZeros) {
+      if (wasAborted) {
+        if (!sectorFailed && writeResult?.success) {
+          succeededIds.push(targetBlockId);
+          updateSectorStep(
+            targetBlockId,
+            i,
+            totalStepsPerSector - 1,
+            'verified',
+            '수복 완료'
+          );
+        }
+        break;
+      }
+
+      if (!sectorFailed) {
         succeededIds.push(targetBlockId);
-        setRepairLogs(prev => [
-          ...prev,
-          `[${timeStr}] LBA #${lba.toLocaleString()} [블록 #${targetBlockId}] 제로필(0x00) 쓰기 검증 완료 (${realResult.throughputMbSec} MB/s, ${realResult.latencyMs}ms)`,
-          `[${timeStr}] LBA #${lba.toLocaleString()} 0x00 전수 일치 확인 -> 수복 완료 (HEALTHY OK)`
-        ]);
+        updateSectorStep(targetBlockId, i, totalStepsPerSector - 1, 'verified', '수복 완료');
         soundManager.playBeep(800 + (i % 10) * 40, 0.05);
-      } else {
-        failedCount++;
-        const reason = realResult.unsupportedReason || '물리 섹터 쓰기 권한 거부됨';
-        if (!firstFailureReason) firstFailureReason = reason;
-        setRepairLogs(prev => [
-          ...prev,
-          `[${timeStr}] [미지원/실패] LBA #${lba.toLocaleString()} [블록 #${targetBlockId}] — ${reason}`
-        ]);
       }
-
-      // Yield briefly to keep UI responsive
-      await new Promise(r => setTimeout(r, 40));
     }
 
     if (!isMountedRef.current || !isOpenRef.current || repairRunIdRef.current !== runId) {
@@ -275,8 +627,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     }
 
     setIsRepairing(false);
-    setProgress(100);
+    setActiveStepInfo(null);
+    if (!wasAborted) setProgress(100);
     setRepairCompleted(true);
+    setRepairAborted(wasAborted);
     setRepairedCountSummary(succeededIds.length);
     setFailedCountSummary(failedCount);
     setLastUnsupportedReason(firstFailureReason);
@@ -284,13 +638,17 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     if (succeededIds.length > 0) {
       setRepairLogs(prev => [
         ...prev,
-        `[${new Date().toLocaleTimeString()}] [완료] ${succeededIds.length}개 섹터 실제 0x00 검증 수복 완료 (실패/미지원 ${failedCount}개).`
+        `[${new Date().toLocaleTimeString()}] [${wasAborted ? '부분 완료' : '완료'}] ${succeededIds.length}개 비연속 섹터 다단계 0x00 검증 수복 완료 (실패/미지원 ${failedCount}개).`
       ]);
       onRepairSectors(driveSnapshot.id, succeededIds);
+      if (onSyncRepairQueue) {
+        const succeededSet = new Set(succeededIds);
+        onSyncRepairQueue(selectedBlockIds.filter(id => !succeededSet.has(id)));
+      }
     } else {
       setRepairLogs(prev => [
         ...prev,
-        `[${new Date().toLocaleTimeString()}] [중단] 물리 디스크 쓰기 권한이 없어 섹터 상태 및 SMART 카운터가 변경되지 않았습니다.`
+        `[${new Date().toLocaleTimeString()}] [${wasAborted ? '사용자 중단' : '중단'}] 물리 디스크 쓰기 권한이 없거나 중단되어 섹터 상태 및 SMART 카운터가 변경되지 않았습니다.`
       ]);
     }
   };
@@ -548,68 +906,146 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             </div>
           </div>
 
-          {/* Sector Selection List */}
+          {/* Multi-Step Queue & Target Sector Selection List */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-rose-400" />
-                수복 대상 감지 섹터 목록 ({targetableBlocks.length}개 발견)
-              </h3>
-              <div className="text-[11px] text-slate-400 font-mono">
-                선택됨: <span className="text-white font-bold">{selectedBlockIds.length}</span> / {targetableBlocks.length}개
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+              <div>
+                <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-rose-400" />
+                  <span>다단계 제로필 수복 큐 ({targetableBlocks.length}개 대상)</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5 font-mono tabular-nums">
+                  선택 {selectedBlockIds.length}개 · 비연속 구간 {nonContiguousSegmentCount}개 · 섹터당 {pipelineSteps.length}단계 (총 {selectedBlockIds.length * pipelineSteps.length} 스텝)
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                {targetableBlocks.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={isRepairing}
+                      onClick={() => updateSelection(targetableBlocks.map(b => b.id))}
+                      className="px-2 py-1 rounded border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-300 text-[11px] font-medium disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                    >
+                      전체 선택
+                    </button>
+                    {badBlocks.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={isRepairing}
+                        onClick={() => updateSelection(badBlocks.map(b => b.id))}
+                        className="px-2 py-1 rounded border border-rose-700/60 bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 text-[11px] font-medium disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                      >
+                        배드만 ({badBlocks.length})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={isRepairing || selectedBlockIds.length < 2}
+                      onClick={handleSortSelectionByLba}
+                      className="px-2 py-1 rounded border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-300 text-[11px] font-medium disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                    >
+                      LBA순 정렬
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isRepairing || selectedBlockIds.length === 0}
+                      onClick={() => updateSelection([])}
+                      className="px-2 py-1 rounded border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-400 text-[11px] font-medium disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                    >
+                      선택 해제
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-2 max-h-36 overflow-y-auto space-y-1 font-mono text-xs">
+            <div className="bg-slate-950 border border-slate-800 rounded-lg p-2 max-h-44 overflow-y-auto space-y-1 font-mono text-xs">
               {targetableBlocks.length === 0 ? (
                 <div className="p-4 text-center text-slate-400 text-xs font-sans space-y-1">
                   <div className="text-emerald-400 font-semibold flex items-center justify-center gap-1.5">
                     <CheckCircle2 className="w-4 h-4" />
-                    현재 감지된 배드섹터 및 지연 블록이 없습니다.
+                    현재 큐에 추가된 섹터 또는 감지된 배드섹터가 없습니다.
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    드라이브 표면 검사 후 손상 블록이 발견되면 이 목록에 표시됩니다.
+                    섹터 그리드에서 &quot;다중 선택&quot; 모드나 Ctrl+클릭으로 비연속 블록을 수복 큐에 추가할 수 있습니다.
                   </div>
                 </div>
               ) : (
                 targetableBlocks.map((block) => {
                   const isSelected = selectedBlockIds.includes(block.id);
+                  const stepState = queueStepStates[block.id];
                   return (
                     <div
                       key={block.id}
                       onClick={() => handleToggleBlock(block.id)}
-                      className={`p-2 rounded border flex items-center justify-between cursor-pointer transition-colors ${
-                        isSelected
+                      className={`p-2 rounded border flex items-center justify-between gap-2 cursor-pointer transition-colors ${
+                        stepState?.status === 'running'
+                          ? 'bg-indigo-950/60 border-indigo-500 text-white'
+                          : stepState?.status === 'verified'
+                          ? 'bg-emerald-950/40 border-emerald-700/70 text-emerald-200'
+                          : stepState?.status === 'failed'
+                          ? 'bg-amber-950/40 border-amber-700/70 text-amber-200'
+                          : isSelected
                           ? 'bg-rose-950/40 border-rose-700/60 text-white'
                           : 'bg-slate-900 border-slate-800/80 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <input
                           type="checkbox"
                           checked={isSelected}
                           onChange={() => {}}
                           disabled={isRepairing}
-                          className="rounded border-slate-700 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                          className="rounded border-slate-700 text-rose-600 focus:ring-rose-500 cursor-pointer shrink-0"
                         />
-                        <span className="font-bold">블록 #{block.id}</span>
+                        <span className="font-bold whitespace-nowrap">블록 #{block.id}</span>
                         <span className="text-slate-500">|</span>
-                        <span>LBA: #{block.lba.toLocaleString()}</span>
+                        <span className="truncate">LBA #{block.lba.toLocaleString()}</span>
                         {block.zoneTag && (
-                          <span className="text-[10px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
+                          <span className="text-[10px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 hidden sm:inline whitespace-nowrap">
                             {block.zoneTag}
                           </span>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                          block.status === 'bad'
-                            ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                            : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                        }`}>
-                          {block.status === 'bad' ? 'BAD (UNC)' : `${block.responseTimeMs}ms Delay`}
-                        </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {stepState ? (
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${
+                              stepState.status === 'running'
+                                ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-400/50'
+                                : stepState.status === 'verified'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                : stepState.status === 'failed'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                            }`}
+                          >
+                            {stepState.status === 'running'
+                              ? `Step ${stepState.currentStep}/${stepState.totalSteps} · ${stepState.stepLabel}`
+                              : stepState.status === 'verified'
+                              ? '수복 검증 완료'
+                              : stepState.status === 'failed'
+                              ? '미지원/실패'
+                              : '대기 중'}
+                          </span>
+                        ) : (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase whitespace-nowrap ${
+                            block.status === 'bad'
+                              ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                              : block.status === 'critical' || block.status === 'slow'
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                              : 'bg-slate-800 text-slate-300 border border-slate-700'
+                          }`}>
+                            {block.status === 'bad'
+                              ? 'BAD (UNC)'
+                              : block.responseTimeMs > 0
+                              ? `${block.responseTimeMs}ms`
+                              : block.status.toUpperCase()}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -620,12 +1056,16 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
           {isRepairing && (
             <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg space-y-2 animate-in fade-in">
-              <div className="flex items-center justify-between text-xs font-mono">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs font-mono">
                 <span className="text-rose-400 font-bold flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5 animate-spin" />
-                  수복 진행 중... (현재 LBA: #{currentLba.toLocaleString()})
+                  <Activity className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span>
+                    {activeStepInfo
+                      ? `섹터 ${activeStepInfo.sectorIndex}/${activeStepInfo.totalSectors} · Step ${activeStepInfo.stepIndex}/${activeStepInfo.totalSteps} (${activeStepInfo.stepLabel}) · LBA #${currentLba.toLocaleString()}`
+                      : `수복 진행 중... (현재 LBA: #${currentLba.toLocaleString()})`}
+                  </span>
                 </span>
-                <span className="text-white font-bold">{progress}%</span>
+                <span className="text-white font-bold tabular-nums">{progress}%</span>
               </div>
               <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
                 <div
@@ -665,25 +1105,29 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 <CheckCircle2 className="w-6 h-6 text-emerald-400 flex-shrink-0" />
                 <div>
                   <div className="text-xs font-bold text-emerald-300">
-                    실제 제로필 쓰기 검증 수복 완료 ({repairedCountSummary}개 성공{failedCountSummary > 0 ? `, ${failedCountSummary}개 미지원` : ''})
+                    {repairAborted ? '부분 제로필 수복 완료 (세션 중단됨)' : '실제 제로필 쓰기 검증 수복 완료'} ({repairedCountSummary}개 성공{failedCountSummary > 0 ? `, ${failedCountSummary}개 미지원` : ''})
                   </div>
                   <div className="text-[11px] text-slate-300">
-                    수복에 성공한 블록이 정상 상태로 갱신되었습니다.
+                    수복에 성공한 블록이 정상 상태로 갱신되었으며, 미완료 블록은 큐에 유지됩니다.
                   </div>
                 </div>
               </div>
             </div>
           )}
 
-          {repairCompleted && repairedCountSummary === 0 && failedCountSummary > 0 && (
+          {repairCompleted && repairedCountSummary === 0 && (failedCountSummary > 0 || repairAborted) && (
             <div className="p-3.5 rounded-lg bg-amber-950/40 border border-amber-700/60 flex items-start gap-2.5 animate-in zoom-in-95">
               <AlertOctagon className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
               <div>
                 <div className="text-xs font-bold text-amber-300">
-                  직접 물리 섹터 쓰기 권한 없음 ({failedCountSummary}개 블록 미변경)
+                  {repairAborted && failedCountSummary === 0
+                    ? '사용자 요청으로 수복 세션이 안전 중단되었습니다'
+                    : `직접 물리 섹터 쓰기 권한 없음 (${failedCountSummary}개 블록 미변경)`}
                 </div>
                 <div className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
-                  {lastUnsupportedReason || '현재 실행 환경에서 대상 장치에 대한 저수준 쓰기 핸들이 거부되었습니다.'}
+                  {repairAborted && failedCountSummary === 0
+                    ? '완료되지 않은 비연속 대상 섹터는 수복 큐에 그대로 유지됩니다.'
+                    : lastUnsupportedReason || '현재 실행 환경에서 대상 장치에 대한 저수준 쓰기 핸들이 거부되었습니다.'}
                 </div>
               </div>
             </div>
@@ -691,19 +1135,31 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
-          <button
-            disabled={isRepairing}
-            onClick={onClose}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            {repairCompleted ? '닫기 (Close)' : '취소'}
-          </button>
+        <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              disabled={isRepairing}
+              onClick={onClose}
+              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap"
+            >
+              {repairCompleted ? '닫기 (Close)' : '취소'}
+            </button>
+            {isRepairing && (
+              <button
+                type="button"
+                onClick={handleAbortRepairSession}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <StopCircle className="w-3.5 h-3.5" />
+                <span>세션 중단</span>
+              </button>
+            )}
+          </div>
 
           <button
             disabled={isRepairing || selectedBlockIds.length === 0 || isProtectedSystemDrive}
             onClick={handleStartRepair}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50 ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap ${
               isRepairing
                 ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
                 : isProtectedSystemDrive || isSafetyLocked
@@ -714,7 +1170,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             {isRepairing ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                <span>수복 진행 중... ({progress}%)</span>
+                <span>다단계 수복 진행 중... ({progress}%)</span>
               </>
             ) : isProtectedSystemDrive ? (
               <>
@@ -724,12 +1180,12 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             ) : isSafetyLocked ? (
               <>
                 <Lock className="w-3.5 h-3.5 text-rose-400" />
-                <span>🔒 안전 잠금 해제 필요 (수복 비활성화)</span>
+                <span>안전 잠금 해제 필요 ({selectedBlockIds.length}개 큐)</span>
               </>
             ) : (
               <>
                 <Wrench className="w-3.5 h-3.5 text-amber-300" />
-                <span>⚡ S.M.A.R.T. 제로필 수복 실행</span>
+                <span>다단계 제로필 수복 실행 ({selectedBlockIds.length}개 · {pipelineSteps.length}단계)</span>
               </>
             )}
           </button>

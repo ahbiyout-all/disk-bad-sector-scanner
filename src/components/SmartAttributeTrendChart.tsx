@@ -1,5 +1,13 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { DiskDrive, DriveSmartAttribute, SavedScanRecord } from '../types';
+import * as d3 from 'd3';
+import {
+  CustomSmartThresholdRule,
+  DiskDrive,
+  DriveSmartAttribute,
+  SavedScanRecord,
+  SmartHistorySnapshot
+} from '../types';
+import { matchesDriveRecord } from '../utils/smartHistoryStore';
 import {
   TrendingUp,
   AlertTriangle,
@@ -7,16 +15,21 @@ import {
   CheckCircle2,
   Play,
   Info,
-  Activity
+  Activity,
+  BookmarkPlus
 } from 'lucide-react';
 
 interface SmartAttributeTrendChartProps {
   drive: DiskDrive;
   scanRecords: SavedScanRecord[];
+  smartSnapshots?: SmartHistorySnapshot[];
+  customSmartThresholds?: CustomSmartThresholdRule[];
   onStartScan?: () => void;
+  onRecordSmartSnapshot?: (drive: DiskDrive) => void;
 }
 
 type ValueMode = 'raw' | 'normalized';
+type RangeFilter = 'all' | '30d' | '7d' | '10';
 
 interface TrackedAttributeConfig {
   id: number;
@@ -32,6 +45,18 @@ interface TrackedAttributeConfig {
 }
 
 const TRACKED_ATTRIBUTES: TrackedAttributeConfig[] = [
+  {
+    id: 1,
+    hexId: '01',
+    name: 'Raw Read Error Rate',
+    nameKo: '원시 읽기 오류율',
+    color: '#3B82F6',
+    dotBgClass: 'bg-blue-500',
+    textClass: 'text-blue-500',
+    markerShape: 'square',
+    defaultActive: true,
+    nameMatchers: /raw\s*read\s*error|read\s*error\s*rate/i
+  },
   {
     id: 5,
     hexId: '05',
@@ -81,6 +106,18 @@ const TRACKED_ATTRIBUTES: TrackedAttributeConfig[] = [
     nameMatchers: /reported\s*uncorrectable/i
   },
   {
+    id: 199,
+    hexId: 'C7',
+    name: 'UltraDMA CRC Error Count',
+    nameKo: 'UDMA CRC 오류',
+    color: '#14B8A6',
+    dotBgClass: 'bg-teal-500',
+    textClass: 'text-teal-500',
+    markerShape: 'triangle',
+    defaultActive: false,
+    nameMatchers: /udma\s*crc|ultradma\s*crc|crc\s*error\s*count/i
+  },
+  {
     id: 10,
     hexId: '0A',
     name: 'Spin Retry Count',
@@ -100,7 +137,7 @@ interface SessionPoint {
   shortDate: string;
   fullDate: string;
   timestamp: number;
-  isLive: boolean;
+  sourceKind: 'scan' | 'snapshot' | 'live';
   scanMode?: 'quick' | 'full';
   healthScore: number | null;
   badCount: number | null;
@@ -121,12 +158,7 @@ interface SeriesAnalysis {
   projectedNext1: number | null;
   projectedNext2: number | null;
   latestThreshold: number | null;
-}
-
-const GENERIC_SERIALS = new Set(['', 'N/A', 'UNKNOWN', 'NONE', '00000000']);
-
-function normalizeSerial(serial?: string | null): string {
-  return (serial || '').trim().toUpperCase();
+  maxValidValue: number;
 }
 
 export function parseSmartRawCount(attr?: DriveSmartAttribute): number | null {
@@ -177,6 +209,13 @@ function formatShortTimestamp(ts: number, fallbackDate?: string): string {
     return `${mm}/${dd} ${hh}:${min}`;
   }
   return fallbackDate || '-';
+}
+
+function formatCompactAxisTick(val: number): string {
+  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(1)}M`;
+  if (val >= 10_000) return `${(val / 1_000).toFixed(0)}K`;
+  if (val >= 1_000) return `${(val / 1_000).toFixed(1)}K`;
+  return val.toLocaleString();
 }
 
 function computeLinearRegression(
@@ -244,72 +283,134 @@ function renderMarkerShape(
 export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> = ({
   drive,
   scanRecords,
-  onStartScan
+  smartSnapshots = [],
+  customSmartThresholds = [],
+  onStartScan,
+  onRecordSmartSnapshot
 }) => {
   const [valueMode, setValueMode] = useState<ValueMode>('raw');
+  const [rangeFilter, setRangeFilter] = useState<RangeFilter>('all');
   const [showTrendline, setShowTrendline] = useState<boolean>(true);
   const [includeLiveSnapshot, setIncludeLiveSnapshot] = useState<boolean>(true);
   const [activeIds, setActiveIds] = useState<number[]>(() =>
     TRACKED_ATTRIBUTES.filter(a => a.defaultActive).map(a => a.id)
   );
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [snapshotSavedHint, setSnapshotSavedHint] = useState<boolean>(false);
   const svgRef = useRef<SVGSVGElement>(null);
-
-  // Match scan records belonging to this physical drive
-  const driveSessions = useMemo(() => {
-    const activeSerial = normalizeSerial(drive.serialNumber);
-    const hasIdentifyingSerial = !GENERIC_SERIALS.has(activeSerial);
-
-    const matched = scanRecords.filter(rec => {
-      const recSerial = normalizeSerial(rec.driveSerial);
-      if (hasIdentifyingSerial && !GENERIC_SERIALS.has(recSerial)) {
-        return recSerial === activeSerial;
-      }
-      return rec.driveId === drive.id && rec.driveModel === drive.model;
-    });
-
-    return [...matched].sort((a, b) => a.timestamp - b.timestamp);
-  }, [scanRecords, drive.id, drive.model, drive.serialNumber]);
 
   const hasLiveSmart = drive.smartAttributes.length > 0;
 
-  // Build chronological timeline points
-  const timelinePoints: SessionPoint[] = useMemo(() => {
-    const points: SessionPoint[] = driveSessions.map((rec, idx) => ({
-      key: rec.id,
-      label: `#${idx + 1}`,
-      shortDate: formatShortTimestamp(rec.timestamp, rec.date),
-      fullDate: rec.date,
-      timestamp: rec.timestamp,
-      isLive: false,
-      scanMode: rec.scanMode,
-      healthScore: rec.healthScore,
-      badCount: rec.badCount,
-      attributes: Array.isArray(rec.smartSnapshot) ? rec.smartSnapshot : []
-    }));
+  // Match scan records and S.M.A.R.T. snapshots belonging to this physical drive
+  const driveScans = useMemo(() => {
+    return scanRecords
+      .filter(rec => matchesDriveRecord(rec, drive))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [scanRecords, drive]);
 
-    if (driveSessions.length > 0 && includeLiveSnapshot && hasLiveSmart) {
+  const drivePolledSnapshots = useMemo(() => {
+    return smartSnapshots
+      .filter(snap => matchesDriveRecord(snap, drive))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [smartSnapshots, drive]);
+
+  // Merge scan sessions + polled S.M.A.R.T. snapshots + optional live measurement into one chronological timeline
+  const allTimelinePoints: SessionPoint[] = useMemo(() => {
+    const merged: SessionPoint[] = [];
+
+    driveScans.forEach(rec => {
+      merged.push({
+        key: `scan-${rec.id}`,
+        label: '',
+        shortDate: formatShortTimestamp(rec.timestamp, rec.date),
+        fullDate: rec.date,
+        timestamp: rec.timestamp,
+        sourceKind: 'scan',
+        scanMode: rec.scanMode,
+        healthScore: rec.healthScore,
+        badCount: rec.badCount,
+        attributes: Array.isArray(rec.smartSnapshot) ? rec.smartSnapshot : []
+      });
+    });
+
+    drivePolledSnapshots.forEach(snap => {
+      // Deduplicate against scan session recorded within 45s on the same drive
+      const nearScan = driveScans.some(
+        rec => Math.abs(rec.timestamp - snap.timestamp) < 45_000
+      );
+      if (nearScan && snap.source === 'auto-poll') {
+        return;
+      }
+      merged.push({
+        key: `snap-${snap.id}`,
+        label: '',
+        shortDate: formatShortTimestamp(snap.timestamp),
+        fullDate: new Date(snap.timestamp).toLocaleString('ko-KR'),
+        timestamp: snap.timestamp,
+        sourceKind: 'snapshot',
+        healthScore: snap.healthScore,
+        badCount: null,
+        attributes: Array.isArray(snap.smartAttributes) ? snap.smartAttributes : []
+      });
+    });
+
+    merged.sort((a, b) => a.timestamp - b.timestamp);
+    merged.forEach((pt, idx) => {
+      pt.label = `#${idx + 1}`;
+    });
+
+    if (merged.length > 0 && includeLiveSnapshot && hasLiveSmart) {
       const now = Date.now();
-      points.push({
+      merged.push({
         key: `live-${drive.id}`,
         label: '현재',
         shortDate: 'Live',
         fullDate: '현재 라이브 커널 S.M.A.R.T. 측정값',
         timestamp: now,
-        isLive: true,
+        sourceKind: 'live',
         healthScore: drive.healthScore,
         badCount: null,
         attributes: drive.smartAttributes
       });
     }
 
-    return points;
-  }, [driveSessions, includeLiveSnapshot, hasLiveSmart, drive.id, drive.healthScore, drive.smartAttributes]);
+    return merged;
+  }, [
+    driveScans,
+    drivePolledSnapshots,
+    includeLiveSnapshot,
+    hasLiveSmart,
+    drive.id,
+    drive.healthScore,
+    drive.smartAttributes
+  ]);
+
+  // Apply timeframe filter
+  const timelinePoints = useMemo(() => {
+    if (allTimelinePoints.length === 0 || rangeFilter === 'all') {
+      return allTimelinePoints;
+    }
+    if (rangeFilter === '10') {
+      return allTimelinePoints.slice(-10);
+    }
+    const now = Date.now();
+    const cutoff =
+      rangeFilter === '7d'
+        ? now - 7 * 24 * 60 * 60 * 1000
+        : now - 30 * 24 * 60 * 60 * 1000;
+    const filtered = allTimelinePoints.filter(pt => pt.sourceKind === 'live' || pt.timestamp >= cutoff);
+    return filtered.length > 0 ? filtered : allTimelinePoints;
+  }, [allTimelinePoints, rangeFilter]);
+
+  const historicalCount = useMemo(
+    () => timelinePoints.filter(pt => pt.sourceKind !== 'live').length,
+    [timelinePoints]
+  );
 
   // Determine which tracked attributes actually exist in either historical snapshots or live SMART
   const availableAttributes = useMemo(() => {
     return TRACKED_ATTRIBUTES.filter(cfg => {
-      if (cfg.id === 5 || cfg.id === 197) return true;
+      if (cfg.id === 1 || cfg.id === 5 || cfg.id === 197) return true;
       const inHistory = timelinePoints.some(pt => !!findMatchingAttr(pt.attributes, cfg));
       const inLive = !!findMatchingAttr(drive.smartAttributes, cfg);
       return inHistory || inLive || cfg.id === 198;
@@ -354,6 +455,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
 
       const validThresholds = thresholds.filter((t): t is number => t !== null);
       const latestThreshold = validThresholds.length > 0 ? validThresholds[validThresholds.length - 1] : null;
+      const maxValidValue = validPairs.length > 0 ? Math.max(...validPairs.map(p => p.y)) : 0;
 
       return {
         config,
@@ -368,7 +470,8 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
         intercept: reg ? reg.intercept : null,
         projectedNext1,
         projectedNext2,
-        latestThreshold
+        latestThreshold,
+        maxValidValue
       };
     });
   }, [availableAttributes, timelinePoints, valueMode]);
@@ -383,9 +486,8 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
     [seriesAnalyses]
   );
 
-  // Live attribute summary for empty state / baseline display
   const liveKeySummary = useMemo(() => {
-    return [5, 197, 198].map(id => {
+    return [1, 5, 197, 198].map(id => {
       const cfg = TRACKED_ATTRIBUTES.find(t => t.id === id)!;
       const attr = findMatchingAttr(drive.smartAttributes, cfg);
       return {
@@ -405,17 +507,24 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
     });
   };
 
-  // Overall Failure Trend Verdict
+  // Overall Failure Trend Verdict (honors custom user Warning/Critical thresholds when configured)
   const trendVerdict = useMemo(() => {
+    const s01 = seriesAnalyses.find(s => s.config.id === 1);
     const s05 = seriesAnalyses.find(s => s.config.id === 5);
     const sC5 = seriesAnalyses.find(s => s.config.id === 197);
     const sC6 = seriesAnalyses.find(s => s.config.id === 198);
+    const sC7 = seriesAnalyses.find(s => s.config.id === 199);
 
-    const latest05 = s05?.rawValues.filter((v): v is number => v !== null).slice(-1)[0] ?? 0;
-    const latestC5 = sC5?.rawValues.filter((v): v is number => v !== null).slice(-1)[0] ?? 0;
-    const latestC6 = sC6?.rawValues.filter((v): v is number => v !== null).slice(-1)[0] ?? 0;
+    const latestRaw = (s?: SeriesAnalysis) =>
+      s?.rawValues.filter((v): v is number => v !== null).slice(-1)[0] ?? null;
+    const latestNorm = (s?: SeriesAnalysis) =>
+      s?.normalizedValues.filter((v): v is number => v !== null).slice(-1)[0] ?? null;
 
-    // Calculate raw slopes specifically for accurate failure prediction regardless of display mode
+    const latest05 = latestRaw(s05) ?? 0;
+    const latestC5 = latestRaw(sC5) ?? 0;
+    const latestC6 = latestRaw(sC6) ?? 0;
+    const latestC7 = latestRaw(sC7) ?? 0;
+
     const rawSlope = (s?: SeriesAnalysis) => {
       if (!s) return 0;
       const pts = s.rawValues
@@ -424,55 +533,140 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
       return computeLinearRegression(pts)?.slope ?? 0;
     };
 
+    const normSlope = (s?: SeriesAnalysis) => {
+      if (!s) return 0;
+      const pts = s.normalizedValues
+        .map((v, i) => (v !== null ? { x: i, y: v } : null))
+        .filter((p): p is { x: number; y: number } => p !== null);
+      return computeLinearRegression(pts)?.slope ?? 0;
+    };
+
     const slope05 = rawSlope(s05);
     const slopeC5 = rawSlope(sC5);
     const slopeC6 = rawSlope(sC6);
+    const normSlope01 = normSlope(s01);
 
     const normBreachRisk = seriesAnalyses.some(s => {
-      const latestNorm = s.normalizedValues.filter((v): v is number => v !== null).slice(-1)[0];
-      return latestNorm !== undefined && s.latestThreshold !== null && latestNorm <= s.latestThreshold + 5;
+      const nVal = latestNorm(s);
+      return nVal !== null && s.latestThreshold !== null && nVal <= s.latestThreshold + 5;
     });
+
+    // Check custom user thresholds across all tracked series
+    const ruleMap = new Map<number, CustomSmartThresholdRule>();
+    for (const r of customSmartThresholds) {
+      if (r.enabled) ruleMap.set(r.attributeId, r);
+    }
+
+    const customCriticalHits: string[] = [];
+    const customWarningHits: string[] = [];
+    for (const s of seriesAnalyses) {
+      const rule = ruleMap.get(s.config.id);
+      if (!rule) continue;
+      const val = rule.comparisonMode === 'raw_above' ? latestRaw(s) : latestNorm(s);
+      if (val === null) continue;
+      if (
+        rule.criticalThreshold !== null &&
+        (rule.comparisonMode === 'raw_above'
+          ? val >= rule.criticalThreshold
+          : val <= rule.criticalThreshold)
+      ) {
+        customCriticalHits.push(
+          `${s.config.hexId}h (${val.toLocaleString()} ${rule.comparisonMode === 'raw_above' ? '≥' : '≤'} ${rule.criticalThreshold.toLocaleString()})`
+        );
+      } else if (
+        rule.warningThreshold !== null &&
+        (rule.comparisonMode === 'raw_above'
+          ? val >= rule.warningThreshold
+          : val <= rule.warningThreshold)
+      ) {
+        customWarningHits.push(
+          `${s.config.hexId}h (${val.toLocaleString()} ${rule.comparisonMode === 'raw_above' ? '≥' : '≤'} ${rule.warningThreshold.toLocaleString()})`
+        );
+      }
+    }
+
+    const r05Crit = ruleMap.get(5)?.criticalThreshold ?? 16;
+    const rC5Crit = ruleMap.get(197)?.criticalThreshold ?? 8;
 
     if (
       normBreachRisk ||
-      latestC5 > 0 && slopeC5 > 0 ||
-      latestC6 > 0 && slopeC6 > 0 ||
+      customCriticalHits.length > 0 ||
+      (latestC5 > 0 && slopeC5 > 0) ||
+      (latestC6 > 0 && slopeC6 > 0) ||
       slope05 >= 2 ||
-      latest05 >= 16 ||
-      latestC5 >= 8
+      latest05 >= r05Crit ||
+      latestC5 >= rC5Crit
     ) {
       return {
         level: 'critical' as const,
         label: '고장 위험 추세 감지',
-        detail: '보류(C5) 또는 치환(05) 섹터가 지속 증가하고 있습니다. 즉시 데이터를 백업하고 드라이브 교체를 준비하십시오.',
-        badgeClass: 'text-red-700 dark:text-red-300 bg-red-500/10 border-red-500/30',
+        detail:
+          customCriticalHits.length > 0
+            ? `설정된 위험 임계치 도달 (${customCriticalHits.join(', ')}). 즉시 백업 및 드라이브 교체를 권장합니다.`
+            : '보류(C5) 또는 치환(05) 섹터 증가 또는 임계치 근접이 감지되었습니다. 즉시 백업 및 드라이브 교체를 권장합니다.',
         iconColor: 'text-red-500'
       };
     }
 
-    if (latest05 > 0 || latestC5 > 0 || latestC6 > 0 || slope05 > 0 || slopeC5 > 0) {
+    if (
+      customWarningHits.length > 0 ||
+      (!ruleMap.has(5) && latest05 > 0) ||
+      (!ruleMap.has(197) && latestC5 > 0) ||
+      (!ruleMap.has(198) && latestC6 > 0) ||
+      (!ruleMap.has(199) && latestC7 > 0) ||
+      slope05 > 0 ||
+      slopeC5 > 0 ||
+      normSlope01 <= -2
+    ) {
       return {
         level: 'warning' as const,
         label: '열화 주의 관찰',
-        detail: '손상/재할당 섹터 이력이 존재합니다. 향후 스캔에서 증가 기울기가 가팔라지는지 추적하십시오.',
-        badgeClass: 'text-amber-700 dark:text-amber-300 bg-amber-500/10 border-amber-500/30',
+        detail:
+          customWarningHits.length > 0
+            ? `설정된 주의 임계치 도달 (${customWarningHits.join(', ')}). 후속 스캔에서 추세 기울기를 추적하십시오.`
+            : '치환·보류 섹터 이력 또는 읽기 오류율(01h) 변동이 관찰됩니다. 후속 스캔에서 추세 기울기를 추적하십시오.',
         iconColor: 'text-amber-500'
       };
     }
 
     return {
       level: 'nominal' as const,
-      label: '안정 추세',
-      detail: '추적 중인 치환(05)·보류(C5) 섹터 증가 징후 없이 안정 상태를 유지하고 있습니다.',
-      badgeClass: 'text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
+      label: '장기 안정 추세',
+      detail: '01h 읽기 오류율 및 05h 치환·C5h 보류 섹터에서 장기 열화 징후 없이 안정 상태를 유지하고 있습니다.',
       iconColor: 'text-emerald-500'
     };
-  }, [seriesAnalyses]);
+  }, [seriesAnalyses, customSmartThresholds]);
 
-  // SVG Chart Geometry
-  const chartWidth = 840;
-  const chartHeight = 245;
-  const padding = { top: 24, right: 32, bottom: 42, left: 54 };
+  // Dual-axis separation when Raw Read Error Rate (01h) uses huge vendor-packed counts alongside small counts (05h/C5h)
+  const secondaryAxisSeriesId = useMemo(() => {
+    if (valueMode !== 'raw' || activeSeries.length < 2) return null;
+    const withData = activeSeries.filter(s => s.values.some(v => v !== null));
+    if (withData.length < 2) return null;
+
+    const sorted = [...withData].sort((a, b) => b.maxValidValue - a.maxValidValue);
+    const largest = sorted[0];
+    const secondLargest = sorted[1];
+
+    if (largest.maxValidValue >= 100 && largest.maxValidValue > Math.max(10, secondLargest.maxValidValue) * 20) {
+      return largest.config.id;
+    }
+    return null;
+  }, [valueMode, activeSeries]);
+
+  const secondarySeries = useMemo(
+    () => activeSeries.find(s => s.config.id === secondaryAxisSeriesId) || null,
+    [activeSeries, secondaryAxisSeriesId]
+  );
+
+  // SVG + D3 Geometry
+  const chartWidth = 860;
+  const chartHeight = 250;
+  const padding = {
+    top: 24,
+    right: secondarySeries ? 56 : 28,
+    bottom: 42,
+    left: 54
+  };
   const innerWidth = chartWidth - padding.left - padding.right;
   const innerHeight = chartHeight - padding.top - padding.bottom;
 
@@ -480,25 +674,35 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
   const forecastSteps = canProject ? 2 : 0;
   const totalSlots = Math.max(1, timelinePoints.length + forecastSteps - 1);
 
+  const xScale = useMemo(
+    () =>
+      d3
+        .scaleLinear()
+        .domain([0, totalSlots])
+        .range([padding.left, padding.left + innerWidth]),
+    [totalSlots, padding.left, innerWidth]
+  );
+
   const getX = (index: number) => {
     if (timelinePoints.length === 1 && !canProject) {
       return padding.left + innerWidth / 2;
     }
-    return padding.left + (index / totalSlots) * innerWidth;
+    return xScale(index);
   };
 
-  // Compute Y scale across active series & optional projections
-  const { yMin, yMax, yTicks } = useMemo(() => {
+  // Primary Left Y-Scale (D3)
+  const { yScale, yTicks } = useMemo(() => {
     if (valueMode === 'normalized') {
-      return {
-        yMin: 0,
-        yMax: 100,
-        yTicks: [0, 25, 50, 75, 100]
-      };
+      const scale = d3
+        .scaleLinear()
+        .domain([0, 100])
+        .range([padding.top + innerHeight, padding.top]);
+      return { yScale: scale, yTicks: [0, 25, 50, 75, 100] };
     }
 
+    const primarySeriesList = activeSeries.filter(s => s.config.id !== secondaryAxisSeriesId);
     const allNums: number[] = [];
-    activeSeries.forEach(s => {
+    primarySeriesList.forEach(s => {
       s.values.forEach(v => {
         if (v !== null) allNums.push(v);
       });
@@ -512,18 +716,48 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
     const computedMax = rawMax <= 4 ? 5 : Math.ceil(rawMax * 1.2);
     const step = Math.max(1, Math.ceil(computedMax / 4));
     const roundedMax = step * 4;
-    const ticks = [0, step, step * 2, step * 3, roundedMax];
-
+    const scale = d3
+      .scaleLinear()
+      .domain([0, roundedMax])
+      .range([padding.top + innerHeight, padding.top]);
     return {
-      yMin: 0,
-      yMax: roundedMax,
-      yTicks: ticks
+      yScale: scale,
+      yTicks: [0, step, step * 2, step * 3, roundedMax]
     };
-  }, [valueMode, activeSeries, canProject]);
+  }, [valueMode, activeSeries, secondaryAxisSeriesId, canProject, padding.top, innerHeight]);
 
-  const getY = (val: number) => {
-    const ratio = (val - yMin) / Math.max(1, yMax - yMin);
-    return padding.top + innerHeight - Math.max(0, Math.min(1, ratio)) * innerHeight;
+  // Optional Right Y-Scale (D3) for high-magnitude attribute (e.g. packed 01h Raw Read Error Rate)
+  const { yRightScale, yRightTicks } = useMemo(() => {
+    if (!secondarySeries) {
+      return { yRightScale: null, yRightTicks: [] as number[] };
+    }
+    const nums: number[] = [];
+    secondarySeries.values.forEach(v => {
+      if (v !== null) nums.push(v);
+    });
+    if (canProject) {
+      if (secondarySeries.projectedNext1 !== null) nums.push(secondarySeries.projectedNext1);
+      if (secondarySeries.projectedNext2 !== null) nums.push(secondarySeries.projectedNext2);
+    }
+    const rawMax = nums.length > 0 ? Math.max(...nums) : 100;
+    const roundedMax = Math.max(4, Math.ceil(rawMax * 1.15));
+    const step = Math.max(1, Math.ceil(roundedMax / 4));
+    const top = step * 4;
+    const scale = d3
+      .scaleLinear()
+      .domain([0, top])
+      .range([padding.top + innerHeight, padding.top]);
+    return {
+      yRightScale: scale,
+      yRightTicks: [0, step, step * 2, step * 3, top]
+    };
+  }, [secondarySeries, canProject, padding.top, innerHeight]);
+
+  const getYForSeries = (seriesId: number, val: number) => {
+    if (seriesId === secondaryAxisSeriesId && yRightScale) {
+      return yRightScale(val);
+    }
+    return yScale(val);
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -544,31 +778,64 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
     setHoverIndex(closestIdx);
   };
 
+  const handleManualSnapshot = () => {
+    if (!onRecordSmartSnapshot || !hasLiveSmart) return;
+    onRecordSmartSnapshot(drive);
+    setSnapshotSavedHint(true);
+    window.setTimeout(() => setSnapshotSavedHint(false), 1800);
+  };
+
   const hoveredPoint = hoverIndex !== null ? timelinePoints[hoverIndex] : null;
   const labelStride = timelinePoints.length > 10 ? Math.ceil(timelinePoints.length / 8) : 1;
 
   return (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 shadow-xs">
       {/* Header Row */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pb-3 mb-3 border-b border-slate-200 dark:border-slate-800">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-200 dark:border-slate-800">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-indigo-500 shrink-0" />
             <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
-              S.M.A.R.T. 주요 속성 이력 추이 및 고장 예측
+              S.M.A.R.T. 주요 속성 장기 열화 추이
             </h3>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap items-center gap-1.5">
-            <span>{drive.model}</span>
+            <span className="truncate max-w-[240px]">{drive.model}</span>
             <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">누적 스캔 {driveSessions.length}회</span>
+            <span className="font-mono tabular-nums">누적 이력 {historicalCount}건</span>
             <span aria-hidden="true">·</span>
-            <span>05h 치환 / C5h 보류 섹터 변화 추적</span>
+            <span>01h 읽기 오류율 · 05h 치환 섹터 · C5h 보류 섹터</span>
           </p>
         </div>
 
-        {/* Interactive Controls */}
+        {/* Interactive Toolbar Controls */}
         <div className="flex items-center gap-2 flex-wrap shrink-0">
+          {/* Range Filter */}
+          <div className="flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md">
+            {(
+              [
+                { id: 'all', label: '전체' },
+                { id: '30d', label: '30일' },
+                { id: '7d', label: '7일' },
+                { id: '10', label: '최근 10회' }
+              ] as const
+            ).map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setRangeFilter(opt.id)}
+                className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  rangeFilter === opt.id
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-2xs font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Value Mode Switch */}
           <div className="flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md">
             <button
               type="button"
@@ -607,7 +874,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             추세선 예측 {showTrendline ? 'ON' : 'OFF'}
           </button>
 
-          {driveSessions.length > 0 && hasLiveSmart && (
+          {allTimelinePoints.length > 0 && hasLiveSmart && (
             <button
               type="button"
               onClick={() => setIncludeLiveSnapshot(prev => !prev)}
@@ -621,32 +888,55 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
               현재 값 포함
             </button>
           )}
+
+          {onRecordSmartSnapshot && hasLiveSmart && (
+            <button
+              type="button"
+              onClick={handleManualSnapshot}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              <BookmarkPlus className="w-3.5 h-3.5 text-indigo-500" />
+              <span>{snapshotSavedHint ? '저장됨' : '스냅샷 저장'}</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Empty State: No Scan Sessions Recorded Yet */}
-      {driveSessions.length === 0 ? (
+      {/* Empty State: No Historical Points Recorded Yet */}
+      {timelinePoints.length === 0 ? (
         <div className="p-5 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
                 <Activity className="w-4 h-4 text-indigo-500 shrink-0" />
-                <span>저장된 이전 스캔 세션 이력이 없습니다</span>
+                <span>누적된 S.M.A.R.T. 이력 스냅샷이 없습니다</span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                표면 검사를 완료할 때마다 해당 드라이브의 S.M.A.R.T. 스냅샷이 자동 기록되어 05h·C5h 섹터 증가 추이와 고장 예측 곡선을 표시합니다.
+                표면 검사 완료 또는 하드웨어 S.M.A.R.T. 조회 시 01h 읽기 오류율·05h 치환 섹터·C5h 보류 섹터 이력이 자동 누적되어 장기 열화 추세 곡선을 표시합니다.
               </p>
             </div>
-            {onStartScan && (
-              <button
-                type="button"
-                onClick={onStartScan}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer self-start sm:self-center"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>표면 검사 시작</span>
-              </button>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {onRecordSmartSnapshot && hasLiveSmart && (
+                <button
+                  type="button"
+                  onClick={handleManualSnapshot}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>현재 S.M.A.R.T. 기록</span>
+                </button>
+              )}
+              {onStartScan && (
+                <button
+                  type="button"
+                  onClick={onStartScan}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>표면 검사 시작</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {hasLiveSmart && (
@@ -654,9 +944,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
               <span className="text-slate-500 dark:text-slate-400 font-medium">현재 실시간 기준값:</span>
               {liveKeySummary.map(({ cfg, attr, raw }) => (
                 <div key={cfg.id} className="flex items-center gap-1.5 font-mono tabular-nums">
-                  <span
-                    className={`w-2 h-2 rounded-xs shrink-0 ${cfg.dotBgClass}`}
-                  />
+                  <span className={`w-2 h-2 rounded-xs shrink-0 ${cfg.dotBgClass}`} />
                   <span className="text-slate-600 dark:text-slate-300">{cfg.hexId}h {cfg.nameKo}:</span>
                   <span className="font-bold text-slate-900 dark:text-slate-100">
                     {raw !== null ? raw.toLocaleString() : 'N/A'}
@@ -672,14 +960,13 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
           )}
         </div>
       ) : !hasAnyPlottableData ? (
-        /* Sessions exist, but snapshots lack ATA 05/C5/C6 attributes (e.g. NVMe or limited USB bridge) */
         <div className="p-5 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 text-center space-y-1.5">
           <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
             <Info className="w-4 h-4 text-slate-400" />
-            <span>이 드라이브의 스캔 스냅샷에 05h / C5h S.M.A.R.T. 속성이 없습니다</span>
+            <span>이 드라이브의 이력 스냅샷에 01h / 05h / C5h S.M.A.R.T. 속성이 없습니다</span>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-xl mx-auto leading-relaxed">
-            NVMe 전용 컨트롤러 또는 S.M.A.R.T. 패스스루를 지원하지 않는 USB 브릿지 장치에서는 ATA 재할당/보류 섹터 속성(05h, C5h)이 보고되지 않습니다.
+            NVMe 전용 컨트롤러 또는 S.M.A.R.T. 패스스루를 지원하지 않는 USB 브릿지 장치에서는 ATA 오류율/치환 섹터 속성(01h, 05h, C5h)이 보고되지 않습니다.
           </p>
         </div>
       ) : (
@@ -689,6 +976,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             {seriesAnalyses.map(series => {
               const isActive = activeIds.includes(series.config.id);
               const hasData = series.values.some(v => v !== null);
+              const isSecondary = series.config.id === secondaryAxisSeriesId;
               return (
                 <button
                   key={series.config.id}
@@ -714,6 +1002,9 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   </svg>
                   <span className="font-mono font-bold">{series.config.hexId}h</span>
                   <span>{series.config.nameKo}</span>
+                  {isSecondary && (
+                    <span className="text-[10px] font-normal text-slate-400">우측축</span>
+                  )}
                   <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">
                     {series.latestValue !== null ? series.latestValue.toLocaleString() : 'N/A'}
                   </span>
@@ -733,7 +1024,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                           : 'text-slate-400'
                       }`}
                     >
-                      {series.delta > 0 ? `+${series.delta}` : series.delta}
+                      {series.delta > 0 ? `+${series.delta.toLocaleString()}` : series.delta.toLocaleString()}
                     </span>
                   )}
                 </button>
@@ -741,12 +1032,12 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             })}
           </div>
 
-          {/* SVG Line Chart Canvas */}
-          <div className="relative w-full overflow-hidden select-none bg-slate-50/70 dark:bg-slate-950/70 rounded-lg border border-slate-200 dark:border-slate-800 p-1.5 sm:p-2">
+          {/* SVG + D3 Multi-Series Line Chart Canvas */}
+          <div className="relative w-full overflow-hidden select-none bg-slate-50/70 dark:bg-slate-950/70 rounded-lg border border-slate-200 dark:border-slate-800 p-2">
             <svg
               ref={svgRef}
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-              className="w-full h-52 sm:h-60 cursor-crosshair overflow-visible"
+              className="w-full h-56 sm:h-64 cursor-crosshair overflow-visible"
               onMouseMove={handleMouseMove}
               onMouseLeave={() => setHoverIndex(null)}
             >
@@ -781,11 +1072,11 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                 </g>
               )}
 
-              {/* Horizontal Grid Lines & Y-axis Labels */}
+              {/* Horizontal Grid Lines & Left Y-axis Labels */}
               {yTicks.map(tick => {
-                const y = getY(tick);
+                const y = yScale(tick);
                 return (
-                  <g key={tick}>
+                  <g key={`left-tick-${tick}`}>
                     <line
                       x1={padding.left}
                       y1={y}
@@ -801,37 +1092,184 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                       textAnchor="end"
                       className="fill-slate-500 dark:fill-slate-400 text-[10px] font-mono tabular-nums"
                     >
-                      {tick.toLocaleString()}
+                      {formatCompactAxisTick(tick)}
                     </text>
                   </g>
                 );
               })}
 
+              {/* Optional Right Y-axis Labels for large-scale packed attributes (e.g. 01h) */}
+              {secondarySeries && yRightScale && (
+                <g>
+                  <line
+                    x1={padding.left + innerWidth}
+                    y1={padding.top}
+                    x2={padding.left + innerWidth}
+                    y2={padding.top + innerHeight}
+                    stroke={secondarySeries.config.color}
+                    strokeWidth="0.8"
+                    strokeOpacity="0.45"
+                  />
+                  {yRightTicks.map(tick => {
+                    const y = yRightScale(tick);
+                    return (
+                      <text
+                        key={`right-tick-${tick}`}
+                        x={padding.left + innerWidth + 8}
+                        y={y + 3.5}
+                        textAnchor="start"
+                        fill={secondarySeries.config.color}
+                        className="text-[10px] font-mono tabular-nums"
+                      >
+                        {formatCompactAxisTick(tick)}
+                      </text>
+                    );
+                  })}
+                  <text
+                    x={padding.left + innerWidth + 4}
+                    y={padding.top - 8}
+                    textAnchor="start"
+                    fill={secondarySeries.config.color}
+                    className="text-[9px] font-mono font-semibold"
+                  >
+                    {secondarySeries.config.hexId}h
+                  </text>
+                </g>
+              )}
+
               {/* Threshold Reference Line in Normalized Mode */}
               {valueMode === 'normalized' &&
                 activeSeries.map(series => {
-                  if (series.latestThreshold === null) return null;
-                  const ty = getY(series.latestThreshold);
+                  const rule = customSmartThresholds.find(
+                    r => r.enabled && r.attributeId === series.config.id && r.comparisonMode === 'normalized_below'
+                  );
                   return (
-                    <g key={`thresh-${series.config.id}`}>
-                      <line
-                        x1={padding.left}
-                        y1={ty}
-                        x2={padding.left + innerWidth}
-                        y2={ty}
-                        stroke={series.config.color}
-                        strokeWidth="1"
-                        strokeDasharray="4 4"
-                        strokeOpacity="0.7"
-                      />
-                      <text
-                        x={padding.left + 6}
-                        y={ty - 4}
-                        className="text-[9px] font-mono font-semibold"
-                        fill={series.config.color}
-                      >
-                        {series.config.hexId}h 임계치 ({series.latestThreshold})
-                      </text>
+                    <g key={`thresh-norm-${series.config.id}`}>
+                      {series.latestThreshold !== null && (
+                        <>
+                          <line
+                            x1={padding.left}
+                            y1={getYForSeries(series.config.id, series.latestThreshold)}
+                            x2={padding.left + innerWidth}
+                            y2={getYForSeries(series.config.id, series.latestThreshold)}
+                            stroke={series.config.color}
+                            strokeWidth="1"
+                            strokeDasharray="4 4"
+                            strokeOpacity="0.7"
+                          />
+                          <text
+                            x={padding.left + 6}
+                            y={getYForSeries(series.config.id, series.latestThreshold) - 4}
+                            className="text-[9px] font-mono font-semibold"
+                            fill={series.config.color}
+                          >
+                            {series.config.hexId}h 펌웨어 임계치 ({series.latestThreshold})
+                          </text>
+                        </>
+                      )}
+                      {rule?.warningThreshold !== null && rule?.warningThreshold !== undefined && rule.warningThreshold <= 100 && (
+                        <>
+                          <line
+                            x1={padding.left}
+                            y1={getYForSeries(series.config.id, rule.warningThreshold)}
+                            x2={padding.left + innerWidth}
+                            y2={getYForSeries(series.config.id, rule.warningThreshold)}
+                            stroke="#F59E0B"
+                            strokeWidth="1"
+                            strokeDasharray="3 3"
+                            strokeOpacity="0.75"
+                          />
+                          <text
+                            x={padding.left + innerWidth - 6}
+                            y={getYForSeries(series.config.id, rule.warningThreshold) - 3}
+                            textAnchor="end"
+                            className="text-[9px] font-mono font-semibold fill-amber-500"
+                          >
+                            {series.config.hexId}h 주의 (≤{rule.warningThreshold})
+                          </text>
+                        </>
+                      )}
+                      {rule?.criticalThreshold !== null && rule?.criticalThreshold !== undefined && rule.criticalThreshold <= 100 && (
+                        <>
+                          <line
+                            x1={padding.left}
+                            y1={getYForSeries(series.config.id, rule.criticalThreshold)}
+                            x2={padding.left + innerWidth}
+                            y2={getYForSeries(series.config.id, rule.criticalThreshold)}
+                            stroke="#EF4444"
+                            strokeWidth="1"
+                            strokeDasharray="3 3"
+                            strokeOpacity="0.75"
+                          />
+                          <text
+                            x={padding.left + innerWidth - 6}
+                            y={getYForSeries(series.config.id, rule.criticalThreshold) - 3}
+                            textAnchor="end"
+                            className="text-[9px] font-mono font-semibold fill-red-500"
+                          >
+                            {series.config.hexId}h 위험 (≤{rule.criticalThreshold})
+                          </text>
+                        </>
+                      )}
+                    </g>
+                  );
+                })}
+
+              {/* Custom Raw-Mode Threshold Reference Lines (when within visible Y-axis domain) */}
+              {valueMode === 'raw' &&
+                activeSeries.map(series => {
+                  const rule = customSmartThresholds.find(
+                    r => r.enabled && r.attributeId === series.config.id && r.comparisonMode === 'raw_above'
+                  );
+                  if (!rule) return null;
+                  const domainScale =
+                    series.config.id === secondaryAxisSeriesId && yRightScale ? yRightScale : yScale;
+                  const maxDom = domainScale.domain()[1];
+                  return (
+                    <g key={`thresh-raw-${series.config.id}`}>
+                      {rule.warningThreshold !== null && rule.warningThreshold <= maxDom && (
+                        <>
+                          <line
+                            x1={padding.left}
+                            y1={domainScale(rule.warningThreshold)}
+                            x2={padding.left + innerWidth}
+                            y2={domainScale(rule.warningThreshold)}
+                            stroke="#F59E0B"
+                            strokeWidth="1"
+                            strokeDasharray="3 3"
+                            strokeOpacity="0.65"
+                          />
+                          <text
+                            x={padding.left + 6}
+                            y={domainScale(rule.warningThreshold) - 3}
+                            className="text-[9px] font-mono font-semibold fill-amber-500"
+                          >
+                            {series.config.hexId}h 주의 (≥{rule.warningThreshold.toLocaleString()})
+                          </text>
+                        </>
+                      )}
+                      {rule.criticalThreshold !== null && rule.criticalThreshold <= maxDom && (
+                        <>
+                          <line
+                            x1={padding.left}
+                            y1={domainScale(rule.criticalThreshold)}
+                            x2={padding.left + innerWidth}
+                            y2={domainScale(rule.criticalThreshold)}
+                            stroke="#EF4444"
+                            strokeWidth="1"
+                            strokeDasharray="3 3"
+                            strokeOpacity="0.65"
+                          />
+                          <text
+                            x={padding.left + innerWidth - 6}
+                            y={domainScale(rule.criticalThreshold) - 3}
+                            textAnchor="end"
+                            className="text-[9px] font-mono font-semibold fill-red-500"
+                          >
+                            {series.config.hexId}h 위험 (≥{rule.criticalThreshold.toLocaleString()})
+                          </text>
+                        </>
+                      )}
                     </g>
                   );
                 })}
@@ -853,9 +1291,9 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   }
                   const startYVal = series.values[lastValidIdx]!;
                   const x1 = getX(lastValidIdx);
-                  const y1 = getY(startYVal);
+                  const y1 = getYForSeries(series.config.id, startYVal);
                   const x2 = getX(totalSlots);
-                  const y2 = getY(series.projectedNext2);
+                  const y2 = getYForSeries(series.config.id, series.projectedNext2);
 
                   return (
                     <g key={`proj-${series.config.id}`}>
@@ -882,30 +1320,42 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   );
                 })}
 
-              {/* Series Lines & Markers */}
+              {/* Series Lines (generated via d3.line) & Markers */}
               {activeSeries.map(series => {
-                const segments: string[] = [];
-                let currentPath: string[] = [];
+                const isSec = series.config.id === secondaryAxisSeriesId;
+                const lineGenerator = d3
+                  .line<{ idx: number; val: number }>()
+                  .x(d => getX(d.idx))
+                  .y(d => getYForSeries(series.config.id, d.val));
 
+                const segments: string[] = [];
+                let chunk: Array<{ idx: number; val: number }> = [];
                 series.values.forEach((v, idx) => {
                   if (v !== null) {
-                    currentPath.push(`${getX(idx)},${getY(v)}`);
-                  } else if (currentPath.length > 0) {
-                    if (currentPath.length > 1) segments.push(currentPath.join(' '));
-                    currentPath = [];
+                    chunk.push({ idx, val: v });
+                  } else if (chunk.length > 0) {
+                    if (chunk.length > 1) {
+                      const pathD = lineGenerator(chunk);
+                      if (pathD) segments.push(pathD);
+                    }
+                    chunk = [];
                   }
                 });
-                if (currentPath.length > 1) segments.push(currentPath.join(' '));
+                if (chunk.length > 1) {
+                  const pathD = lineGenerator(chunk);
+                  if (pathD) segments.push(pathD);
+                }
 
                 return (
                   <g key={`series-${series.config.id}`}>
-                    {segments.map((pts, segIdx) => (
-                      <polyline
+                    {segments.map((dPath, segIdx) => (
+                      <path
                         key={segIdx}
-                        points={pts}
+                        d={dPath}
                         fill="none"
                         stroke={series.config.color}
-                        strokeWidth="2.5"
+                        strokeWidth={isSec ? '2' : '2.5'}
+                        strokeDasharray={isSec ? '6 2' : undefined}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       />
@@ -919,10 +1369,10 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                           {renderMarkerShape(
                             series.config.markerShape,
                             getX(idx),
-                            getY(v),
+                            getYForSeries(series.config.id, v),
                             series.config.color,
                             4,
-                            pt.isLive,
+                            pt.sourceKind === 'live',
                             hoverIndex === idx
                           )}
                         </g>
@@ -1018,13 +1468,17 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             {/* Hover Tooltip */}
             {hoveredPoint && hoverIndex !== null && (
               <div
-                className={`absolute top-2.5 pointer-events-none z-20 px-3 py-2 rounded-lg bg-slate-900/95 text-white border border-slate-700 shadow-xl text-[11px] font-mono space-y-1 min-w-[210px] ${
+                className={`absolute top-2.5 pointer-events-none z-20 px-3 py-2 rounded-lg bg-slate-900/95 text-white border border-slate-700 shadow-xl text-[11px] font-mono space-y-1 min-w-[220px] ${
                   getX(hoverIndex) > chartWidth * 0.55 ? 'left-3' : 'right-3'
                 }`}
               >
                 <div className="flex items-center justify-between gap-3 border-b border-slate-700 pb-1">
                   <span className="font-bold text-indigo-300">
-                    {hoveredPoint.isLive ? '현재 라이브 측정' : `세션 ${hoveredPoint.label}`}
+                    {hoveredPoint.sourceKind === 'live'
+                      ? '현재 라이브 측정'
+                      : hoveredPoint.sourceKind === 'scan'
+                      ? `스캔 세션 ${hoveredPoint.label}`
+                      : `SMART 체크포인트 ${hoveredPoint.label}`}
                   </span>
                   <span className="text-slate-300 text-[10px]">{hoveredPoint.shortDate}</span>
                 </div>
@@ -1035,6 +1489,8 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                       ? hoveredPoint.scanMode === 'quick'
                         ? 'Quick Scan'
                         : 'Full Scan'
+                      : hoveredPoint.sourceKind === 'snapshot'
+                      ? 'SMART Snapshot'
                       : 'Live Kernel'}
                   </span>
                   <span>
@@ -1053,10 +1509,10 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                         <span
                           className={`w-2 h-2 rounded-xs shrink-0 ${series.config.dotBgClass}`}
                         />
-                        {series.config.hexId}h
+                        {series.config.hexId}h {series.config.nameKo}
                       </span>
                       <span className="font-semibold text-white">
-                        Raw {raw !== null ? raw.toLocaleString() : 'N/A'}
+                        {raw !== null ? raw.toLocaleString() : 'N/A'}
                         <span className="text-slate-400 font-normal ml-1.5">
                           ({norm !== null ? norm : '-'}
                           {thresh !== null ? `/${thresh}` : ''})
@@ -1083,7 +1539,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                 <span className={`font-bold ${trendVerdict.iconColor}`}>{trendVerdict.label}</span>
                 <span className="text-[11px] text-slate-600 dark:text-slate-300">
                   {timelinePoints.length < 2
-                    ? '추세 기울기 분석은 스캔 기록 2회 이상부터 제공됩니다.'
+                    ? '추세 기울기 분석은 이력 2건 이상부터 계산됩니다.'
                     : trendVerdict.detail}
                 </span>
               </div>
@@ -1096,8 +1552,8 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   .map(s => (
                     <span key={s.config.id} className="whitespace-nowrap">
                       <strong className={s.config.textClass}>{s.config.hexId}h</strong>{' '}
-                      기울기 {s.slopePerSession! > 0 ? `+${s.slopePerSession}` : s.slopePerSession}/회
-                      {canProject && s.projectedNext1 !== null ? ` → 예상 ${s.projectedNext1}` : ''}
+                      기울기 {s.slopePerSession! > 0 ? `+${s.slopePerSession.toLocaleString()}` : s.slopePerSession!.toLocaleString()}/회
+                      {canProject && s.projectedNext1 !== null ? ` → 예상 ${s.projectedNext1.toLocaleString()}` : ''}
                     </span>
                   ))}
               </div>

@@ -153,6 +153,24 @@ typedef struct {
     uint32_t temperatureCelsius;
     uint32_t healthScore;
 } DSPhysicalDriveDetail;
+
+// Memory-Mapped File Access Mode
+typedef enum {
+    DS_MAP_MODE_READ_ONLY  = 0,
+    DS_MAP_MODE_READ_WRITE = 1
+} DSMappedAccessMode;
+
+// Zero-Copy Memory-Mapped Sector Window Descriptor
+typedef struct {
+    void*    viewPtr;                // Direct user-space pointer to requested LBA window (Zero-Copy)
+    void*    internalBasePtr;        // OS granularity-aligned mapping base (passed to UnmapViewOfFile/munmap)
+    uint64_t fileOffsetBytes;        // Requested starting byte offset
+    uint32_t mappedLengthBytes;      // Valid mapped bytes accessible from viewPtr
+    uint32_t sectorSize;             // Logical sector size (512 or 4096)
+    uint8_t  isSectionMapped;        // 1 if OS CreateFileMappingW/MapViewOfFile (or mmap)
+    uint8_t  isReadOnly;             // 1 if mapped read-only
+    uint8_t  reserved[6];
+} DSMappedSectorWindow;
 #pragma pack(pop)
 
 
@@ -291,6 +309,72 @@ DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode);
  * 18. Poll ATA S.M.A.R.T. Self-Test Execution Status & Percentage Remaining
  */
 DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct);
+
+/**
+ * 19. Query Full Hardware Details on an already-opened Drive Handle (Model, Serial, 4K AF, TRIM, Write Cache, Temp, Health)
+ */
+DS_API bool DS_CALL DS_GetDriveDetails(void* hDrive, DSPhysicalDriveDetail* outDetail);
+
+/**
+ * 20. Open a file-backed disk image or clone target for Zero-Copy Memory-Mapped I/O
+ *     Uses CreateFileMappingW (Windows) / mmap (POSIX) with persistent OS section handle.
+ */
+DS_API void* DS_CALL DS_OpenMappedTarget(
+    const char* utf8Path,
+    uint32_t sectorSize,
+    uint32_t accessMode,
+    uint64_t initialSizeBytes
+);
+
+/**
+ * 21. Map a granularity-aligned sliding window over a mapped target (Zero-Copy user pointer)
+ */
+DS_API bool DS_CALL DS_MapSectorWindow(
+    void* hMapped,
+    uint64_t startLba,
+    uint32_t sectorCount,
+    DSMappedSectorWindow* outWindow
+);
+
+/**
+ * 22. Unmap an active memory-mapped sector window
+ */
+DS_API bool DS_CALL DS_UnmapSectorWindow(DSMappedSectorWindow* window);
+
+/**
+ * 23. Flush (if writable) and close a Memory-Mapped Target handle
+ */
+DS_API void DS_CALL DS_CloseMappedTarget(void* hMapped);
+
+/**
+ * 24. Zero-Copy Memory-Mapped Range Scanner (CRC32, 64-bit Parity & Zero-Sector Counter)
+ *     Streams large disk image ranges directly via MapViewOfFile/mmap without ReadFile copies.
+ */
+DS_API bool DS_CALL DS_ScanMappedLbaRange(
+    void* hMapped,
+    uint64_t startLba,
+    uint64_t sectorCount,
+    uint32_t windowSectors,
+    uint32_t* outCrc32,
+    uint64_t* outParity,
+    uint64_t* outZeroSectors
+);
+
+/**
+ * 25. Zero-Copy Direct DMA Physical-to-Mapped-File Imager
+ *     Reads from physical drive (FILE_FLAG_NO_BUFFERING) directly into MapViewOfFile pages,
+ *     eliminating intermediate WriteFile syscalls and kernel-user buffer copies.
+ */
+DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
+    void* hDrive,
+    uint64_t startLba,
+    uint64_t totalSectors,
+    const char* destUtf8Path,
+    uint64_t destStartLba,
+    uint32_t chunkSectors,
+    uint64_t* outBytesCopied,
+    uint32_t* outWin32Error
+);
 
 #ifdef __cplusplus
 }

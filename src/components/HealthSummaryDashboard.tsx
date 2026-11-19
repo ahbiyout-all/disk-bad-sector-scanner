@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  CustomSmartThresholdRule,
   DiskDrive,
   ScanTelemetry,
   DriveSmartAttribute,
@@ -7,9 +8,14 @@ import {
   SpecializedScanMethodId,
   SmartSelfTestState,
   SmartSelfTestType,
-  SavedScanRecord
+  SavedScanRecord,
+  SmartHistorySnapshot
 } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
+import {
+  evaluateSmartAttributeThreshold,
+  formatHexAttributeId
+} from '../utils/smartThresholds';
 import { detectVendor, getVendorProfile, getDriveMediaAnalysis, getTailoredActionMethods } from '../utils/vendorDiagnostics';
 import { TemperatureLineChart } from './TemperatureLineChart';
 import { LatencyHistogramDashboard } from './LatencyHistogramDashboard';
@@ -59,6 +65,10 @@ interface HealthSummaryDashboardProps {
   smartLogRefreshSignal?: number;
   isTauriRuntime?: boolean;
   scanRecords?: SavedScanRecord[];
+  smartSnapshots?: SmartHistorySnapshot[];
+  onRecordSmartSnapshot?: (drive: DiskDrive) => void;
+  customSmartThresholds?: CustomSmartThresholdRule[];
+  onOpenThresholdSettings?: () => void;
 }
 
 export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
@@ -81,7 +91,11 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   onPollSmartSelfTest,
   smartLogRefreshSignal = 0,
   isTauriRuntime = false,
-  scanRecords = []
+  scanRecords = [],
+  smartSnapshots = [],
+  onRecordSmartSnapshot,
+  customSmartThresholds = [],
+  onOpenThresholdSettings
 }) => {
   const vendorKey = detectVendor(drive);
   const vendorProfile = getVendorProfile(vendorKey);
@@ -123,56 +137,23 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
     }
   }
 
-  // Helper to evaluate S.M.A.R.T. threshold breach
-  const checkThresholdBreach = (attr: DriveSmartAttribute): { isBreached: boolean; reason: string } => {
-    if (attr.threshold > 0 && attr.current > 0 && attr.current <= attr.threshold) {
-      return {
-        isBreached: true,
-        reason: `현재 정규화 값(${attr.current})이 제조사 안전 임계 한계치(${attr.threshold}) 이하로 전락하여 고장 임계점을 돌파했습니다.`
-      };
-    }
+  // Evaluate S.M.A.R.T. attributes using firmware safety floor + custom Warning/Critical thresholds
+  const evaluatedAttributes = drive.smartAttributes.map(attr => ({
+    attr,
+    evalResult: evaluateSmartAttributeThreshold(attr, customSmartThresholds)
+  }));
 
-    const parseSmartRawCount = (rawStr: string): number => {
-      const s = String(rawStr ?? '').trim();
-      if (!s) return NaN;
-      if (/^0x[0-9a-f]+$/i.test(s)) return parseInt(s, 16);
-      const token = s.split(/[\s(/,:]+/)[0] || '';
-      if (/^0x[0-9a-f]+$/i.test(token)) return parseInt(token, 16);
-      if (/^\d+$/.test(token)) return parseInt(token, 10);
-      return NaN;
-    };
+  const thresholdBreaches = evaluatedAttributes
+    .filter(item => item.evalResult.isBreached)
+    .map(item => ({
+      attr: item.attr,
+      ...item.evalResult
+    }));
 
-    const rawVal = parseSmartRawCount(attr.raw);
-    if (!isNaN(rawVal)) {
-      if (attr.id === 5 && attr.threshold > 0 && attr.current <= attr.threshold) {
-        return {
-          isBreached: true,
-          reason: `치환 섹터(Reallocated Sector)가 제조사 안전 예비 트랙 허용 한계를 초과했습니다 (Raw: ${attr.raw}).`
-        };
-      }
-      if ((attr.id === 197 || attr.id === 198) && attr.status === 'critical') {
-        return {
-          isBreached: true,
-          reason: `복구 불가능한 불안정 보류 섹터가 다수 누적되어 하드웨어 위험 한계를 초과했습니다 (Raw: ${attr.raw}).`
-        };
-      }
-    }
-
-    if (attr.status === 'critical' && attr.threshold > 0 && attr.current <= attr.threshold) {
-      return {
-        isBreached: true,
-        reason: `제조사 공장 설정 신뢰성 임계치를 초과한 치명적 속성입니다.`
-      };
-    }
-
-    return { isBreached: false, reason: '' };
-  };
-
-  const thresholdBreaches = drive.smartAttributes
-    .map(attr => ({ attr, ...checkThresholdBreach(attr) }))
-    .filter(b => b.isBreached);
-
+  const criticalThresholdBreaches = thresholdBreaches.filter(b => b.severity === 'critical');
+  const warningThresholdBreaches = thresholdBreaches.filter(b => b.severity === 'warning');
   const hasThresholdBreaches = thresholdBreaches.length > 0;
+  const hasCriticalBreaches = criticalThresholdBreaches.length > 0;
   const hasSmartData = drive.smartAttributes.length > 0;
 
   // Calculate SVG circular gauge metrics
@@ -230,27 +211,49 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 {healthDesc}
               </div>
 
-              {/* Critical Threshold Limit Breach Visual Callout & Tooltip */}
+              {/* Threshold Limit Breach Visual Callout & Tooltip */}
               {hasThresholdBreaches && (
                 <div className="relative group/gaugeTip mt-2 w-full">
-                  <div className="px-2 py-1 rounded bg-red-600/15 border border-red-500/40 text-red-700 dark:text-red-300 text-[10px] font-bold flex items-center justify-center gap-1.5 cursor-help shadow-2xs">
-                    <AlertOctagon className="w-3.5 h-3.5 text-red-500 animate-pulse" />
-                    <span>임계치 초과 속성 {thresholdBreaches.length}건 감지</span>
+                  <div
+                    className={`px-2 py-1 rounded border text-[10px] font-bold flex items-center justify-center gap-1.5 cursor-help shadow-2xs ${
+                      hasCriticalBreaches
+                        ? 'bg-red-600/15 border-red-500/40 text-red-700 dark:text-red-300'
+                        : 'bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300'
+                    }`}
+                  >
+                    {hasCriticalBreaches ? (
+                      <AlertOctagon className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    )}
+                    <span>
+                      {hasCriticalBreaches ? '위험 임계치 초과' : '주의 임계치 도달'} {thresholdBreaches.length}건 감지
+                    </span>
                   </div>
-                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover/gaugeTip:flex flex-col z-30 w-64 p-2.5 rounded-lg bg-slate-900/95 dark:bg-slate-950/98 text-white border border-red-500/60 shadow-xl backdrop-blur-md text-[10px] text-left font-sans">
-                    <div className="font-bold text-red-400 flex items-center gap-1 border-b border-slate-700 pb-1 mb-1">
-                      <AlertTriangle className="w-3 h-3 text-red-400" />
-                      제조사 고장 예측 임계치 위반 목록
+                  <div
+                    className={`absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover/gaugeTip:flex flex-col z-30 w-72 p-2.5 rounded-lg bg-slate-900/95 dark:bg-slate-950/98 text-white border shadow-xl backdrop-blur-md text-[10px] text-left font-sans ${
+                      hasCriticalBreaches ? 'border-red-500/60' : 'border-amber-500/60'
+                    }`}
+                  >
+                    <div
+                      className={`font-bold flex items-center gap-1 border-b border-slate-700 pb-1 mb-1 ${
+                        hasCriticalBreaches ? 'text-red-400' : 'text-amber-400'
+                      }`}
+                    >
+                      <AlertTriangle className="w-3 h-3 shrink-0" />
+                      임계치 위반 목록 (펌웨어 및 사용자 설정)
                     </div>
                     <div className="space-y-1">
                       {thresholdBreaches.map(b => (
                         <div key={b.attr.id} className="text-slate-300">
-                          • <strong className="text-white">ID {b.attr.id.toString(16).padStart(2, '0').toUpperCase()}h</strong> {b.attr.name.split('(')[0]}: {b.attr.current} ≤ {b.attr.threshold}
+                          • <strong className="text-white">{formatHexAttributeId(b.attr.id)}</strong>{' '}
+                          {b.attr.name.split('(')[0]}:{' '}
+                          <span className={b.severity === 'critical' ? 'text-red-300 font-semibold' : 'text-amber-300 font-semibold'}>
+                            {b.severity === 'critical' ? '위험' : '주의'}
+                          </span>{' '}
+                          — {b.reason}
                         </div>
                       ))}
-                    </div>
-                    <div className="mt-1 text-[9px] text-red-300 pt-1 border-t border-slate-800">
-                      하드웨어 고장 임계점에 도달했습니다. 즉각적인 교체와 백업을 권장합니다.
                     </div>
                   </div>
                 </div>
@@ -456,6 +459,16 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
             isScanning={telemetry.status === 'scanning'}
           />
 
+          {/* Historical S.M.A.R.T. Attribute Degradation Trend Line Chart */}
+          <SmartAttributeTrendChart
+            drive={drive}
+            scanRecords={scanRecords}
+            smartSnapshots={smartSnapshots}
+            customSmartThresholds={customSmartThresholds}
+            onStartScan={onStartScan}
+            onRecordSmartSnapshot={onRecordSmartSnapshot}
+          />
+
           {/* D3 Read Speed & I/O Latency Distribution Histogram */}
           {blocks && (
             <LatencyHistogramDashboard
@@ -542,47 +555,94 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
       {/* S.M.A.R.T. Historical Attribute Trend & Attributes Table */}
       {viewMode !== 'health_only' && (
         <>
-          <SmartAttributeTrendChart
-            drive={drive}
-            scanRecords={scanRecords}
-            onStartScan={onStartScan}
-          />
+          {viewMode === 'smart_only' && (
+            <SmartAttributeTrendChart
+              drive={drive}
+              scanRecords={scanRecords}
+              smartSnapshots={smartSnapshots}
+              customSmartThresholds={customSmartThresholds}
+              onStartScan={onStartScan}
+              onRecordSmartSnapshot={onRecordSmartSnapshot}
+            />
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs">
           {/* Threshold Breach Visual Notification Banner */}
           {hasThresholdBreaches && (
-            <div className="mb-3.5 p-3 sm:p-3.5 rounded-lg bg-red-500/10 dark:bg-red-950/40 border border-red-500/40 text-red-700 dark:text-red-300 flex items-start gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
-              <div className="p-1.5 rounded-md bg-red-600 text-white shrink-0 mt-0.5 shadow-xs">
-                <AlertOctagon className="w-4 h-4 animate-pulse" />
+            <div
+              className={`mb-3.5 p-3 sm:p-3.5 rounded-lg border flex items-start gap-3 animate-in fade-in slide-in-from-top-1 duration-200 ${
+                hasCriticalBreaches
+                  ? 'bg-red-500/10 dark:bg-red-950/40 border-red-500/40 text-red-700 dark:text-red-300'
+                  : 'bg-amber-500/10 dark:bg-amber-950/35 border-amber-500/40 text-amber-800 dark:text-amber-200'
+              }`}
+            >
+              <div
+                className={`p-1.5 rounded-md text-white shrink-0 mt-0.5 shadow-xs ${
+                  hasCriticalBreaches ? 'bg-red-600' : 'bg-amber-600'
+                }`}
+              >
+                {hasCriticalBreaches ? (
+                  <AlertOctagon className="w-4 h-4" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4" />
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="font-bold text-xs sm:text-sm text-red-800 dark:text-red-200">
-                    S.M.A.R.T. 제조사 허용 임계치(Threshold) 초과 감지! ({thresholdBreaches.length}개 항목)
+                  <h4
+                    className={`font-bold text-xs sm:text-sm ${
+                      hasCriticalBreaches
+                        ? 'text-red-800 dark:text-red-200'
+                        : 'text-amber-900 dark:text-amber-100'
+                    }`}
+                  >
+                    S.M.A.R.T. 임계치 초과 감지 ({thresholdBreaches.length}개 항목 · 위험{' '}
+                    {criticalThresholdBreaches.length} · 주의 {warningThresholdBreaches.length})
                   </h4>
-                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-red-600 text-white uppercase tracking-wider animate-pulse">
-                    CRITICAL LIMIT EXCEEDED
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold text-white uppercase tracking-wider ${
+                      hasCriticalBreaches ? 'bg-red-600' : 'bg-amber-600'
+                    }`}
+                  >
+                    {hasCriticalBreaches ? 'CRITICAL THRESHOLD' : 'WARNING THRESHOLD'}
                   </span>
                 </div>
-                <p className="text-[11px] text-red-700/90 dark:text-red-300/90 mt-1 leading-relaxed">
-                  디스크 내부 센서 측정값이 제조사 공장 출하 시 지정한 안전 마진 임계값에 도달했거나 초과했습니다.
-                  드라이브 하드웨어의 급격한 고장 및 영구적 데이터 소실 위험이 매우 높으므로 즉시 데이터를 백업하십시오.
+                <p
+                  className={`text-[11px] mt-1 leading-relaxed ${
+                    hasCriticalBreaches
+                      ? 'text-red-700/90 dark:text-red-300/90'
+                      : 'text-amber-800/90 dark:text-amber-200/90'
+                  }`}
+                >
+                  {hasCriticalBreaches
+                    ? '제조사 안전 하한선 또는 사용자 지정 위험(Critical) 임계치에 도달한 속성이 있습니다. 즉시 중요 데이터를 백업하고 드라이브 점검을 진행하십시오.'
+                    : '사용자 지정 주의(Warning) 임계치에 도달한 속성이 감지되었습니다. 추가 열화 여부를 지속적으로 모니터링하십시오.'}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {thresholdBreaches.map(b => (
                     <span
                       key={b.attr.id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/60 border border-red-300 dark:border-red-700 text-red-800 dark:text-red-200 font-mono text-[10px] font-semibold"
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border font-mono text-[10px] font-semibold ${
+                        b.severity === 'critical'
+                          ? 'bg-red-100 dark:bg-red-900/60 border-red-300 dark:border-red-700 text-red-800 dark:text-red-200'
+                          : 'bg-amber-100 dark:bg-amber-900/60 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200'
+                      }`}
                     >
-                      <AlertTriangle className="w-3 h-3 text-red-500" />
-                      ID {b.attr.id.toString(16).padStart(2, '0').toUpperCase()}h {b.attr.name.split('(')[0].trim()}: {b.attr.current} ≤ {b.attr.threshold} (임계치 위반)
+                      {b.severity === 'critical' ? (
+                        <AlertOctagon className="w-3 h-3 text-red-500 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
+                      )}
+                      {formatHexAttributeId(b.attr.id)} {b.attr.name.split('(')[0].trim()} ·{' '}
+                      {b.severity === 'critical' ? '위험' : '주의'} (
+                      {b.isCustomThresholdTrigger ? '사용자 임계치' : '펌웨어 임계치'})
                     </span>
                   ))}
                 </div>
               </div>
-              {onOpenRemapModal && (
+              {onOpenRemapModal && hasCriticalBreaches && (
                 <button
                   onClick={onOpenRemapModal}
-                  className="shrink-0 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer self-start sm:self-center"
+                  className="shrink-0 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer self-start sm:self-center whitespace-nowrap"
                 >
                   <Wrench className="w-3.5 h-3.5" />
                   <span>수복/치환</span>
@@ -602,9 +662,13 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                   <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700">
                     커널 SMART 미제공 (N/A)
                   </span>
-                ) : hasThresholdBreaches ? (
+                ) : hasCriticalBreaches ? (
                   <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-red-500/10 text-red-500 border border-red-500/20">
-                    임계치 초과 경보 활성
+                    위험 임계치 경보 활성
+                  </span>
+                ) : hasThresholdBreaches ? (
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                    주의 임계치 경보 활성
                   </span>
                 ) : (
                   <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
@@ -613,16 +677,26 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 )}
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                드라이브 펌웨어가 기록한 실시간 하드웨어 신뢰성 지표 및 제조사 한계 임계치 대조
+                드라이브 펌웨어 실시간 지표 및 사용자 정의 S.M.A.R.T. 주의·위험 임계치 대조
               </p>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+              {onOpenThresholdSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenThresholdSettings}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors border border-slate-300 dark:border-slate-700 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Sliders className="w-3 h-3 text-indigo-500" />
+                  <span>임계치 설정</span>
+                </button>
+              )}
               {onOpenFeaturesModal && (
                 <button
                   type="button"
                   onClick={onOpenFeaturesModal}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 transition-colors border border-indigo-200 dark:border-indigo-800 cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 transition-colors border border-indigo-200 dark:border-indigo-800 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Sliders className="w-3 h-3" />
                   <span>기능 제어 (AAM·APM)</span>
@@ -631,7 +705,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               {onRefreshSmart && (
                 <button
                   onClick={onRefreshSmart}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors border border-slate-200 dark:border-slate-700 cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors border border-slate-200 dark:border-slate-700 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <RefreshCw className="w-3 h-3" />
                   새로고침
@@ -765,11 +839,11 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-[11px] tabular-nums">
-                  {drive.smartAttributes.map((attr) => {
-                    const breachInfo = checkThresholdBreach(attr);
-                    const isBreached = breachInfo.isBreached;
-                    const isCrit = attr.status === 'critical' || isBreached;
-                    const isWarn = attr.status === 'warning' && !isBreached;
+                  {evaluatedAttributes.map(({ attr, evalResult }) => {
+                    const isBreached = evalResult.isBreached;
+                    const isCrit = evalResult.severity === 'critical';
+                    const isWarn = evalResult.severity === 'warning';
+                    const matchedRule = evalResult.matchedRule;
                     const rawStr = String(attr.raw ?? '').trim();
                     const headToken = rawStr.split(/[\s(/,:]+/)[0] || '';
                     const rawNumeric = /^0x[0-9a-f]+$/i.test(headToken)
@@ -785,10 +859,10 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                       <tr
                         key={attr.id}
                         className={`hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors ${
-                          isBreached
-                            ? 'bg-red-500/15 dark:bg-red-950/40 text-red-900 dark:text-red-200 ring-1 ring-inset ring-red-600/50 font-medium'
-                            : isCrit
-                            ? 'bg-red-950/20 font-semibold text-red-300'
+                          isCrit
+                            ? 'bg-red-500/12 dark:bg-red-950/35 text-red-900 dark:text-red-200 font-medium'
+                            : isWarn
+                            ? 'bg-amber-500/10 dark:bg-amber-950/25 text-amber-950 dark:text-amber-200'
                             : ''
                         }`}
                       >
@@ -800,21 +874,60 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                             <span>{attr.name}</span>
                             {isBreached && (
                               <div className="relative group/tip inline-flex items-center">
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-600 text-white cursor-help shadow-2xs">
-                                  <AlertOctagon className="w-2.5 h-2.5" />
-                                  임계치 한계 초과
+                                <span
+                                  className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-bold text-white cursor-help shadow-2xs ${
+                                    isCrit ? 'bg-red-600' : 'bg-amber-600'
+                                  }`}
+                                >
+                                  {isCrit ? (
+                                    <AlertOctagon className="w-2.5 h-2.5" />
+                                  ) : (
+                                    <AlertTriangle className="w-2.5 h-2.5" />
+                                  )}
+                                  {evalResult.isCustomThresholdTrigger
+                                    ? isCrit
+                                      ? '사용자 위험 임계치'
+                                      : '사용자 주의 임계치'
+                                    : '펌웨어 한계 초과'}
                                 </span>
-                                <div className="absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:flex flex-col z-30 w-72 p-2.5 rounded-lg bg-slate-900/95 dark:bg-slate-950/98 text-white border border-red-500/60 shadow-xl backdrop-blur-md text-[11px] font-sans">
-                                  <div className="flex items-center gap-1.5 font-bold text-red-400 border-b border-slate-700 pb-1 mb-1.5">
-                                    <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                                    <span>제조사 안전 임계치(Threshold) 위반 경고</span>
+                                <div
+                                  className={`absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:flex flex-col z-30 w-72 p-2.5 rounded-lg bg-slate-900/95 dark:bg-slate-950/98 text-white border shadow-xl backdrop-blur-md text-[11px] font-sans ${
+                                    isCrit ? 'border-red-500/60' : 'border-amber-500/60'
+                                  }`}
+                                >
+                                  <div
+                                    className={`flex items-center gap-1.5 font-bold border-b border-slate-700 pb-1 mb-1.5 ${
+                                      isCrit ? 'text-red-400' : 'text-amber-400'
+                                    }`}
+                                  >
+                                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                      {evalResult.isCustomThresholdTrigger
+                                        ? '사용자 정의 S.M.A.R.T. 임계치 경보'
+                                        : '제조사 안전 임계치(Threshold) 위반 경고'}
+                                    </span>
                                   </div>
                                   <div className="space-y-1 text-slate-300 text-[10px] leading-relaxed">
-                                    <div><strong>현재값:</strong> {attr.current} / <strong>임계치:</strong> {attr.threshold}</div>
-                                    <div><strong>원시값(Raw):</strong> {attr.raw}</div>
-                                    <div className="text-red-300 pt-0.5">{breachInfo.reason}</div>
-                                    <div className="text-slate-400 text-[9px] pt-1 border-t border-slate-800">
-                                      권장 사항: 즉각적인 백업 및 하드웨어 교체 요망
+                                    <div>
+                                      <strong>현재값:</strong> {attr.current} / <strong>펌웨어 임계치:</strong>{' '}
+                                      {attr.threshold}
+                                    </div>
+                                    <div>
+                                      <strong>원시값(Raw):</strong> {attr.raw}
+                                    </div>
+                                    {matchedRule && (
+                                      <div>
+                                        <strong>설정 임계치:</strong> 주의{' '}
+                                        {matchedRule.warningThreshold ?? '-'} / 위험{' '}
+                                        {matchedRule.criticalThreshold ?? '-'} (
+                                        {matchedRule.comparisonMode === 'raw_above'
+                                          ? 'Raw ≥'
+                                          : 'Current ≤'}
+                                        )
+                                      </div>
+                                    )}
+                                    <div className={`${isCrit ? 'text-red-300' : 'text-amber-300'} pt-0.5`}>
+                                      {evalResult.reason}
                                     </div>
                                   </div>
                                 </div>
@@ -823,15 +936,38 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                           </div>
                         </td>
                         <td className="px-2.5 py-2 text-center">
-                          <span className={isBreached ? 'text-red-600 dark:text-red-400 font-bold underline decoration-red-500 decoration-wavy' : ''}>
+                          <span
+                            className={
+                              evalResult.isFirmwareBreach
+                                ? 'text-red-600 dark:text-red-400 font-bold underline decoration-red-500 decoration-wavy'
+                                : ''
+                            }
+                          >
                             {attr.current}
                           </span>
                         </td>
                         <td className="px-2.5 py-2 text-center text-slate-500">{attr.worst}</td>
                         <td className="px-2.5 py-2 text-center">
-                          <span className={`font-bold ${isBreached ? 'text-red-600 dark:text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded' : 'text-slate-500'}`}>
-                            {attr.threshold}
-                          </span>
+                          <div className="flex flex-col items-center leading-tight">
+                            <span
+                              className={`font-bold ${
+                                evalResult.isFirmwareBreach
+                                  ? 'text-red-600 dark:text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded'
+                                  : 'text-slate-500'
+                              }`}
+                            >
+                              {attr.threshold}
+                            </span>
+                            {matchedRule && matchedRule.enabled && (
+                              <span
+                                className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono whitespace-nowrap"
+                                title={`사용자 설정: 주의 ${matchedRule.warningThreshold ?? '-'} / 위험 ${matchedRule.criticalThreshold ?? '-'}`}
+                              >
+                                {matchedRule.comparisonMode === 'raw_above' ? 'R≥' : 'S≤'}
+                                {matchedRule.warningThreshold ?? '-'}/{matchedRule.criticalThreshold ?? '-'}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-2.5 py-2 font-semibold text-slate-800 dark:text-slate-200">
                           {attr.raw}
@@ -840,37 +976,37 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                           {computedRawHex}
                         </td>
                         <td className="px-2.5 py-2 text-center font-sans">
-                          {isBreached ? (
-                            <div className="relative group/badge inline-block">
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-red-600 text-white shadow-2xs cursor-help">
-                                <AlertOctagon className="w-2.5 h-2.5 animate-spin" />
-                                위험 (한계초과)
-                              </span>
-                              <div className="absolute right-0 bottom-full mb-1 hidden group-hover/badge:flex w-48 p-2 rounded bg-black/90 text-white text-[10px] z-20 border border-red-500/50 shadow-md">
-                                현재값({attr.current})이 제조사 안전 임계치({attr.threshold}) 이하로 떨어져 디스크 결함 발생 확률이 매우 높습니다.
-                              </div>
-                            </div>
-                          ) : isCrit ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-red-900/40 text-red-400 border border-red-700/50">
-                              <AlertOctagon className="w-2.5 h-2.5" />
-                              위험
+                          {isCrit ? (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-red-600 text-white shadow-2xs whitespace-nowrap">
+                              <AlertOctagon className="w-2.5 h-2.5 shrink-0" />
+                              {evalResult.isFirmwareBreach
+                                ? '위험 (한계초과)'
+                                : evalResult.isCustomThresholdTrigger
+                                ? '위험 (임계치)'
+                                : '위험'}
                             </span>
                           ) : isWarn ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-900/40 text-amber-400 border border-amber-700/50">
-                              <AlertTriangle className="w-2.5 h-2.5" />
-                              주의
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-600/15 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-500/40 whitespace-nowrap">
+                              <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                              {evalResult.isCustomThresholdTrigger ? '주의 (임계치)' : '주의'}
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-900/30 text-emerald-400 border border-emerald-700/40">
-                              <CheckCircle2 className="w-2.5 h-2.5" />
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-500/10 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 dark:border-emerald-700/40 whitespace-nowrap">
+                              <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
                               정상
                             </span>
                           )}
                         </td>
                         <td className="px-2.5 py-2 font-sans text-slate-500 dark:text-slate-400 text-[11px]">
                           {isBreached ? (
-                            <span className="text-red-700 dark:text-red-300 font-medium">
-                              ⚠️ {breachInfo.reason}
+                            <span
+                              className={`font-medium ${
+                                isCrit
+                                  ? 'text-red-700 dark:text-red-300'
+                                  : 'text-amber-700 dark:text-amber-300'
+                              }`}
+                            >
+                              {evalResult.reason}
                             </span>
                           ) : (
                             attr.description

@@ -81,7 +81,7 @@ npm run build
 프로젝트 루트에서 `build.bat`을 실행하면 다음 단계가 전자동으로 실행됩니다:
 1. `package.json`에서 최신 버전(`4.6.0`) 동적 파싱 및 Node.js 점검
 2. `npm run lint` TypeScript 정적 타입 검증 & `npm run build`
-3. 네이티브 엔진(`DiskSentinelNativeCore.dll`) 및 데스크톱 실행 파일(`DiskBadSectorScanner.exe`) 컴파일
+3. 네이티브 엔진(`DiskSentinelNativeCore.dll`, `DiskSentinelForensics.dll`) 및 데스크톱 실행 파일(`DiskBadSectorScanner.exe`) 컴파일
 4. `package-cross-platform.mjs`로 불필요한 문서·포터블 파일·임시 파일 제거 감사 및 Unpacked 스테이징 검증
 5. `ISCC.exe /DAppVersion=%APP_VERSION% setup.iss` 컴파일 → **`Output\DiskBadSectorScanner_Setup_v4.6.0.exe`** 단일 공식 인스톨러 생성
 

@@ -75,6 +75,7 @@ interface NativeBridgeStatus {
   available: boolean;
   elevated: boolean;
   dllLoaded: boolean;
+  forensicsDllLoaded?: boolean;
   version?: string;
 }
 
@@ -138,6 +139,7 @@ export async function detectNativeBridgeAvailable(forceRefresh = false): Promise
         available,
         elevated: Boolean(data?.elevated),
         dllLoaded: Boolean(data?.dllLoaded),
+        forensicsDllLoaded: Boolean(data?.forensicsDllLoaded),
         version: typeof data?.version === 'string' ? data.version : undefined
       };
       return available;
@@ -1413,7 +1415,7 @@ export function isSystemOrBootDrive(drive: DiskDrive): boolean {
   return hasSystemPartition || (driveIndex === 0 && (hasSystemPartition || partitions.length === 0));
 }
 
-function getDriveIndexFromId(drive: DiskDrive): number | null {
+export function getDriveIndexFromId(drive: DiskDrive): number | null {
   if (!drive.id.startsWith('drive-tauri-physical-')) return null;
   const idx = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
   return Number.isFinite(idx) && idx >= 0 ? idx : null;
@@ -2491,5 +2493,46 @@ export async function invokeTauriSanitizeOrTrim(
       action,
       message: `명령 실행 실패: ${err?.message || String(err)}`
     };
+  }
+}
+
+export interface NativeForensicsEntropyResponse {
+  ok: boolean;
+  source?: string;
+  inspectedBytes?: number;
+  crc32?: string;
+  sectorClass?: number;
+  shannonEntropy?: number;
+  zeroByteRatio?: number;
+  ffByteRatio?: number;
+  printableRatio?: number;
+  hasRepeatingPattern?: boolean;
+  repeatingWord32?: string;
+  classificationLabel?: string;
+  error?: string;
+}
+
+/**
+ * Queries DiskSentinelForensics.dll (via local Win32 Native Bridge /api/native/forensics/entropy)
+ * for Shannon entropy, erased-NAND 0xFF ratio, poison pattern detection, and IEEE 802.3 CRC32.
+ */
+export async function queryNativeForensicsEntropy(
+  driveIndex: number,
+  lba: number,
+  size = 512
+): Promise<NativeForensicsEntropyResponse | null> {
+  if (!isNativeBridgeRuntime()) return null;
+  try {
+    const res = await fetch('/api/native/forensics/entropy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driveIndex, lba, size })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || typeof data.ok !== 'boolean') return null;
+    return data as NativeForensicsEntropyResponse;
+  } catch {
+    return null;
   }
 }

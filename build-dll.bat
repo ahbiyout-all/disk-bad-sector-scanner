@@ -42,7 +42,20 @@ cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDISKSENTINEL_EXPORTS ^
     /Fo"%OUTPUT_DIR%\DiskSentinelEngine.obj"
 
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] MSVC DLL Compilation failed!
+    echo [ERROR] MSVC Core DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo -^> MSVC compiler: Compiling Pure Creative DiskSentinelForensics.dll (x64 Release)...
+cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDSF_EXPORTS ^
+    src\native\DiskSentinelForensics.cpp ^
+    /Fe"%OUTPUT_DIR%\DiskSentinelForensics.dll" ^
+    /Fo"%OUTPUT_DIR%\DiskSentinelForensics.obj"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MSVC Forensics DLL Compilation failed!
     if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
     pause
     exit /b %ERRORLEVEL%
@@ -65,7 +78,20 @@ g++.exe -O3 -shared -m64 -DDISKSENTINEL_EXPORTS -D_WIN32 ^
     -Wl,--out-implib,"%OUTPUT_DIR%/libDiskSentinelNativeCore.a"
 
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] MinGW DLL Compilation failed!
+    echo [ERROR] MinGW Core DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo -^> MinGW G++: Compiling Pure Creative DiskSentinelForensics.dll (x64 Release)...
+g++.exe -O3 -shared -m64 -DDSF_EXPORTS -D_WIN32 ^
+    src/native/DiskSentinelForensics.cpp ^
+    -o "%OUTPUT_DIR%/DiskSentinelForensics.dll" ^
+    -Wl,--out-implib,"%OUTPUT_DIR%/libDiskSentinelForensics.a"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MinGW Forensics DLL Compilation failed!
     if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
     pause
     exit /b %ERRORLEVEL%
@@ -80,7 +106,9 @@ if exist "src\native\DiskSentinelLauncher.cpp" (
 :COMPILE_SUCCESS
 echo.
 echo ===================================================================
-echo   BUILD SUCCESSFUL: %OUTPUT_DIR%\DiskSentinelNativeCore.dll
+echo   BUILD SUCCESSFUL:
+echo     - %OUTPUT_DIR%\DiskSentinelNativeCore.dll
+echo     - %OUTPUT_DIR%\DiskSentinelForensics.dll
 echo ===================================================================
 
 if /i "%1"=="--no-pause" goto EXIT_NOW

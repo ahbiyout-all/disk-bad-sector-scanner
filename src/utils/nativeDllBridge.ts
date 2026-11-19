@@ -66,8 +66,20 @@ export interface DSNvmeHealthLog {
   mediaErrors: bigint | null;
 }
 
+const DS_CRC32_LUT = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = (c >>> 1) ^ ((c & 1) ? 0xEDB88320 : 0);
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
 /**
- * Hardware CRC32 & 64-bit Galois XOR Parity Generator
+ * Hardware CRC32 (256-entry IEEE 802.3 LUT) & 64-bit Galois XOR Parity Generator
  */
 export function DS_CalculateParityChecksum(buffer: Uint8Array): { crc32: number; eccParity: bigint } {
   let crc = 0xFFFFFFFF;
@@ -75,12 +87,9 @@ export function DS_CalculateParityChecksum(buffer: Uint8Array): { crc32: number;
 
   for (let i = 0; i < buffer.length; i++) {
     const byteVal = buffer[i];
-    crc ^= byteVal;
-    for (let k = 0; k < 8; k++) {
-      crc = (crc >>> 1) ^ ((crc & 1) ? 0xEDB88320 : 0);
-    }
+    crc = DS_CRC32_LUT[(crc ^ byteVal) & 0xFF] ^ (crc >>> 8);
 
-    const shift = BigInt((i % 8) * 8);
+    const shift = BigInt((i & 7) * 8);
     xorParity ^= (BigInt(byteVal) << shift);
   }
 

@@ -1,5 +1,6 @@
-import { DriveSmartAttribute, SavedScanRecord } from '../types';
+import { CustomSmartThresholdRule, DriveSmartAttribute, SavedScanRecord } from '../types';
 import { PROJECT_INFO } from '../config/projectInfo';
+import { normalizeCustomSmartThresholdRules } from './smartThresholds';
 
 export interface MigrationUserSettings {
   isDarkMode: boolean;
@@ -9,6 +10,7 @@ export interface MigrationUserSettings {
   notificationPermissionState: NotificationPermission;
   scanSpeedMultiplier: number;
   isAutoRepairMode: boolean;
+  customSmartThresholds?: CustomSmartThresholdRule[];
 }
 
 export interface DiskSentinelMigrationBundle {
@@ -45,7 +47,14 @@ export function buildMigrationBundle(
       scanSpeedMultiplier: [1, 2, 5, 10].includes(settings.scanSpeedMultiplier)
         ? settings.scanSpeedMultiplier
         : 2,
-      isAutoRepairMode: Boolean(settings.isAutoRepairMode)
+      isAutoRepairMode: Boolean(settings.isAutoRepairMode),
+      ...(Array.isArray(settings.customSmartThresholds)
+        ? {
+            customSmartThresholds: normalizeCustomSmartThresholdRules(
+              settings.customSmartThresholds
+            )
+          }
+        : {})
     },
     scanRecords: scanRecords
       .filter(rec => rec.id !== 'scan-baseline-seagate')
@@ -239,7 +248,14 @@ export function parseAndValidateMigrationJson(rawText: string): MigrationValidat
         notificationPermissionState: validPerm,
         scanSpeedMultiplier,
         isAutoRepairMode:
-          typeof rawSettings.isAutoRepairMode === 'boolean' ? rawSettings.isAutoRepairMode : false
+          typeof rawSettings.isAutoRepairMode === 'boolean' ? rawSettings.isAutoRepairMode : false,
+        ...(Array.isArray(rawSettings.customSmartThresholds)
+          ? {
+              customSmartThresholds: normalizeCustomSmartThresholdRules(
+                rawSettings.customSmartThresholds
+              )
+            }
+          : {})
       },
       scanRecords: validRecords
     }

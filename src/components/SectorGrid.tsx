@@ -8,18 +8,18 @@ import {
   Eye, 
   Info, 
   ZoomIn, 
-  ZoomOut, 
-  Maximize2, 
-  Minimize2, 
   Flame, 
-  Layers, 
   Compass, 
   Navigation,
-  Sparkles,
   RotateCcw,
   Binary,
   FileSearch,
-  HardDriveDownload
+  HardDriveDownload,
+  CheckSquare,
+  Square,
+  Wrench,
+  Trash2,
+  ListChecks
 } from 'lucide-react';
 
 interface SectorGridProps {
@@ -27,6 +27,11 @@ interface SectorGridProps {
   activeBlockIndex: number;
   onSelectBlock?: (block: SectorBlock) => void;
   selectedBlock?: SectorBlock | null;
+  queuedRepairBlockIds?: number[];
+  onToggleQueueBlock?: (blockId: number) => void;
+  onBulkSelectRepairBlocks?: (blockIds: number[], mode: 'add' | 'replace' | 'remove') => void;
+  onClearRepairQueue?: () => void;
+  onOpenRemapWithQueue?: () => void;
   onTriggerBitCarving?: (lba: number) => void;
   onOpenHexInspector?: (lba: number) => void;
   onTraceLbaFile?: (lba: number) => void;
@@ -39,23 +44,33 @@ const SectorTile = React.memo<{
   block: SectorBlock;
   isActive: boolean;
   isSelected: boolean;
+  isQueuedForRepair: boolean;
+  isBulkSelectMode: boolean;
   zoomLevel: ZoomLevel;
   highlightFilter: 'all' | 'bad' | 'slow';
   onHoverBlock: (block: SectorBlock | null) => void;
-  onSelectBlock?: (block: SectorBlock) => void;
+  onTileClick: (block: SectorBlock, e: React.MouseEvent<HTMLDivElement>) => void;
 }>(({
   block,
   isActive,
   isSelected,
+  isQueuedForRepair,
+  isBulkSelectMode,
   zoomLevel,
   highlightFilter,
   onHoverBlock,
-  onSelectBlock
+  onTileClick
 }) => {
   let opacity = 'opacity-100';
-  if (highlightFilter === 'bad' && block.status !== 'bad') {
+  if (highlightFilter === 'bad' && block.status !== 'bad' && !isQueuedForRepair) {
     opacity = 'opacity-10';
-  } else if (highlightFilter === 'slow' && block.status !== 'slow' && block.status !== 'critical' && block.status !== 'bad') {
+  } else if (
+    highlightFilter === 'slow' &&
+    block.status !== 'slow' &&
+    block.status !== 'critical' &&
+    block.status !== 'bad' &&
+    !isQueuedForRepair
+  ) {
     opacity = 'opacity-10';
   }
 
@@ -76,22 +91,34 @@ const SectorTile = React.memo<{
     colorClass = 'bg-indigo-500 border-indigo-300 ring-2 ring-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.8)] z-10 text-white';
   }
 
-  if (isSelected) {
+  if (isQueuedForRepair) {
+    colorClass += ' ring-2 ring-cyan-300 ring-offset-1 ring-offset-slate-950 z-15';
+  } else if (isSelected) {
     colorClass += ' ring-2 ring-white ring-offset-2 ring-offset-slate-950 z-20';
   }
+
+  const queueHint = isQueuedForRepair
+    ? ' · [수복 큐 포함됨]'
+    : isBulkSelectMode
+    ? ' · (클릭하여 수복 큐 토글)'
+    : ' · (Ctrl+클릭으로 다중 선택)';
 
   if (zoomLevel >= 4) {
     return (
       <div
         onMouseEnter={() => onHoverBlock(block)}
         onMouseLeave={() => onHoverBlock(null)}
-        onClick={() => onSelectBlock && onSelectBlock(block)}
-        className={`rounded-md cursor-pointer transition-all duration-75 border p-1 sm:p-1.5 flex flex-col justify-between ${colorClass} ${opacity} hover:ring-2 hover:ring-white`}
-        title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()} ~ ${block.endLba.toLocaleString()}) - ${block.status.toUpperCase()}`}
+        onClick={(e) => onTileClick(block, e)}
+        className={`relative rounded-md cursor-pointer transition-all duration-75 border p-1 sm:p-1.5 flex flex-col justify-between ${colorClass} ${opacity} hover:ring-2 hover:ring-white`}
+        title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()} ~ ${block.endLba.toLocaleString()}) - ${block.status.toUpperCase()}${queueHint}`}
       >
-        <div className="flex items-center justify-between font-mono text-[9px] sm:text-[10px] leading-tight">
+        <div className="flex items-center justify-between font-mono text-[9px] sm:text-[10px] leading-tight gap-0.5">
           <span className="font-bold truncate opacity-90">#{block.id}</span>
-          {block.status === 'bad' ? (
+          {isQueuedForRepair ? (
+            <span className="font-extrabold text-[8px] bg-cyan-600 text-white px-1 py-0.2 rounded">
+              QUEUE
+            </span>
+          ) : block.status === 'bad' ? (
             <span className="font-extrabold text-[8px] bg-red-950/80 px-1 py-0.2 rounded border border-red-400/50">
               BAD
             </span>
@@ -119,10 +146,14 @@ const SectorTile = React.memo<{
     <div
       onMouseEnter={() => onHoverBlock(block)}
       onMouseLeave={() => onHoverBlock(null)}
-      onClick={() => onSelectBlock && onSelectBlock(block)}
-      className={`aspect-square rounded-xs cursor-pointer transition-all duration-75 border ${colorClass} ${opacity} hover:ring-1 hover:ring-white`}
-      title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()}) - ${block.status.toUpperCase()} ${block.responseTimeMs > 0 ? `(${block.responseTimeMs}ms)` : ''}`}
-    />
+      onClick={(e) => onTileClick(block, e)}
+      className={`relative aspect-square rounded-xs cursor-pointer transition-all duration-75 border ${colorClass} ${opacity} hover:ring-1 hover:ring-white`}
+      title={`블록 #${block.id} (LBA: ${block.lba.toLocaleString()}) - ${block.status.toUpperCase()}${block.responseTimeMs > 0 ? ` (${block.responseTimeMs}ms)` : ''}${queueHint}`}
+    >
+      {isQueuedForRepair && (
+        <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-bl-xs bg-cyan-300 pointer-events-none" />
+      )}
+    </div>
   );
 });
 
@@ -131,6 +162,11 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
   activeBlockIndex,
   onSelectBlock,
   selectedBlock,
+  queuedRepairBlockIds = [],
+  onToggleQueueBlock,
+  onBulkSelectRepairBlocks,
+  onClearRepairQueue,
+  onOpenRemapWithQueue,
   onTriggerBitCarving,
   onOpenHexInspector,
   onTraceLbaFile,
@@ -141,26 +177,77 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>(1);
   const [viewCenterIndex, setViewCenterIndex] = useState<number>(blocks.length / 2);
   const [followScanHead, setFollowScanHead] = useState<boolean>(false);
+  const [isBulkSelectMode, setIsBulkSelectMode] = useState<boolean>(false);
+  const lastBulkAnchorIndexRef = useRef<number | null>(null);
 
   const inspectedBlock = hoveredBlock || selectedBlock;
+
+  const queuedRepairSet = useMemo(
+    () => new Set<number>(queuedRepairBlockIds),
+    [queuedRepairBlockIds]
+  );
 
   const handleHoverBlock = React.useCallback((block: SectorBlock | null) => {
     setHoveredBlock(block);
   }, []);
 
-  // O(1) lookup table + single-pass badEntries extraction
-  const { blockIndexById, badEntries } = useMemo(() => {
+  // O(1) lookup table + single-pass badEntries / delayedEntries extraction
+  const { blockIndexById, badEntries, delayedOrBadEntries } = useMemo(() => {
     const idMap = new Map<number, number>();
     const bads: Array<{ block: SectorBlock; index: number }> = [];
+    const delayedOrBad: Array<{ block: SectorBlock; index: number }> = [];
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
       idMap.set(b.id, i);
       if (b.status === 'bad') {
         bads.push({ block: b, index: i });
+        delayedOrBad.push({ block: b, index: i });
+      } else if (b.status === 'critical' || b.status === 'slow') {
+        delayedOrBad.push({ block: b, index: i });
       }
     }
-    return { blockIndexById: idMap, badEntries: bads };
+    return { blockIndexById: idMap, badEntries: bads, delayedOrBadEntries: delayedOrBad };
   }, [blocks]);
+
+  const handleTileClick = React.useCallback(
+    (block: SectorBlock, e: React.MouseEvent<HTMLDivElement>) => {
+      const clickedIndex = blockIndexById.get(block.id);
+
+      // Shift+Click range append when bulk handlers are wired
+      if (
+        e.shiftKey &&
+        onBulkSelectRepairBlocks &&
+        clickedIndex !== undefined &&
+        lastBulkAnchorIndexRef.current !== null
+      ) {
+        const start = Math.min(lastBulkAnchorIndexRef.current, clickedIndex);
+        const end = Math.max(lastBulkAnchorIndexRef.current, clickedIndex);
+        const rangeIds = blocks.slice(start, end + 1).map(b => b.id);
+        onBulkSelectRepairBlocks(rangeIds, 'add');
+        lastBulkAnchorIndexRef.current = clickedIndex;
+        if (onSelectBlock) onSelectBlock(block);
+        return;
+      }
+
+      // Ctrl/Cmd+Click OR active Bulk Select Mode toggles block in non-contiguous repair queue
+      if ((isBulkSelectMode || e.ctrlKey || e.metaKey) && onToggleQueueBlock) {
+        onToggleQueueBlock(block.id);
+        if (clickedIndex !== undefined) {
+          lastBulkAnchorIndexRef.current = clickedIndex;
+        }
+        if (onSelectBlock) onSelectBlock(block);
+        return;
+      }
+
+      if (clickedIndex !== undefined) {
+        lastBulkAnchorIndexRef.current = clickedIndex;
+      }
+      if (onSelectBlock) {
+        onSelectBlock(block);
+      }
+    },
+    [blockIndexById, blocks, isBulkSelectMode, onBulkSelectRepairBlocks, onSelectBlock, onToggleQueueBlock]
+  );
 
   // Group sorted bad blocks into localized LBA clusters in a single O(B) pass
   const badClusters = useMemo(() => {
@@ -406,7 +493,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
           <div className="flex items-center bg-slate-100 dark:bg-slate-950 rounded-lg p-0.5 text-xs font-medium border border-slate-200 dark:border-slate-800">
             <button
               onClick={() => setHighlightFilter('all')}
-              className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 highlightFilter === 'all'
                   ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
@@ -416,7 +503,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
             </button>
             <button
               onClick={() => setHighlightFilter('slow')}
-              className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 highlightFilter === 'slow'
                   ? 'bg-white dark:bg-slate-800 text-amber-500 shadow-xs font-semibold'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
@@ -426,7 +513,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
             </button>
             <button
               onClick={() => setHighlightFilter('bad')}
-              className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 highlightFilter === 'bad'
                   ? 'bg-white dark:bg-slate-800 text-red-500 shadow-xs font-semibold'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
@@ -435,8 +522,112 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
               배드만
             </button>
           </div>
+
+          {/* Bulk Non-Contiguous Zero-Fill Selection Toggle */}
+          {onToggleQueueBlock && (
+            <button
+              type="button"
+              onClick={() => setIsBulkSelectMode(prev => !prev)}
+              aria-pressed={isBulkSelectMode}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                isBulkSelectMode
+                  ? 'bg-cyan-600 text-white border-cyan-500 shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-cyan-500/50'
+              }`}
+              title="활성화하면 그리드 블록을 클릭해 비연속 다중 섹터를 수복 큐에 추가/제거할 수 있습니다 (또는 Ctrl+클릭)"
+            >
+              <ListChecks className="w-3.5 h-3.5 shrink-0" />
+              <span>다중 선택{queuedRepairBlockIds.length > 0 ? ` (${queuedRepairBlockIds.length})` : ''}</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Bulk Non-Contiguous Zero-Fill Queue Action Ribbon */}
+      {(isBulkSelectMode || queuedRepairBlockIds.length > 0) && onBulkSelectRepairBlocks && (
+        <div className="mb-2.5 p-2.5 rounded-lg border border-cyan-500/35 bg-cyan-50/70 dark:bg-cyan-950/25 flex flex-col md:flex-row md:items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-slate-800 dark:text-slate-200">
+            <span className="font-bold text-cyan-700 dark:text-cyan-300 flex items-center gap-1.5 whitespace-nowrap">
+              <CheckSquare className="w-3.5 h-3.5 shrink-0" />
+              다중 제로필(Zero-Fill) 수복 큐
+            </span>
+            <span className="text-slate-400" aria-hidden="true">·</span>
+            <span className="font-mono tabular-nums font-semibold">
+              {queuedRepairBlockIds.length}개 비연속 블록 대기 중
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              (그리드 클릭, Ctrl+클릭, Shift+범위 클릭으로 자유롭게 추가/해제)
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+            {badEntries.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  onBulkSelectRepairBlocks(
+                    badEntries.map(e => e.block.id),
+                    'add'
+                  )
+                }
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-red-400/50 bg-red-500/10 hover:bg-red-500/20 text-red-700 dark:text-red-300 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <ShieldAlert className="w-3 h-3 shrink-0" />
+                <span>모든 배드섹터 추가 ({badEntries.length})</span>
+              </button>
+            )}
+            {delayedOrBadEntries.length > badEntries.length && (
+              <button
+                type="button"
+                onClick={() =>
+                  onBulkSelectRepairBlocks(
+                    delayedOrBadEntries.map(e => e.block.id),
+                    'add'
+                  )
+                }
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <span>지연·배드 모두 추가 ({delayedOrBadEntries.length})</span>
+              </button>
+            )}
+            {zoomLevel > 1 && visibleBlocks.some(b => b.status === 'bad') && (
+              <button
+                type="button"
+                onClick={() =>
+                  onBulkSelectRepairBlocks(
+                    visibleBlocks.filter(b => b.status === 'bad').map(b => b.id),
+                    'add'
+                  )
+                }
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <span>현재 줌 배드만 추가</span>
+              </button>
+            )}
+            {queuedRepairBlockIds.length > 0 && onClearRepairQueue && (
+              <button
+                type="button"
+                onClick={onClearRepairQueue}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Trash2 className="w-3 h-3 shrink-0" />
+                <span>큐 비우기</span>
+              </button>
+            )}
+            {onOpenRemapWithQueue && (
+              <button
+                type="button"
+                disabled={queuedRepairBlockIds.length === 0}
+                onClick={onOpenRemapWithQueue}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:cursor-not-allowed shadow-2xs"
+              >
+                <Wrench className="w-3 h-3 shrink-0" />
+                <span>다단계 제로필 수복 실행 ({queuedRepairBlockIds.length})</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 3. LBA Mini-Map & Defective Cluster Jumper Bar */}
       <div className="mb-2.5 space-y-1.5">
@@ -507,6 +698,20 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
                 <div
                   key={`minimap-bad-${b.id}`}
                   className="absolute top-0 bottom-0 w-1 bg-red-500 shadow-[0_0_6px_rgba(239,68,68,1)] z-10"
+                  style={{ left: `${leftPct}%` }}
+                />
+              );
+            })}
+
+            {/* Queued Non-Contiguous Repair Block Cyan Markers on Mini-Map */}
+            {queuedRepairBlockIds.map(qId => {
+              const qIdx = blockIndexById.get(qId);
+              if (qIdx === undefined) return null;
+              const leftPct = (qIdx / Math.max(1, blocks.length)) * 100;
+              return (
+                <div
+                  key={`minimap-queue-${qId}`}
+                  className="absolute top-0 h-2 w-1 bg-cyan-300 z-25"
                   style={{ left: `${leftPct}%` }}
                 />
               );
@@ -637,10 +842,12 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
                 block={block}
                 isActive={actualIndex === activeBlockIndex}
                 isSelected={selectedBlock?.id === block.id}
+                isQueuedForRepair={queuedRepairSet.has(block.id)}
+                isBulkSelectMode={isBulkSelectMode}
                 zoomLevel={zoomLevel}
                 highlightFilter={highlightFilter}
                 onHoverBlock={handleHoverBlock}
-                onSelectBlock={onSelectBlock}
+                onTileClick={handleTileClick}
               />
             );
           })}
@@ -674,6 +881,10 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-slate-800 border border-slate-700" />
             <span>대기 중</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-cyan-600 dark:text-cyan-400 font-semibold">
+            <span className="w-2 h-2 rounded-xs bg-cyan-400 ring-1 ring-cyan-300" />
+            <span>수복 큐</span>
           </div>
         </div>
 
@@ -724,6 +935,32 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
               >
                 <ZoomIn className="w-2.5 h-2.5" />
                 <span>영역 확대</span>
+              </button>
+            )}
+
+            {/* Toggle Individual Block in Non-Contiguous Zero-Fill Queue */}
+            {onToggleQueueBlock && (
+              <button
+                type="button"
+                onClick={() => onToggleQueueBlock(inspectedBlock.id)}
+                className={`ml-1 px-1.5 py-0.2 rounded text-[10px] font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                  queuedRepairSet.has(inspectedBlock.id)
+                    ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                    : 'bg-slate-200 dark:bg-slate-800 hover:bg-cyan-600 hover:text-white text-slate-700 dark:text-slate-200'
+                }`}
+                title="이 블록을 다중 제로필 수복 큐에 추가하거나 제거합니다"
+              >
+                {queuedRepairSet.has(inspectedBlock.id) ? (
+                  <>
+                    <CheckSquare className="w-2.5 h-2.5" />
+                    <span>수복 큐 포함됨</span>
+                  </>
+                ) : (
+                  <>
+                    <Square className="w-2.5 h-2.5" />
+                    <span>수복 큐 추가</span>
+                  </>
+                )}
               </button>
             )}
 

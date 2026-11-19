@@ -137,10 +137,14 @@ jobs:
           & $csc /nologo /target:winexe /optimize+ /out:bin\native\DiskBadSectorScanner.exe src\native\DiskSentinelLauncher.cs
 
           echo "--- Compiling C++ Core Engine (DiskSentinelNativeCore.dll) ---"
-          cl.exe /O2 /LD /MD /EHsc /D_WIN32 /DDISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native
+          cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDISKSENTINEL_EXPORTS src\native\DiskSentinelEngine.cpp /Fe:bin\native\DiskSentinelNativeCore.dll /I src\native
+
+          echo "--- Compiling Pure Creative Forensics Engine (DiskSentinelForensics.dll) ---"
+          cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDSF_EXPORTS src\native\DiskSentinelForensics.cpp /Fe:bin\native\DiskSentinelForensics.dll /I src\native
 
           if (!(Test-Path "bin/native/DiskBadSectorScanner.exe")) { throw "Host executable build failed" }
           if (!(Test-Path "bin/native/DiskSentinelNativeCore.dll")) { throw "Core engine DLL build failed" }
+          if (!(Test-Path "bin/native/DiskSentinelForensics.dll")) { throw "Forensics engine DLL build failed" }
         shell: pwsh
 
       - name: Audit Unpacked Runtime Staging

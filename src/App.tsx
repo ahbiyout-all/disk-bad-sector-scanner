@@ -15,11 +15,22 @@ import {
   DiskHardwareSpecs,
   WatchdogRule,
   WatchdogBaselineSnapshot,
-  WatchdogTriggerEvent
+  WatchdogTriggerEvent,
+  SmartHistorySnapshot,
+  CustomSmartThresholdRule
 } from './types';
 import { generateBlocksForDrive, TOTAL_SCAN_BLOCKS } from './utils/drivePresets';
 import { soundManager } from './utils/audio';
 import { createScanRecordFromSession } from './utils/reportGenerator';
+import {
+  loadSmartHistorySnapshots,
+  recordSmartSnapshotForDrive
+} from './utils/smartHistoryStore';
+import {
+  loadCustomSmartThresholds,
+  saveCustomSmartThresholds
+} from './utils/smartThresholds';
+import type { OptionsModalSubTab } from './components/OptionsModal';
 import { Navbar } from './components/Navbar';
 import { SectorGrid } from './components/SectorGrid';
 import { TelemetryPanel } from './components/TelemetryPanel';
@@ -241,6 +252,7 @@ export default function App() {
   // Blank preview blocks for idle selected drive (before a task is started)
   const [idleBlocks, setIdleBlocks] = useState<SectorBlock[]>([]);
   const [selectedBlock, setSelectedBlock] = useState<SectorBlock | null>(null);
+  const [queuedRepairBlockIds, setQueuedRepairBlockIds] = useState<number[]>([]);
   const lastInitializedDriveRef = useRef<{ id: string; totalSectors: number } | null>(null);
 
   // Multi-Task Queue Manager State
@@ -407,6 +419,34 @@ export default function App() {
     : 'idle';
   const elapsedSeconds = activeTask ? activeTask.elapsedSeconds : 0;
 
+  // Non-contiguous Bulk Repair Queue Handlers
+  const handleToggleRepairQueueBlock = useCallback((blockId: number) => {
+    setQueuedRepairBlockIds(prev =>
+      prev.includes(blockId) ? prev.filter(id => id !== blockId) : [...prev, blockId]
+    );
+  }, []);
+
+  const handleBulkSelectRepairBlocks = useCallback((blockIds: number[], mode: 'add' | 'replace' | 'remove') => {
+    if (mode === 'replace') {
+      setQueuedRepairBlockIds(Array.from(new Set(blockIds)));
+      return;
+    }
+    if (mode === 'add') {
+      setQueuedRepairBlockIds(prev => {
+        const next = new Set(prev);
+        blockIds.forEach(id => next.add(id));
+        return Array.from(next);
+      });
+      return;
+    }
+    const removeSet = new Set(blockIds);
+    setQueuedRepairBlockIds(prev => prev.filter(id => !removeSet.has(id)));
+  }, []);
+
+  const handleClearRepairQueue = useCallback(() => {
+    setQueuedRepairBlockIds([]);
+  }, []);
+
   // S.M.A.R.T Sector Remapping & Zero-Fill Repair Handler
   const handleRepairSectors = useCallback((driveId: string, repairedBlockIds: number[]) => {
     if (repairedBlockIds.length === 0) return;
@@ -427,6 +467,7 @@ export default function App() {
 
     if (activeDriveRef.current?.id === driveId) {
       setIdleBlocks(prev => patchBlocks(prev));
+      setQueuedRepairBlockIds(prev => prev.filter(id => !repairedIdSet.has(id)));
     }
     setTasks(prev =>
       prev.map(t =>
@@ -596,6 +637,28 @@ export default function App() {
     safeStorage.setItem('disk_scan_records', JSON.stringify(scanRecords));
   }, [scanRecords]);
 
+  // Persistent genuine S.M.A.R.T. snapshot history for long-term degradation charts
+  const [smartSnapshots, setSmartSnapshots] = useState<SmartHistorySnapshot[]>(() =>
+    loadSmartHistorySnapshots()
+  );
+
+  useEffect(() => {
+    if (drives.length === 0) return;
+    setSmartSnapshots(prev => {
+      let next = prev;
+      for (const d of drives) {
+        if (d.smartAttributes.length > 0) {
+          next = recordSmartSnapshotForDrive(next, d, 'auto-poll');
+        }
+      }
+      return next;
+    });
+  }, [drives]);
+
+  const handleRecordSmartSnapshot = useCallback((drive: DiskDrive) => {
+    setSmartSnapshots(prev => recordSmartSnapshotForDrive(prev, drive, 'manual'));
+  }, []);
+
   const handleImportMigration = useCallback(
     (bundle: DiskSentinelMigrationBundle, strategy: 'merge' | 'replace') => {
       setIsDarkMode(bundle.settings.isDarkMode);
@@ -621,6 +684,10 @@ export default function App() {
       }
 
       setScanRecords(prev => mergeScanRecords(prev, bundle.scanRecords, strategy));
+      if (Array.isArray(bundle.settings.customSmartThresholds)) {
+        setCustomSmartThresholds(bundle.settings.customSmartThresholds);
+        saveCustomSmartThresholds(bundle.settings.customSmartThresholds);
+      }
     },
     []
   );
@@ -653,6 +720,14 @@ export default function App() {
   const [fileTracerTargetLba, setFileTracerTargetLba] = useState<number>(0);
   const [isSanitizeTrimOpen, setIsSanitizeTrimOpen] = useState<boolean>(false);
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState<boolean>(false);
+  const [optionsModalInitialTab, setOptionsModalInitialTab] = useState<OptionsModalSubTab>('general');
+  const [customSmartThresholds, setCustomSmartThresholds] = useState<CustomSmartThresholdRule[]>(() =>
+    loadCustomSmartThresholds()
+  );
+  const handleUpdateCustomSmartThresholds = useCallback((nextRules: CustomSmartThresholdRule[]) => {
+    setCustomSmartThresholds(nextRules);
+    saveCustomSmartThresholds(nextRules);
+  }, []);
   const [isHelpGuideModalOpen, setIsHelpGuideModalOpen] = useState<boolean>(false);
   const [isSmartRemapOpen, setIsSmartRemapOpen] = useState<boolean>(false);
 
@@ -1546,6 +1621,7 @@ export default function App() {
     }
     setActiveTaskId(null);
     setActiveBucketFilter(null);
+    setQueuedRepairBlockIds([]);
     setLatestBadLba(undefined);
     emittedDegradationKeysRef.current.clear();
     if (activeDrive) {
@@ -1559,6 +1635,7 @@ export default function App() {
 
   const handleDriveChange = (driveId: string) => {
     setSelectedDriveId(driveId);
+    setQueuedRepairBlockIds([]);
     const nextDrive = drives.find(d => d.id === driveId) || drives[0];
     if (nextDrive) {
       setSelectedMethodId(getDefaultMethodForDrive(nextDrive));
@@ -1737,7 +1814,10 @@ export default function App() {
         onOpenSanitizeTrim={() => { if (activeDrive) setIsSanitizeTrimOpen(true); }}
         onRescanDrives={handleRescanDrives}
         isRescanning={isRescanningDrives}
-        onOpenOptionsModal={() => setIsOptionsModalOpen(true)}
+        onOpenOptionsModal={() => {
+          setOptionsModalInitialTab('general');
+          setIsOptionsModalOpen(true);
+        }}
         onOpenHelpGuideModal={() => setIsHelpGuideModalOpen(true)}
         onExportResults={() => handleOpenExportModal()}
         onResetScan={handleResetScan}
@@ -2354,6 +2434,11 @@ export default function App() {
                   activeBlockIndex={activeBlockIndex}
                   selectedBlock={selectedBlock}
                   onSelectBlock={b => setSelectedBlock(b)}
+                  queuedRepairBlockIds={queuedRepairBlockIds}
+                  onToggleQueueBlock={handleToggleRepairQueueBlock}
+                  onBulkSelectRepairBlocks={handleBulkSelectRepairBlocks}
+                  onClearRepairQueue={handleClearRepairQueue}
+                  onOpenRemapWithQueue={() => setIsSmartRemapOpen(true)}
                   onTriggerBitCarving={lba => {
                     setBitCarvingTargetLba(lba);
                     setIsBitCarvingOpen(true);
@@ -2471,6 +2556,14 @@ export default function App() {
             blocks={blocks}
             activeMethodId={selectedMethodId}
             scanMode={scanMode}
+            scanRecords={scanRecords}
+            smartSnapshots={smartSnapshots}
+            customSmartThresholds={customSmartThresholds}
+            onRecordSmartSnapshot={handleRecordSmartSnapshot}
+            onOpenThresholdSettings={() => {
+              setOptionsModalInitialTab('smart_thresholds');
+              setIsOptionsModalOpen(true);
+            }}
             onSelectBlock={(b) => {
               setSelectedBlock(b);
               setActiveTab('scan');
@@ -2497,6 +2590,13 @@ export default function App() {
               telemetry={telemetry}
               calculatedHealth={calculatedHealth}
               scanRecords={scanRecords}
+              smartSnapshots={smartSnapshots}
+              customSmartThresholds={customSmartThresholds}
+              onRecordSmartSnapshot={handleRecordSmartSnapshot}
+              onOpenThresholdSettings={() => {
+                setOptionsModalInitialTab('smart_thresholds');
+                setIsOptionsModalOpen(true);
+              }}
               onStartScan={() => {
                 setActiveTab('scan');
                 handleStartScan();
@@ -2793,6 +2893,8 @@ export default function App() {
           onClose={() => setIsSmartRemapOpen(false)}
           activeDrive={activeDrive}
           blocks={blocks}
+          initialQueuedBlockIds={queuedRepairBlockIds}
+          onSyncRepairQueue={setQueuedRepairBlockIds}
           onRepairSectors={handleRepairSectors}
         />
       )}
@@ -2802,6 +2904,7 @@ export default function App() {
         <OptionsModal
           isOpen={isOptionsModalOpen}
           onClose={() => setIsOptionsModalOpen(false)}
+          initialSubTab={optionsModalInitialTab}
           isDarkMode={isDarkMode}
           onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
           isMuted={isMuted}
@@ -2814,6 +2917,9 @@ export default function App() {
           onChangeSpeedMultiplier={setScanSpeedMultiplier}
           isAutoRepairMode={isAutoRepairMode}
           onToggleAutoRepairMode={handleToggleAutoRepairMode}
+          customSmartThresholds={customSmartThresholds}
+          onUpdateCustomSmartThresholds={handleUpdateCustomSmartThresholds}
+          activeDriveSmartAttributes={activeDrive?.smartAttributes || []}
           scanRecords={scanRecords}
           onImportMigration={handleImportMigration}
         />

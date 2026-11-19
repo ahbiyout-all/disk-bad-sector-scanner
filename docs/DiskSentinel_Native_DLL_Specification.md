@@ -28,6 +28,10 @@
 | **64비트 LBA 오버플로 취약점** | `offset.QuadPart = (LONGLONG)(lba * ctx->sectorSize);` 에서 4TB 초과 드라이브 시 32비트 연산 오버플로 위험 | `((LONGLONG)lba) * ((LONGLONG)ctx->sectorSize)`로 64비트 명시적 캐스팅을 적용하여 대용량 스토리지 지원 |
 | **핵심 창작 알고리즘 미구현** | 백서에 언급된 적응형 버스트 점핑 알고리즘이 네이티브 함수로 부재 | `DS_AdaptiveScanChunk`, `DS_CalculateParityChecksum`, `DS_EvaluateDriveReliability` 3대 순수 창작 함수 신규 구현 |
 | **빌드 자동화 도구 부재** | DLL 소스만 존재하고 사용자가 빌드할 수 있는 스크립트 없음 | MSVC / MinGW 자동 감지 릴리스 빌더인 `build-dll.bat` 신규 제작 및 배치 |
+| **누락된 `DS_GetDriveDetails` 익스포트 (v4.6.0)** | `DiskSentinelLauncher.cs`가 `DS_GetDriveDetails`를 P/Invoke 호출하지만 DLL 헤더/구현에 미선언되어 `EntryPointNotFoundException` 발생 가능 | 공통 헬퍼 `PopulateDriveDetailFromHandle` 기반으로 `DS_GetDriveDetails` 정식 구현 및 익스포트(No.19) 추가, 런처 온도 폴링 예외 가드 보강 |
+| **하드웨어 정렬/쓰기 캐시 실측 누락 (v4.6.0)** | `physicalSectorSize = 4096`, `isWriteCacheEnabled = false` 고정값 반환 | `StorageAccessAlignmentProperty(6)`, `StorageDeviceWriteCacheProperty(4)`, `IOCTL_DISK_GET_LENGTH_INFO` 폴백 실측 적용 |
+| **비트 시프트 O(8N) CRC32 및 NVMe 포인터 산술 위험 (v4.6.0)** | 루프당 8회 비트 시프트로 성능 저하 및 `DS_GetNvmeDeepTelemetry`에서 `ProtocolDataOffset` 사전 검증 전 포인터 가산 위험 | 256-엔트리 IEEE 802.3 LUT + 8바이트 언롤 패리티/제로 체크로 고속화, 포인터 연산 전 `bytesReturned`·`totalBufSize` 경계 검사 및 `DS_VerifyLbaBlock` 64MB 청크 분할로 DWORD 오버플로 차단 |
+| **대용량 I/O 버퍼 복사·시스템 콜 병목 & Memory-Mapped Zero-Copy 도입 (v4.6.1)** | 매 읽기마다 힙 할당/`memset` 및 반복 `SetFilePointerEx` 발생, 결함 시 선형 1섹터 탐색($O(K)$), 이미지/복제 대상에 `WriteFile`/`flush` 이중 복사 발생 | **이중 경로(Dual-Path) Zero-Copy DMA**: ① 물리 드라이브는 `VirtualAlloc` 64KB 페이지 정렬 버퍼 + `StorageAdapterProperty`(`MaximumTransferLength`) 동적 버스트 + 순차 시크 생략 + $O(\log K)$ 이진 분할 적용 ② 이미지·복제 파일은 `CreateFileMappingW`/`MapViewOfFile`(`mmap`) 영속 섹션 매핑 및 Direct DMA `ReadFile`→매핑 페이지 직접 기록(Exports #20~#25) |
 
 ---
 
@@ -35,25 +39,26 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                     DiskSentinelNativeCore.dll (Pure Creative C++ Engine)              │
+│                     DiskSentinelNativeCore.dll (Pure Creative C++/Rust Engine)          │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ [Layer 1] Hardware Direct I/O Abstraction                                               │
-│  - CreateFileW(\\.\PhysicalDriveN, FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH)    │
-│  - 4096-Byte Page-Aligned Buffer Allocation via Memory Controller                       │
-│  - High-Precision Microsecond CPU Cycle Latency Delta (QueryPerformanceCounter)         │
+│ [Layer 1] Hardware Direct DMA & Memory-Mapped Zero-Copy I/O Abstraction                 │
+│  - Physical: CreateFileW(\\.\PhysicalDriveN, FILE_FLAG_NO_BUFFERING) + VirtualAlloc DMA │
+│  - Adaptive Transfer Sizing via StorageAdapterProperty (MaximumTransferLength 1MB~4MB)  │
+│  - Image/Clone: CreateFileMappingW + MapViewOfFile (Win32) / mmap (POSIX) Zero-Copy     │
+│  - Sequential Offset Tracking (Skip redundant SetFilePointerEx) & QPC µs Timer          │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ [Layer 2] AdaptiveBurstSeeker (순수 창작 고속 버스트 & 이진 분할 미세 추적 알고리즘)    │
-│  - [High-Speed Phase] 256-Sector Burst Reads (128KB ~ 1MB per I/O Request)              │
+│ [Layer 2] AdaptiveBurstSeeker (순수 창작 고속 버스트 & O(log K) 이진 분할 알고리즘)     │
+│  - [High-Speed Phase] Hardware-Scaled Burst Reads (1MB ~ 4MB per I/O Request)           │
 │  - [Degradation Trigger] Latency > 150ms or Hardware Read Error (UNC/CRC/IDNF)          │
-│  - [Micro-Decomposition] Automatic Recursive Binary Search down to 1 Sector Resolution │
+│  - [Micro-Decomposition] Iterative LIFO Binary Subdivision down to 1-Sector Resolution  │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │ [Layer 3] Low-Level Hardware Pass-Through Telemetry & Health Projection Engine         │
-│  - IOCTL_STORAGE_PREDICT_FAILURE / S.M.A.R.T. Raw Attributes Telemetry Extraction       │
+│  - IOCTL_STORAGE_PREDICT_FAILURE / S.M.A.R.T. & NVMe Log Page 02h Telemetry Extraction  │
 │  - Multi-Factor Reliability Score & Weibull Hazard Remaining Life Projection           │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ [Layer 4] Atomic Soft Sector Restoration & Parity Verifier                              │
-│  - Fast Hardware CRC32 + 64-bit Galois Multi-Lane XOR Parity Verification               │
-│  - Non-Destructive Write-Verify Atomic Scrubbing Sequence                               │
+│ [Layer 4] Atomic Soft Sector Restoration, Mapped Zero-Copy Scan & Fused LUT CRC32       │
+│  - Single-Pass Fused Zero-Check + 64-bit Galois XOR Parity + 256-Entry LUT CRC32        │
+│  - Direct DMA ReadFile -> MapViewOfFile Target Pages (Zero WriteFile / Heap Copies)     │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -118,6 +123,18 @@ typedef struct {
     uint32_t temperatureCelsius;     // 현재 온도 (°C)
     char     overallGrade[16];       // 판정 등급 문자열
 } DSDriveHealthReport;
+
+// 4. Zero-Copy 메모리 맵 섹터 윈도우 기술자
+typedef struct {
+    void*    viewPtr;                // 요청 LBA에 맞춰 오프셋 보정된 사용자 공간 직접 포인터
+    void*    internalBasePtr;        // OS 할당 단위(64KB/4KB) 정렬 매핑 기준 주소
+    uint64_t fileOffsetBytes;        // 요청 시작 바이트 오프셋
+    uint32_t mappedLengthBytes;      // viewPtr로부터 접근 가능한 유효 바이트 길이
+    uint32_t sectorSize;             // 논리 섹터 크기 (512 또는 4096)
+    uint8_t  isSectionMapped;        // 1: OS CreateFileMappingW/MapViewOfFile 또는 mmap
+    uint8_t  isReadOnly;             // 1: 읽기 전용 매핑
+    uint8_t  reserved[6];
+} DSMappedSectorWindow;
 #pragma pack(pop)
 ```
 
@@ -163,7 +180,7 @@ extern "C" {
   );
 
   // 7. 소프트 배드섹터 비파괴 원자적 수복 시도
-  DS_API bool  DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t* outRecoveredStatus);
+  DS_API bool  DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, uint32_t count, uint32_t* outRecoveredStatus);
 
   // 8. 드라이브 핸들 및 정렬 메모리 해제
   DS_API void  DS_CALL DS_CloseDrive(void* hDrive);
@@ -207,8 +224,73 @@ extern "C" {
       uint32_t clusterSpan,
       DSCarvedSectorResult* outResult
   );
+
+  // 15. 물리 디스크 32슬롯 전수 탐색 및 하드웨어 상세 정보 획득
+  DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
+      DSPhysicalDriveDetail* outDrives,
+      uint32_t maxDrives
+  );
+
+  // 16. 하드웨어 표면 검증 (IOCTL_DISK_VERIFY) 및 읽기 폴백
+  DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult);
+
+  // 17. ATA S.M.A.R.T. 자가 진단(Self-Test) 시작 (1=Short, 2=Extended, 3=Conveyance, 127=Abort)
+  DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode);
+
+  // 18. ATA S.M.A.R.T. 자가 진단 실행 상태 및 진행률(%) 조회
+  DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct);
+
+  // 19. 열린 드라이브 핸들 기준 하드웨어 상세 정보(4K AF, 쓰기 캐시, TRIM, 온도, 수명 점수) 조회
+  DS_API bool DS_CALL DS_GetDriveDetails(void* hDrive, DSPhysicalDriveDetail* outDetail);
+
+  // 20. 디스크 이미지/복제 대상 파일용 영속 메모리 맵 핸들 열기 (CreateFileMappingW / mmap)
+  DS_API void* DS_CALL DS_OpenMappedTarget(
+      const char* utf8Path,
+      uint32_t sectorSize,
+      uint32_t accessMode,
+      uint64_t initialSizeBytes
+  );
+
+  // 21. OS 할당 단위(64KB) 정렬 슬라이딩 윈도우 매핑 (Zero-Copy 사용자 공간 포인터 획득)
+  DS_API bool DS_CALL DS_MapSectorWindow(
+      void* hMapped,
+      uint64_t startLba,
+      uint32_t sectorCount,
+      DSMappedSectorWindow* outWindow
+  );
+
+  // 22. 활성 메모리 맵 섹터 윈도우 해제 (UnmapViewOfFile / munmap)
+  DS_API bool DS_CALL DS_UnmapSectorWindow(DSMappedSectorWindow* window);
+
+  // 23. 쓰기 버퍼 플러시 및 메모리 맵 대상 핸들 닫기
+  DS_API void DS_CALL DS_CloseMappedTarget(void* hMapped);
+
+  // 24. Memory-Mapped Zero-Copy LBA 범위 고속 스캔 (ReadFile 복사 없이 CRC32·패리티·제로섹터 집계)
+  DS_API bool DS_CALL DS_ScanMappedLbaRange(
+      void* hMapped,
+      uint64_t startLba,
+      uint64_t sectorCount,
+      uint32_t windowSectors,
+      uint32_t* outCrc32,
+      uint64_t* outParity,
+      uint64_t* outZeroSectors
+  );
+
+  // 25. 물리 드라이브 -> 메모리 맵 파일 Direct DMA 무복사 이미징 (WriteFile·중간 버퍼 제거)
+  DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
+      void* hDrive,
+      uint64_t startLba,
+      uint64_t totalSectors,
+      const char* destUtf8Path,
+      uint64_t destStartLba,
+      uint32_t chunkSectors,
+      uint64_t* outBytesCopied,
+      uint32_t* outWin32Error
+  );
 }
 ```
+
+> **신규 포렌식·통계 연산 순수 창작 DLL**: Z-Score 열화 클러스터 분석, $O(N \log M)$ 파일 익스텐트 히트맵, 섀넌 엔트로피/소거 NAND 판별, MBR/GPT IEEE CRC32 무결성 검증 및 VBR 디코더는 별도 순수 창작 라이브러리인 [`DiskSentinelForensics.dll`](./DiskSentinel_Forensics_DLL_Specification.md)에 구현되어 있습니다.
 
 ---
 
@@ -290,8 +372,8 @@ public static class DiskSentinelNative {
    ```
 
 산출물:
-- `bin/native/DiskSentinelNativeCore.dll` (배포용 동적 라이브러리)
-- `bin/native/DiskSentinelNativeCore.lib` (MSVC 임포트 라이브러리)
+- `bin/native/DiskSentinelNativeCore.dll` / `DiskSentinelForensics.dll` (배포용 동적 라이브러리)
+- `bin/native/DiskSentinelNativeCore.lib` / `DiskSentinelForensics.lib` (MSVC 임포트 라이브러리)
 
 ---
 

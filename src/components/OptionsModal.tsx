@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
   Settings,
@@ -18,20 +18,47 @@ import {
   Upload,
   AlertTriangle,
   CheckCircle2,
-  FileJson
+  FileJson,
+  Activity,
+  RotateCcw,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
-import { SavedScanRecord } from '../types';
+import {
+  CustomSmartThresholdRule,
+  DriveSmartAttribute,
+  SavedScanRecord,
+  SmartThresholdComparison
+} from '../types';
 import {
   buildMigrationBundle,
   DiskSentinelMigrationBundle,
   downloadMigrationJson,
   parseAndValidateMigrationJson
 } from '../utils/dataMigration';
+import {
+  SMART_ATTRIBUTE_CATALOG,
+  createDefaultSmartThresholdRules,
+  formatHexAttributeId,
+  isRuleModifiedFromDefault,
+  parseAttributeIdInput,
+  parseSmartAttributeNumericRaw,
+  validateThresholdPair
+} from '../utils/smartThresholds';
+
+export type OptionsModalSubTab =
+  | 'general'
+  | 'audio'
+  | 'notification'
+  | 'diagnostic'
+  | 'smart_thresholds'
+  | 'migration';
 
 export interface OptionsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialSubTab?: OptionsModalSubTab;
   isDarkMode: boolean;
   onToggleDarkMode: () => void;
   isMuted: boolean;
@@ -44,6 +71,9 @@ export interface OptionsModalProps {
   onChangeSpeedMultiplier: (speed: number) => void;
   isAutoRepairMode?: boolean;
   onToggleAutoRepairMode?: () => void;
+  customSmartThresholds?: CustomSmartThresholdRule[];
+  onUpdateCustomSmartThresholds?: (rules: CustomSmartThresholdRule[]) => void;
+  activeDriveSmartAttributes?: DriveSmartAttribute[];
   scanRecords: SavedScanRecord[];
   onImportMigration: (
     bundle: DiskSentinelMigrationBundle,
@@ -54,6 +84,7 @@ export interface OptionsModalProps {
 export const OptionsModal: React.FC<OptionsModalProps> = ({
   isOpen,
   onClose,
+  initialSubTab = 'general',
   isDarkMode,
   onToggleDarkMode,
   isMuted,
@@ -66,13 +97,31 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   onChangeSpeedMultiplier,
   isAutoRepairMode = false,
   onToggleAutoRepairMode,
+  customSmartThresholds = [],
+  onUpdateCustomSmartThresholds,
+  activeDriveSmartAttributes = [],
   scanRecords,
   onImportMigration
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<
-    'general' | 'audio' | 'notification' | 'diagnostic' | 'migration'
-  >('general');
+  const [activeSubTab, setActiveSubTab] = useState<OptionsModalSubTab>(initialSubTab);
   const [volume, setVolume] = useState<number>(() => Math.round(soundManager.getVolume() * 100));
+
+  useEffect(() => {
+    if (isOpen && initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [isOpen, initialSubTab]);
+
+  // Custom S.M.A.R.T. Threshold editor draft state
+  const [rowDrafts, setRowDrafts] = useState<Record<string, { warning: string; critical: string }>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [newRulePresetId, setNewRulePresetId] = useState<string>('');
+  const [newAttrIdInput, setNewAttrIdInput] = useState<string>('');
+  const [newAttrNameInput, setNewAttrNameInput] = useState<string>('');
+  const [newAttrMode, setNewAttrMode] = useState<SmartThresholdComparison>('raw_above');
+  const [newAttrWarning, setNewAttrWarning] = useState<string>('1');
+  const [newAttrCritical, setNewAttrCritical] = useState<string>('10');
+  const [newRuleError, setNewRuleError] = useState<string | null>(null);
 
   // Migration state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -129,7 +178,8 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           notificationsAllowed: effectiveNotificationsAllowed,
           notificationPermissionState: notificationPermission,
           scanSpeedMultiplier,
-          isAutoRepairMode
+          isAutoRepairMode,
+          customSmartThresholds
         },
         scanRecords
       );
@@ -208,9 +258,306 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
     ? pendingImport.bundle.scanRecords.filter(r => !existingIdSet.has(r.id)).length
     : 0;
 
+  // Helpers for S.M.A.R.T. Threshold Rules tab
+  const parseDraftNum = (raw: string): { valid: boolean; value: number | null } => {
+    const trimmed = raw.trim();
+    if (trimmed === '') return { valid: true, value: null };
+    if (!/^\d+(\.\d+)?$/.test(trimmed)) return { valid: false, value: null };
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0) return { valid: false, value: null };
+    return { valid: true, value: n };
+  };
+
+  const handleToggleRuleEnabled = (ruleId: string) => {
+    if (!onUpdateCustomSmartThresholds) return;
+    onUpdateCustomSmartThresholds(
+      customSmartThresholds.map(r => (r.id === ruleId ? { ...r, enabled: !r.enabled } : r))
+    );
+  };
+
+  const handleChangeRuleMode = (ruleId: string, mode: SmartThresholdComparison) => {
+    if (!onUpdateCustomSmartThresholds) return;
+    const target = customSmartThresholds.find(r => r.id === ruleId);
+    if (!target) return;
+
+    const draft = rowDrafts[ruleId];
+    const warnStr = draft ? draft.warning : target.warningThreshold?.toString() ?? '';
+    const critStr = draft ? draft.critical : target.criticalThreshold?.toString() ?? '';
+    const parsedW = parseDraftNum(warnStr);
+    const parsedC = parseDraftNum(critStr);
+
+    if (parsedW.valid && parsedC.valid) {
+      const check = validateThresholdPair(mode, parsedW.value, parsedC.value);
+      if (!check.valid) {
+        setRowErrors(prev => ({ ...prev, [ruleId]: check.error || '임계치 관계가 올바르지 않습니다.' }));
+      } else {
+        setRowErrors(prev => {
+          const next = { ...prev };
+          delete next[ruleId];
+          return next;
+        });
+      }
+      onUpdateCustomSmartThresholds(
+        customSmartThresholds.map(r =>
+          r.id === ruleId
+            ? {
+                ...r,
+                comparisonMode: mode,
+                ...(check.valid
+                  ? { warningThreshold: parsedW.value, criticalThreshold: parsedC.value }
+                  : {})
+              }
+            : r
+        )
+      );
+    } else {
+      onUpdateCustomSmartThresholds(
+        customSmartThresholds.map(r =>
+          r.id === ruleId ? { ...r, comparisonMode: mode } : r
+        )
+      );
+    }
+  };
+
+  const handleChangeRuleThresholdInput = (
+    rule: CustomSmartThresholdRule,
+    field: 'warning' | 'critical',
+    rawValue: string
+  ) => {
+    const currentDraft = rowDrafts[rule.id] ?? {
+      warning: rule.warningThreshold !== null ? String(rule.warningThreshold) : '',
+      critical: rule.criticalThreshold !== null ? String(rule.criticalThreshold) : ''
+    };
+    const nextDraft = {
+      ...currentDraft,
+      [field]: rawValue
+    };
+    setRowDrafts(prev => ({ ...prev, [rule.id]: nextDraft }));
+
+    const parsedW = parseDraftNum(nextDraft.warning);
+    const parsedC = parseDraftNum(nextDraft.critical);
+    if (!parsedW.valid || !parsedC.valid) {
+      setRowErrors(prev => ({
+        ...prev,
+        [rule.id]: '0 이상의 유효한 숫자를 입력하거나 비워두십시오.'
+      }));
+      return;
+    }
+
+    const check = validateThresholdPair(rule.comparisonMode, parsedW.value, parsedC.value);
+    if (!check.valid) {
+      setRowErrors(prev => ({
+        ...prev,
+        [rule.id]: check.error || '주의/위험 임계치 순서가 올바르지 않습니다.'
+      }));
+      return;
+    }
+
+    setRowErrors(prev => {
+      const next = { ...prev };
+      delete next[rule.id];
+      return next;
+    });
+
+    if (onUpdateCustomSmartThresholds) {
+      onUpdateCustomSmartThresholds(
+        customSmartThresholds.map(r =>
+          r.id === rule.id
+            ? {
+                ...r,
+                warningThreshold: parsedW.value,
+                criticalThreshold: parsedC.value
+              }
+            : r
+        )
+      );
+    }
+  };
+
+  const handleResetSingleRule = (ruleId: string) => {
+    if (!onUpdateCustomSmartThresholds) return;
+    const rule = customSmartThresholds.find(r => r.id === ruleId);
+    if (!rule) return;
+    const catalog = SMART_ATTRIBUTE_CATALOG.find(c => c.id === rule.attributeId);
+    const nextMode = catalog?.defaultMode ?? rule.comparisonMode;
+    const nextWarn = catalog?.defaultWarning ?? rule.defaultWarning;
+    const nextCrit = catalog?.defaultCritical ?? rule.defaultCritical;
+
+    setRowDrafts(prev => {
+      const next = { ...prev };
+      delete next[ruleId];
+      return next;
+    });
+    setRowErrors(prev => {
+      const next = { ...prev };
+      delete next[ruleId];
+      return next;
+    });
+
+    onUpdateCustomSmartThresholds(
+      customSmartThresholds.map(r =>
+        r.id === ruleId
+          ? {
+              ...r,
+              comparisonMode: nextMode,
+              warningThreshold: nextWarn,
+              criticalThreshold: nextCrit,
+              enabled: true
+            }
+          : r
+      )
+    );
+  };
+
+  const handleDeleteCustomRule = (ruleId: string) => {
+    if (!onUpdateCustomSmartThresholds) return;
+    setRowDrafts(prev => {
+      const next = { ...prev };
+      delete next[ruleId];
+      return next;
+    });
+    setRowErrors(prev => {
+      const next = { ...prev };
+      delete next[ruleId];
+      return next;
+    });
+    onUpdateCustomSmartThresholds(customSmartThresholds.filter(r => r.id !== ruleId));
+  };
+
+  const handleResetAllRules = () => {
+    if (!onUpdateCustomSmartThresholds) return;
+    setRowDrafts({});
+    setRowErrors({});
+    onUpdateCustomSmartThresholds(createDefaultSmartThresholdRules());
+  };
+
+  const configuredAttrIdSet = new Set(customSmartThresholds.map(r => r.attributeId));
+  const availablePresetsToAdd = (() => {
+    const items: Array<{
+      id: number;
+      name: string;
+      mode: SmartThresholdComparison;
+      warn: number;
+      crit: number;
+      sourceLabel: string;
+    }> = [];
+    const seen = new Set<number>();
+
+    for (const entry of SMART_ATTRIBUTE_CATALOG) {
+      if (!configuredAttrIdSet.has(entry.id)) {
+        seen.add(entry.id);
+        items.push({
+          id: entry.id,
+          name: entry.name,
+          mode: entry.defaultMode,
+          warn: entry.defaultWarning ?? 1,
+          crit: entry.defaultCritical ?? 10,
+          sourceLabel: `${formatHexAttributeId(entry.id)} · ${entry.name} (${entry.nameKo})`
+        });
+      }
+    }
+
+    for (const attr of activeDriveSmartAttributes) {
+      if (!configuredAttrIdSet.has(attr.id) && !seen.has(attr.id)) {
+        seen.add(attr.id);
+        items.push({
+          id: attr.id,
+          name: attr.name,
+          mode: 'raw_above',
+          warn: 1,
+          crit: 10,
+          sourceLabel: `${formatHexAttributeId(attr.id)} · ${attr.name} (현재 장치 감지됨)`
+        });
+      }
+    }
+
+    return items.sort((a, b) => a.id - b.id);
+  })();
+
+  const handleSelectNewRulePreset = (val: string) => {
+    setNewRulePresetId(val);
+    setNewRuleError(null);
+    if (!val) return;
+    const preset = availablePresetsToAdd.find(p => String(p.id) === val);
+    if (!preset) return;
+    setNewAttrIdInput(`0x${preset.id.toString(16).padStart(2, '0').toUpperCase()}`);
+    setNewAttrNameInput(preset.name);
+    setNewAttrMode(preset.mode);
+    setNewAttrWarning(String(preset.warn));
+    setNewAttrCritical(String(preset.crit));
+  };
+
+  const handleAddCustomRule = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onUpdateCustomSmartThresholds) return;
+    setNewRuleError(null);
+
+    const parsedId = parseAttributeIdInput(newAttrIdInput);
+    if (parsedId === null) {
+      setNewRuleError('유효한 S.M.A.R.T. 속성 ID(1~255 또는 0x01~0xFF)를 입력하세요.');
+      return;
+    }
+
+    if (configuredAttrIdSet.has(parsedId)) {
+      setNewRuleError(
+        `속성 ${formatHexAttributeId(parsedId)} 규칙이 이미 목록에 있습니다. 상단 목록에서 직접 임계치를 수정하세요.`
+      );
+      return;
+    }
+
+    const trimmedName = newAttrNameInput.trim();
+    if (!trimmedName) {
+      setNewRuleError('속성 이름(예: Seek Error Rate)을 입력하세요.');
+      return;
+    }
+
+    const parsedW = parseDraftNum(newAttrWarning);
+    const parsedC = parseDraftNum(newAttrCritical);
+    if (!parsedW.valid || !parsedC.valid) {
+      setNewRuleError('주의 및 위험 임계치는 0 이상의 숫자여야 합니다.');
+      return;
+    }
+    if (parsedW.value === null && parsedC.value === null) {
+      setNewRuleError('주의(Warning) 또는 위험(Critical) 임계치 중 최소 하나를 입력하세요.');
+      return;
+    }
+
+    const pairValidation = validateThresholdPair(newAttrMode, parsedW.value, parsedC.value);
+    if (!pairValidation.valid) {
+      setNewRuleError(pairValidation.error || '주의/위험 임계치 설정이 올바르지 않습니다.');
+      return;
+    }
+
+    const catalogMatch = SMART_ATTRIBUTE_CATALOG.find(c => c.id === parsedId);
+    const createdRule: CustomSmartThresholdRule = {
+      id: `smart-rule-custom-${parsedId}-${Date.now()}`,
+      attributeId: parsedId,
+      attributeName: trimmedName,
+      comparisonMode: newAttrMode,
+      defaultWarning: catalogMatch?.defaultWarning ?? null,
+      defaultCritical: catalogMatch?.defaultCritical ?? null,
+      warningThreshold: parsedW.value,
+      criticalThreshold: parsedC.value,
+      enabled: true,
+      isCustomAttribute: true
+    };
+
+    onUpdateCustomSmartThresholds([...customSmartThresholds, createdRule]);
+    setNewRulePresetId('');
+    setNewAttrIdInput('');
+    setNewAttrNameInput('');
+    setNewAttrWarning('1');
+    setNewAttrCritical('10');
+  };
+
+  const activeThresholdRuleCount = customSmartThresholds.filter(r => r.enabled).length;
+  const modifiedThresholdRuleCount = customSmartThresholds.filter(r =>
+    isRuleModifiedFromDefault(r)
+  ).length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
           <div className="flex items-center gap-2.5">
@@ -284,6 +631,17 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           >
             <Zap className="w-3.5 h-3.5" />
             <span>진단 및 수복</span>
+          </button>
+          <button
+            onClick={() => setActiveSubTab('smart_thresholds')}
+            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+              activeSubTab === 'smart_thresholds'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>S.M.A.R.T. 임계치</span>
           </button>
           <button
             onClick={() => setActiveSubTab('migration')}
@@ -556,7 +914,360 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
             </div>
           )}
 
-          {/* TAB 5: Data Migration (JSON Export / Import) */}
+          {/* TAB 5: Custom S.M.A.R.T. Warning & Critical Thresholds */}
+          {activeSubTab === 'smart_thresholds' && (
+            <div className="space-y-4">
+              {/* Top Section Header & Global Reset */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-indigo-500 shrink-0" />
+                    <span>S.M.A.R.T. 속성별 사용자 정의 임계치</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    <span>활성 규칙 {activeThresholdRuleCount}개</span>
+                    <span aria-hidden="true">·</span>
+                    <span>사용자 변경 {modifiedThresholdRuleCount}건</span>
+                    <span aria-hidden="true">·</span>
+                    <span>펌웨어 안전 하한(Current ≤ Threshold) 초과 시 항상 위험 경보가 우선 적용됩니다</span>
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleResetAllRules}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>기본값 전체 복원</span>
+                </button>
+              </div>
+
+              {/* Configured Threshold Rules Table */}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-400 font-semibold">
+                      <tr>
+                        <th className="px-3 py-2 text-center w-12">활성</th>
+                        <th className="px-3 py-2">속성 (ID · Name)</th>
+                        <th className="px-3 py-2 w-36">판정 기준</th>
+                        <th className="px-3 py-2 w-28">주의 (Warning)</th>
+                        <th className="px-3 py-2 w-28">위험 (Critical)</th>
+                        <th className="px-3 py-2 text-right w-20">작업</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
+                      {customSmartThresholds.map(rule => {
+                        const catalogInfo = SMART_ATTRIBUTE_CATALOG.find(
+                          c => c.id === rule.attributeId
+                        );
+                        const liveAttr = activeDriveSmartAttributes.find(
+                          a => a.id === rule.attributeId
+                        );
+                        const liveRaw = liveAttr ? parseSmartAttributeNumericRaw(liveAttr) : null;
+                        const modified = isRuleModifiedFromDefault(rule);
+                        const draft = rowDrafts[rule.id];
+                        const warnValStr =
+                          draft !== undefined
+                            ? draft.warning
+                            : rule.warningThreshold !== null
+                            ? String(rule.warningThreshold)
+                            : '';
+                        const critValStr =
+                          draft !== undefined
+                            ? draft.critical
+                            : rule.criticalThreshold !== null
+                            ? String(rule.criticalThreshold)
+                            : '';
+                        const rowError = rowErrors[rule.id];
+
+                        return (
+                          <React.Fragment key={rule.id}>
+                            <tr
+                              className={`transition-colors ${
+                                rule.enabled
+                                  ? 'bg-white/70 dark:bg-slate-900/40'
+                                  : 'bg-slate-100/60 dark:bg-slate-950/80 opacity-60'
+                              }`}
+                            >
+                              <td className="px-3 py-2.5 text-center align-middle">
+                                <input
+                                  type="checkbox"
+                                  checked={rule.enabled}
+                                  onChange={() => handleToggleRuleEnabled(rule.id)}
+                                  aria-label={`${formatHexAttributeId(rule.attributeId)} 규칙 활성화`}
+                                  className="w-4 h-4 rounded accent-indigo-600 cursor-pointer"
+                                />
+                              </td>
+
+                              <td className="px-3 py-2.5 align-middle min-w-[180px]">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 tabular-nums">
+                                    {formatHexAttributeId(rule.attributeId)}
+                                  </span>
+                                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                    {rule.attributeName}
+                                  </span>
+                                  {modified && (
+                                    <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                                      · 사용자 수정
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-1.5">
+                                  {catalogInfo && <span>{catalogInfo.nameKo}</span>}
+                                  {(rule.defaultWarning !== null || rule.defaultCritical !== null) && (
+                                    <>
+                                      {catalogInfo && <span aria-hidden="true">·</span>}
+                                      <span className="font-mono tabular-nums">
+                                        기본 주의 {rule.defaultWarning ?? '-'} / 위험{' '}
+                                        {rule.defaultCritical ?? '-'}
+                                      </span>
+                                    </>
+                                  )}
+                                  {liveAttr && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span className="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                                        현재 Raw {liveRaw !== null ? liveRaw.toLocaleString() : liveAttr.raw} / 점수{' '}
+                                        {liveAttr.current}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-2.5 align-middle">
+                                <select
+                                  value={rule.comparisonMode}
+                                  onChange={e =>
+                                    handleChangeRuleMode(
+                                      rule.id,
+                                      e.target.value as SmartThresholdComparison
+                                    )
+                                  }
+                                  aria-label={`${rule.attributeName} 비교 방식`}
+                                  className="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-[11px] font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                >
+                                  <option value="raw_above">원시값 ≥ (Raw)</option>
+                                  <option value="normalized_below">점수 ≤ (Current)</option>
+                                </select>
+                              </td>
+
+                              <td className="px-3 py-2.5 align-middle">
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={rule.comparisonMode === 'normalized_below' ? 255 : undefined}
+                                    step="1"
+                                    value={warnValStr}
+                                    placeholder="미설정"
+                                    onChange={e =>
+                                      handleChangeRuleThresholdInput(rule, 'warning', e.target.value)
+                                    }
+                                    aria-label={`${rule.attributeName} 주의 임계치`}
+                                    className={`w-full px-2.5 py-1.5 rounded-md border font-mono tabular-nums text-xs bg-white dark:bg-slate-950 text-amber-700 dark:text-amber-300 font-semibold focus:outline-none focus:ring-2 ${
+                                      rowError
+                                        ? 'border-red-500 focus:ring-red-500'
+                                        : 'border-amber-300/80 dark:border-amber-700/60 focus:ring-amber-500'
+                                    }`}
+                                  />
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-2.5 align-middle">
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={rule.comparisonMode === 'normalized_below' ? 255 : undefined}
+                                    step="1"
+                                    value={critValStr}
+                                    placeholder="미설정"
+                                    onChange={e =>
+                                      handleChangeRuleThresholdInput(rule, 'critical', e.target.value)
+                                    }
+                                    aria-label={`${rule.attributeName} 위험 임계치`}
+                                    className={`w-full px-2.5 py-1.5 rounded-md border font-mono tabular-nums text-xs bg-white dark:bg-slate-950 text-red-700 dark:text-red-300 font-semibold focus:outline-none focus:ring-2 ${
+                                      rowError
+                                        ? 'border-red-500 focus:ring-red-500'
+                                        : 'border-red-300/80 dark:border-red-700/60 focus:ring-red-500'
+                                    }`}
+                                  />
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-2.5 text-right align-middle">
+                                <div className="inline-flex items-center justify-end gap-1">
+                                  {!rule.isCustomAttribute && modified && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleResetSingleRule(rule.id)}
+                                      title="이 속성을 기본값으로 복원"
+                                      className="p-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  {rule.isCustomAttribute && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteCustomRule(rule.id)}
+                                      title="사용자 추가 규칙 삭제"
+                                      className="p-1.5 rounded-md border border-red-300/80 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                            {rowError && (
+                              <tr className="bg-red-50/80 dark:bg-red-950/30">
+                                <td colSpan={6} className="px-3 py-1.5 text-[11px] text-red-700 dark:text-red-300">
+                                  <span className="inline-flex items-center gap-1.5 font-medium">
+                                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                    <span>{rowError}</span>
+                                  </span>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Add Custom S.M.A.R.T. Attribute Form */}
+              <form
+                onSubmit={handleAddCustomRule}
+                className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-3"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                      <Plus className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>새 S.M.A.R.T. 속성 임계치 규칙 추가</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      표준 카탈로그 또는 연결된 디스크의 S.M.A.R.T. ID(16진수 0x07 또는 10진수 7)를 선택해 맞춤 경보를 추가합니다.
+                    </p>
+                  </div>
+
+                  {availablePresetsToAdd.length > 0 && (
+                    <select
+                      value={newRulePresetId}
+                      onChange={e => handleSelectNewRulePreset(e.target.value)}
+                      aria-label="프리셋 S.M.A.R.T. 속성 선택"
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-700 dark:text-slate-200 max-w-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="">프리셋 속성 빠르게 채우기...</option>
+                      {availablePresetsToAdd.map(p => (
+                        <option key={p.id} value={String(p.id)}>
+                          {p.sourceLabel}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {newRuleError && (
+                  <div className="p-2.5 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 text-[11px] flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{newRuleError}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400">
+                      속성 ID (Hex/Dec)
+                    </label>
+                    <input
+                      type="text"
+                      value={newAttrIdInput}
+                      onChange={e => setNewAttrIdInput(e.target.value)}
+                      placeholder="예: 0x07"
+                      className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-3 space-y-1">
+                    <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400">
+                      속성 이름
+                    </label>
+                    <input
+                      type="text"
+                      value={newAttrNameInput}
+                      onChange={e => setNewAttrNameInput(e.target.value)}
+                      placeholder="예: Seek Error Rate"
+                      className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-3 space-y-1">
+                    <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400">
+                      판정 기준
+                    </label>
+                    <select
+                      value={newAttrMode}
+                      onChange={e => setNewAttrMode(e.target.value as SmartThresholdComparison)}
+                      className="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="raw_above">원시값 ≥ (Raw)</option>
+                      <option value="normalized_below">점수 ≤ (Current)</option>
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="block text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                      주의 (Warning)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={newAttrMode === 'normalized_below' ? 255 : undefined}
+                      value={newAttrWarning}
+                      onChange={e => setNewAttrWarning(e.target.value)}
+                      placeholder="1"
+                      className="w-full px-2.5 py-1.5 rounded-md border border-amber-300/80 dark:border-amber-700/60 bg-white dark:bg-slate-900 font-mono tabular-nums text-xs text-amber-700 dark:text-amber-300 font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="block text-[10px] font-semibold text-red-700 dark:text-red-400">
+                      위험 (Critical)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={newAttrMode === 'normalized_below' ? 255 : undefined}
+                      value={newAttrCritical}
+                      onChange={e => setNewAttrCritical(e.target.value)}
+                      placeholder="10"
+                      className="w-full px-2.5 py-1.5 rounded-md border border-red-300/80 dark:border-red-700/60 bg-white dark:bg-slate-900 font-mono tabular-nums text-xs text-red-700 dark:text-red-300 font-semibold focus:outline-none focus:ring-2 focus:ring-red-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="submit"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>임계치 규칙 추가</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* TAB 6: Data Migration (JSON Export / Import) */}
           {activeSubTab === 'migration' && (
             <div className="space-y-4">
               {migrationFeedback && (
@@ -620,8 +1331,8 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   </div>
                   <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
                     <div className="text-[10px] text-slate-400 font-sans">저장된 검사 기록</div>
-                    <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
-                      총 {scanRecords.length.toLocaleString()}건
+                    <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-0.5 tabular-nums">
+                      총 {scanRecords.length.toLocaleString()}건 · 임계치 {customSmartThresholds.length}건
                     </div>
                   </div>
                 </div>

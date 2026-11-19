@@ -247,6 +247,34 @@ export interface SavedScanRecord {
   mediaSpecificDiagnosis?: string;
 }
 
+export interface SmartHistorySnapshot {
+  id: string;
+  driveId: string;
+  driveModel: string;
+  driveSerial: string;
+  timestamp: number;
+  source: 'auto-poll' | 'manual' | 'scan';
+  healthScore: number | null;
+  temperatureC: number | null;
+  powerOnHours: number | null;
+  smartAttributes: DriveSmartAttribute[];
+}
+
+export type SmartThresholdComparison = 'raw_above' | 'normalized_below';
+
+export interface CustomSmartThresholdRule {
+  id: string;
+  attributeId: number;
+  attributeName: string;
+  comparisonMode: SmartThresholdComparison;
+  defaultWarning: number | null;
+  defaultCritical: number | null;
+  warningThreshold: number | null;
+  criticalThreshold: number | null;
+  enabled: boolean;
+  isCustomAttribute?: boolean;
+}
+
 export type SurfaceTestType = 'verify' | 'read' | 'butterfly' | 'erase';
 
 export interface ResponseBucketCounts {
