@@ -37,7 +37,7 @@
 
 ```
 .
-├── .github/workflows/           # GitHub Actions CI/CD (ci.yml, release.yml - Node.js 22 LTS / 24)
+├── .github/workflows/           # GitHub Actions CI/CD (ci.yml, tauri-desktop.yml - Tauri v2 Desktop Only)
 ├── docs/                        # 기술 아키텍처, 네이티브 DLL 명세서, 보안 보고서, 작업로그, 패치노트
 ├── public/                      # 정적 웹 자산
 ├── scripts/                     # Unpacked 스테이징 감사 및 패키징 스크립트 (package-cross-platform.mjs)
@@ -85,7 +85,7 @@ npm run build
 4. `package-cross-platform.mjs`로 불필요한 문서·포터블 파일·임시 파일 제거 감사 및 Unpacked 스테이징 검증
 5. `ISCC.exe /DAppVersion=%APP_VERSION% setup.iss` 컴파일 → **`Output\DiskBadSectorScanner_Setup_v4.6.0.exe`** 단일 공식 인스톨러 생성
 
-> **GitHub Actions 릴리스 정책**: 모바일(APK/iOS) 및 포터블 ZIP은 생성하지 않으며, Node.js 22 LTS / 24 환경에서 검증 완료된 공식 Windows 설치 실행 파일(`Output/*.exe`)만 GitHub Releases 에셋으로 첨부합니다.
+> **GitHub Actions 릴리스 정책**: GitHub Releases에는 **Tauri v2 데스크톱 앱(`DiskBadSectorScanner.exe`, NSIS/MSI 설치 파일)**만 생성·첨부합니다(모바일 APK/iOS 및 레거시 포터블 ZIP 비활성화).
 
 ---
 

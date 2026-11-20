@@ -41,8 +41,17 @@ jobs:
       - name: Build Application
         run: npm run build
 
-      - name: Verify Unpacked Staging Hygiene
-        run: npm run package
+      - name: Verify Tauri Manifest & Version Sync
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkgVer = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+            const tauriConf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            if (tauriConf.version !== pkgVer) {
+              throw new Error('Version mismatch: package.json=' + pkgVer + ', tauri.conf.json=' + tauriConf.version);
+            }
+            console.log('Tauri manifest verified for v' + pkgVer);
+          "
 
       - name: Audit No Personal Emails or Secrets Committed
         run: |

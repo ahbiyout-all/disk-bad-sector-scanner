@@ -1,4 +1,4 @@
-name: Tauri Desktop App Build (Windows)
+name: Tauri Desktop App Build & Release (Windows)
 
 on:
   workflow_dispatch:
@@ -16,6 +16,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: tauri-desktop-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -78,10 +82,10 @@ jobs:
       - name: Run TypeScript Type Check
         run: npm run lint
 
-      - name: Build Tauri v2 Desktop Executable & Bundles
+      - name: Build Tauri v2 Desktop Executable & Installers
         run: npm run tauri:build
 
-      - name: Resolve Release Tag
+      - name: Resolve Release Tag & Notes
         id: version_info
         shell: pwsh
         run: |
@@ -103,6 +107,17 @@ jobs:
             $tag = "v$tag"
           }
 
+          $notes = @"
+          ## Disk Bad Sector Scanner $tag (Tauri v2 Desktop App)
+
+          - **Executable**: ``DiskBadSectorScanner.exe`` (Tauri v2 + Rust Direct Win32 I/O Core)
+          - **NSIS Installer**: ``DiskBadSectorScanner_*_x64-setup.exe``
+          - **MSI Installer**: ``DiskBadSectorScanner_*_x64_en-US.msi``
+
+          > GitHub Releases publishes Tauri v2 desktop builds only.
+          "@
+          $notes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding utf8
+
           "tag_name=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload Tauri Desktop Artifacts
@@ -116,7 +131,7 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
-      - name: Publish DiskBadSectorScanner.exe to GitHub Releases
+      - name: Publish Tauri Desktop App Only to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         shell: pwsh
         env:
@@ -125,7 +140,7 @@ jobs:
           $tag = "${{ steps.version_info.outputs.tag_name }}"
           $exePath = "src-tauri/target/release/DiskBadSectorScanner.exe"
           if (!(Test-Path $exePath)) {
-            throw "Expected executable not found: $exePath"
+            throw "Expected Tauri executable not found: $exePath"
           }
 
           $assets = @($exePath)
@@ -134,11 +149,23 @@ jobs:
           $msi = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
           foreach ($f in $msi) { $assets += $f.FullName }
 
-          gh release view $tag *> $null
+          $releaseJson = gh release view $tag --json assets 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --title "Disk Bad Sector Scanner $tag" --notes "Automated Tauri v2 Desktop build (DiskBadSectorScanner.exe, NSIS & MSI installers)." *> $null
+            gh release create $tag --title "Disk Bad Sector Scanner $tag" --notes-file RELEASE_NOTES.md --latest *> $null
             if ($LASTEXITCODE -ne 0) {
               Start-Sleep -Seconds 3
+            }
+          } else {
+            gh release edit $tag --title "Disk Bad Sector Scanner $tag" --notes-file RELEASE_NOTES.md --latest *> $null
+            try {
+              $existing = ($releaseJson | ConvertFrom-Json).assets
+              foreach ($a in $existing) {
+                if ($a.name -like "DiskBadSectorScanner_Setup_*.exe") {
+                  gh release delete-asset $tag $a.name --yes *> $null
+                }
+              }
+            } catch {
+              Write-Host "Skipping legacy asset cleanup check"
             }
           }
 
@@ -147,6 +174,6 @@ jobs:
             Start-Sleep -Seconds 3
             gh release upload $tag @assets --clobber
             if ($LASTEXITCODE -ne 0) {
-              throw "Failed to upload release assets to GitHub tag $tag"
+              throw "Failed to upload Tauri release assets to GitHub tag $tag"
             }
           }
