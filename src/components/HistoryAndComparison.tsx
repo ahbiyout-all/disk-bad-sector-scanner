@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { SavedScanRecord } from '../types';
-import { History, GitCompare, Trash2, ArrowUpRight, ArrowDownRight, Minus, FileText, CheckCircle2, AlertTriangle, ShieldAlert, Share2 } from 'lucide-react';
+import { History, GitCompare, Trash2, ArrowUpRight, ArrowDownRight, Minus, FileText, Share2, Printer } from 'lucide-react';
+import { computeSmartSnapshotDiff } from '../utils/scanDiff';
 
 interface HistoryAndComparisonProps {
   records: SavedScanRecord[];
@@ -40,8 +41,15 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
 
   // Delta calculations between Scan A (Older/Base) and Scan B (Newer/Target)
   const badDelta = scanA && scanB ? scanB.badCount - scanA.badCount : 0;
-  const healthDelta = scanA && scanB ? scanB.healthScore - scanA.healthScore : 0;
+  const healthDelta =
+    scanA && scanB && scanA.healthScore !== null && scanB.healthScore !== null
+      ? scanB.healthScore - scanA.healthScore
+      : null;
   const slowDelta = scanA && scanB ? (scanB.slowCount + scanB.criticalCount) - (scanA.slowCount + scanA.criticalCount) : 0;
+  const smartDiffRows = useMemo(
+    () => (scanA && scanB ? computeSmartSnapshotDiff(scanA, scanB) : []),
+    [scanA, scanB]
+  );
 
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -70,7 +78,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                 >
                   {records.map(r => (
                     <option key={r.id} value={r.id}>
-                      {r.date} ({r.healthScore}%)
+                      {r.date} ({r.healthScore !== null ? `${r.healthScore}%` : 'N/A'})
                     </option>
                   ))}
                 </select>
@@ -85,11 +93,21 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                 >
                   {records.map(r => (
                     <option key={r.id} value={r.id}>
-                      {r.date} ({r.healthScore}%)
+                      {r.date} ({r.healthScore !== null ? `${r.healthScore}%` : 'N/A'})
                     </option>
                   ))}
                 </select>
               </div>
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 cursor-pointer"
+                title="비교 분석 리포트 인쇄 (A4)"
+              >
+                <Printer className="w-3 h-3" />
+                <span>인쇄</span>
+              </button>
             </div>
           )}
         </div>
@@ -114,7 +132,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                     1차 실제 검사 기록 보관 중: {records[0].driveModel}
                   </div>
                   <div className="text-[10px] text-slate-400 font-mono">
-                    검사 일시: {records[0].date} · 건강도: {records[0].healthScore}% · 배드섹터: {records[0].badCount}개
+                    검사 일시: {records[0].date} · 건강도: {records[0].healthScore !== null ? `${records[0].healthScore}%` : 'N/A'} · 배드섹터: {records[0].badCount}개
                   </div>
                 </div>
               </div>
@@ -170,16 +188,21 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
 
               {/* Health Score Delta */}
               <div className={`p-3 rounded-lg border ${
-                healthDelta < 0
+                healthDelta !== null && healthDelta < 0
                   ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-500/30 text-amber-700 dark:text-amber-300'
                   : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
               }`}>
                 <div className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 mb-0.5">Health Score Delta</div>
                 <div className="flex items-center gap-2">
                   <span className="text-xl font-bold font-mono">
-                    {healthDelta > 0 ? `+${healthDelta}` : healthDelta}%
+                    {healthDelta === null ? 'N/A' : `${healthDelta > 0 ? `+${healthDelta}` : healthDelta}%`}
                   </span>
-                  {healthDelta < 0 ? (
+                  {healthDelta === null ? (
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                      <Minus className="w-3 h-3" />
+                      계측 불가
+                    </span>
+                  ) : healthDelta < 0 ? (
                     <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700/50">
                       <ArrowDownRight className="w-3 h-3" />
                       하락
@@ -197,7 +220,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                   )}
                 </div>
                 <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                  Scan A: {scanA.healthScore}% → Scan B: {scanB.healthScore}%
+                  Scan A: {scanA.healthScore !== null ? `${scanA.healthScore}%` : 'N/A'} → Scan B: {scanB.healthScore !== null ? `${scanB.healthScore}%` : 'N/A'}
                 </div>
               </div>
 
@@ -262,14 +285,90 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                   </tr>
                   <tr>
                     <td className="px-2.5 py-2 font-sans font-medium text-slate-700 dark:text-slate-300">종합 권장 사항</td>
-                    <td className="px-2.5 py-2 font-sans text-slate-500">{scanA.healthScore >= 80 ? '정상' : '주의'}</td>
-                    <td className="px-2.5 py-2 font-sans text-slate-500">{scanB.healthScore >= 80 ? '정상' : '주의'}</td>
+                    <td className="px-2.5 py-2 font-sans text-slate-500">
+                      {scanA.healthScore === null ? 'N/A' : scanA.healthScore >= 80 ? '정상' : '주의'}
+                    </td>
+                    <td className="px-2.5 py-2 font-sans text-slate-500">
+                      {scanB.healthScore === null ? 'N/A' : scanB.healthScore >= 80 ? '정상' : '주의'}
+                    </td>
                     <td className="px-2.5 py-2 font-sans font-medium text-slate-800 dark:text-slate-200">
                       {scanB.recommendation}
                     </td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+
+            {/* S.M.A.R.T. Attribute Snapshot Diff */}
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                  S.M.A.R.T. 속성 변화 대조 (Attribute Diff)
+                </h4>
+                <span className="text-[10px] font-mono text-slate-400 tabular-nums">
+                  {smartDiffRows.length} Attributes Compared
+                </span>
+              </div>
+              {smartDiffRows.length === 0 ? (
+                <p className="text-[11px] text-slate-400 py-2">
+                  비교 가능한 S.M.A.R.T. 스냅샷 속성이 저장되지 않은 기록입니다.
+                </p>
+              ) : (
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded">
+                  <table className="w-full text-left text-[11px]">
+                    <thead className="bg-slate-50 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800 font-semibold">
+                      <tr>
+                        <th className="px-2.5 py-1.5">ID</th>
+                        <th className="px-2.5 py-1.5">속성명</th>
+                        <th className="px-2.5 py-1.5 text-right font-mono">Raw (A → B)</th>
+                        <th className="px-2.5 py-1.5 text-right font-mono">Raw 증감</th>
+                        <th className="px-2.5 py-1.5 text-right font-mono">Normalized (A → B)</th>
+                        <th className="px-2.5 py-1.5 text-center">변화 판정</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono tabular-nums">
+                      {smartDiffRows.map((row) => (
+                        <tr key={row.attributeId} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                          <td className="px-2.5 py-1.5 text-slate-500">0x{row.attributeId.toString(16).toUpperCase().padStart(2, '0')}</td>
+                          <td className="px-2.5 py-1.5 font-sans font-medium text-slate-800 dark:text-slate-200">{row.attributeName}</td>
+                          <td className="px-2.5 py-1.5 text-right text-slate-600 dark:text-slate-300">
+                            {row.rawA ?? 'N/A'} → {row.rawB ?? 'N/A'}
+                          </td>
+                          <td className={`px-2.5 py-1.5 text-right font-semibold ${
+                            row.rawDelta !== null && row.rawDelta > 0
+                              ? row.worsened
+                                ? 'text-red-500'
+                                : 'text-amber-500'
+                              : row.rawDelta !== null && row.rawDelta < 0
+                              ? 'text-emerald-500'
+                              : 'text-slate-400'
+                          }`}>
+                            {row.rawDelta === null
+                              ? 'N/A'
+                              : row.rawDelta > 0
+                              ? `+${row.rawDelta.toLocaleString()}`
+                              : row.rawDelta.toLocaleString()}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right text-slate-600 dark:text-slate-300">
+                            {row.currentA !== null ? row.currentA : 'N/A'} → {row.currentB !== null ? row.currentB : 'N/A'}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-center font-sans">
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              row.worsened
+                                ? 'bg-red-500/15 text-red-500'
+                                : row.improved
+                                ? 'bg-emerald-500/15 text-emerald-500'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                            }`}>
+                              {row.worsened ? '악화' : row.improved ? '개선' : '동일'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         ) : null}
@@ -336,8 +435,16 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                         </span>
                       </td>
                       <td className="px-2.5 py-2 text-center font-bold">
-                        <span className={r.healthScore >= 80 ? 'text-emerald-400' : r.healthScore >= 50 ? 'text-amber-400' : 'text-red-400'}>
-                          {r.healthScore}%
+                        <span className={
+                          r.healthScore === null
+                            ? 'text-slate-400'
+                            : r.healthScore >= 80
+                            ? 'text-emerald-400'
+                            : r.healthScore >= 50
+                            ? 'text-amber-400'
+                            : 'text-red-400'
+                        }>
+                          {r.healthScore !== null ? `${r.healthScore}%` : 'N/A'}
                         </span>
                       </td>
                       <td className="px-2.5 py-2 text-center">

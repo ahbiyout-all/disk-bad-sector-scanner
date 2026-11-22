@@ -14,8 +14,16 @@ import { DiskDrive, DriveSanitizeCapability, SanitizeActionId } from '../types';
 import {
   invokeTauriSanitizeOrTrim,
   isTauriDesktopRuntime,
+  queryTauriRawSectorBytes,
   queryTauriSanitizeCapabilities
 } from '../utils/nativeDriveEngine';
+import {
+  RecoveryWipePatternResult,
+  RecoveryWipeVerifyResult,
+  runRecoveryWipePatternGen,
+  runRecoveryWipeVerify,
+  WipePatternMode
+} from '../utils/recoveryDllBridge';
 
 interface SanitizeTrimModalProps {
   isOpen: boolean;
@@ -37,6 +45,13 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
   const [serialInput, setSerialInput] = useState<string>('');
   const [executing, setExecuting] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const [wipePatternMode, setWipePatternMode] = useState<WipePatternMode>(3);
+  const [wipeConstantHex, setWipeConstantHex] = useState<string>('A5');
+  const [wipeSeedStr, setWipeSeedStr] = useState<string>('202604060001');
+  const [wipeLbaOffset, setWipeLbaOffset] = useState<number>(0);
+  const [wipeGenResult, setWipeGenResult] = useState<RecoveryWipePatternResult | null>(null);
+  const [wipeVerifyResult, setWipeVerifyResult] = useState<RecoveryWipeVerifyResult | null>(null);
+  const [wipeBusy, setWipeBusy] = useState<boolean>(false);
 
   const tauriActive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
 
@@ -96,11 +111,16 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
       setSerialInput('');
       setFeedback(null);
       setLoading(false);
+      setWipeGenResult(null);
+      setWipeVerifyResult(null);
+      setWipeBusy(false);
       return;
     }
     setConfirmAction(null);
     setSerialInput('');
     setCap(null);
+    setWipeGenResult(null);
+    setWipeVerifyResult(null);
     void loadCapabilities();
   }, [isOpen, drive.id, loadCapabilities]);
 
@@ -155,6 +175,105 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
       if (isMountedRef.current) {
         setExecuting(null);
       }
+    }
+  };
+
+  const parseConstByte = () => {
+    const parsed = parseInt(wipeConstantHex.trim().replace(/^0x/i, ''), 16);
+    return Number.isFinite(parsed) ? parsed & 0xff : 0xa5;
+  };
+
+  const handleGenerateAndVerifyWipePattern = async () => {
+    if (wipeBusy) return;
+    const reqDriveId = drive.id;
+    const secSize = drive.hardwareSpecs?.logicalSectorSize || 512;
+    const constByte = parseConstByte();
+    setWipeBusy(true);
+    try {
+      const gen = await runRecoveryWipePatternGen(
+        secSize,
+        wipePatternMode,
+        constByte,
+        wipeSeedStr,
+        wipeLbaOffset
+      );
+      if (!isMountedRef.current || !isOpenRef.current || activeDriveIdRef.current !== reqDriveId) {
+        return;
+      }
+      setWipeGenResult(gen);
+      const ver = await runRecoveryWipeVerify(
+        gen.bytes,
+        wipePatternMode,
+        constByte,
+        wipeSeedStr,
+        wipeLbaOffset
+      );
+      if (!isMountedRef.current || !isOpenRef.current || activeDriveIdRef.current !== reqDriveId) {
+        return;
+      }
+      setWipeVerifyResult(ver);
+    } finally {
+      if (isMountedRef.current) setWipeBusy(false);
+    }
+  };
+
+  const handleSimulateTamperCheck = async () => {
+    if (wipeBusy || !wipeGenResult) return;
+    const reqDriveId = drive.id;
+    const constByte = parseConstByte();
+    const tampered = [...wipeGenResult.bytes];
+    const injectIdx = Math.min(17, Math.max(0, tampered.length - 1));
+    tampered[injectIdx] = (tampered[injectIdx] ^ 0xff) & 0xff;
+    setWipeBusy(true);
+    try {
+      const ver = await runRecoveryWipeVerify(
+        tampered,
+        wipePatternMode,
+        constByte,
+        wipeSeedStr,
+        wipeLbaOffset
+      );
+      if (!isMountedRef.current || !isOpenRef.current || activeDriveIdRef.current !== reqDriveId) {
+        return;
+      }
+      setWipeVerifyResult(ver);
+    } finally {
+      if (isMountedRef.current) setWipeBusy(false);
+    }
+  };
+
+  const handleVerifyPhysicalLbaClean = async () => {
+    if (wipeBusy || !tauriActive) return;
+    const reqDrive = drive;
+    const reqDriveId = drive.id;
+    const constByte = parseConstByte();
+    setWipeBusy(true);
+    setFeedback(null);
+    try {
+      const rawRes = await queryTauriRawSectorBytes(reqDrive, Math.max(0, Math.floor(wipeLbaOffset)), 1);
+      if (!isMountedRef.current || !isOpenRef.current || activeDriveIdRef.current !== reqDriveId) {
+        return;
+      }
+      if (!rawRes.supported || rawRes.bytes.length === 0) {
+        setFeedback({
+          ok: false,
+          message: rawRes.reason || `LBA #${wipeLbaOffset} 물리 섹터를 판독할 수 없습니다.`
+        });
+        return;
+      }
+      const ver = await runRecoveryWipeVerify(
+        rawRes.bytes,
+        wipePatternMode,
+        constByte,
+        wipeSeedStr,
+        wipeLbaOffset
+      );
+      if (!isMountedRef.current || !isOpenRef.current || activeDriveIdRef.current !== reqDriveId) {
+        return;
+      }
+      setWipeVerifyResult(ver);
+    } finally {
+      if (isMountedRef.current) setWipeBusy(false);
     }
   };
 
@@ -394,6 +513,130 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
                 <span>ATA Security Erase Unit</span>
               </button>
             </div>
+          </div>
+
+          {/* 3. NIST SP 800-88 / Xoshiro256** Wipe Pattern & Read-Back Integrity Verifier */}
+          <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-indigo-500" />
+                <div>
+                  <div className="font-bold text-slate-900 dark:text-white">
+                    NIST SP 800-88 / Xoshiro256** 보안 소거 패턴 생성 &amp; 잔존 데이터 검증기
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                    DiskSentinelRecovery.dll · 64-bit SplitMix64 + Xoshiro256** 결정적 PRNG 및 CRC32 무결성 검증
+                  </div>
+                </div>
+              </div>
+              {wipeVerifyResult && (
+                <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 font-semibold">
+                  {wipeVerifyResult.engineSource === 'native-cpp-dll'
+                    ? 'DiskSentinelRecovery.dll'
+                    : wipeVerifyResult.engineSource === 'rust-parity-fallback'
+                    ? 'Recovery Rust Parity'
+                    : 'TS Parity'}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+              <div>
+                <label className="block text-[10px] text-slate-500 mb-1">패턴 모드</label>
+                <select
+                  value={wipePatternMode}
+                  onChange={e => setWipePatternMode(Number(e.target.value) as WipePatternMode)}
+                  disabled={wipeBusy}
+                  className="w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-[11px] text-slate-900 dark:text-slate-100"
+                >
+                  <option value={0}>Mode 0 · 0x00 Zero-Fill</option>
+                  <option value={1}>Mode 1 · 0xFF NAND Fill</option>
+                  <option value={2}>Mode 2 · Constant Byte</option>
+                  <option value={3}>Mode 3 · Xoshiro256** PRNG</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] text-slate-500 mb-1">고정 바이트 (Hex)</label>
+                <input
+                  type="text"
+                  value={wipeConstantHex}
+                  onChange={e => setWipeConstantHex(e.target.value)}
+                  disabled={wipeBusy || wipePatternMode !== 2}
+                  maxLength={4}
+                  className="w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-[11px] text-slate-900 dark:text-slate-100 disabled:opacity-40"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] text-slate-500 mb-1">64-bit PRNG Seed</label>
+                <input
+                  type="text"
+                  value={wipeSeedStr}
+                  onChange={e => setWipeSeedStr(e.target.value)}
+                  disabled={wipeBusy || wipePatternMode !== 3}
+                  className="w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-[11px] text-slate-900 dark:text-slate-100 disabled:opacity-40"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] text-slate-500 mb-1">대상 LBA 오프셋</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={wipeLbaOffset}
+                  onChange={e => setWipeLbaOffset(Math.max(0, Number(e.target.value) || 0))}
+                  disabled={wipeBusy}
+                  className="w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono tabular-nums text-[11px] text-slate-900 dark:text-slate-100"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={wipeBusy}
+                onClick={() => void handleGenerateAndVerifyWipePattern()}
+                className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 whitespace-nowrap"
+              >
+                패턴 버퍼 생성 &amp; 무결성 검증
+              </button>
+              <button
+                type="button"
+                disabled={wipeBusy || !wipeGenResult}
+                onClick={() => void handleSimulateTamperCheck()}
+                className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-[11px] font-semibold cursor-pointer disabled:opacity-40 whitespace-nowrap"
+              >
+                1바이트 변조 탐지 테스트
+              </button>
+              {tauriActive && (
+                <button
+                  type="button"
+                  disabled={wipeBusy}
+                  onClick={() => void handleVerifyPhysicalLbaClean()}
+                  className="px-3 py-1.5 rounded border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                >
+                  실제 LBA #{wipeLbaOffset.toLocaleString()} Read-Back 검증
+                </button>
+              )}
+            </div>
+
+            {(wipeGenResult || wipeVerifyResult) && (
+              <div className="p-2.5 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 font-mono tabular-nums text-[11px] space-y-1">
+                {wipeGenResult && (
+                  <div className="text-slate-600 dark:text-slate-300 truncate">
+                    생성 버퍼 ({wipeGenResult.bufferLength}B · CRC32 0x{wipeGenResult.crc32.toString(16).toUpperCase().padStart(8, '0')}):{' '}
+                    <span className="text-indigo-600 dark:text-indigo-400">
+                      {wipeGenResult.previewBytes.slice(0, 16).map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ')}
+                    </span>
+                  </div>
+                )}
+                {wipeVerifyResult && (
+                  <div className={wipeVerifyResult.verifiedClean ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-red-600 dark:text-red-400 font-semibold'}>
+                    {wipeVerifyResult.verifiedClean
+                      ? `검증 통과 (Verified Clean): ${wipeVerifyResult.checkedBytes}B 전수 일치 · 잔존 바이트 0건 · CRC32 0x${wipeVerifyResult.crc32.toString(16).toUpperCase().padStart(8, '0')}`
+                      : `불일치 감지: ${wipeVerifyResult.residualNonMatchingBytes}바이트 잔존 (최초 오프셋 +0x${wipeVerifyResult.firstMismatchOffset.toString(16).toUpperCase()})`}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 2-Step Serial Confirmation Panel */}

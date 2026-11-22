@@ -1,8 +1,13 @@
 import React from 'react';
-import { DiskDrive, ScanTelemetry } from '../types';
+import { DiskDrive, ScanTelemetry, UsbSurfaceScanPolicy } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
 import { DS_GetNvmeDeepTelemetry } from '../utils/nativeDllBridge';
 import { isNativeHardwareRuntime } from '../utils/nativeDriveEngine';
+import {
+  detectUsbPortBottleneck,
+  generationIdToLabel,
+  resolveDriveUsbTopology
+} from '../utils/usbScanMatrix';
 import { Play, Pause, Square, RotateCcw, FileText, Zap, Clock, Activity, Gauge, Thermometer, Disc, Cpu, Share2, ShieldCheck } from 'lucide-react';
 
 interface TelemetryPanelProps {
@@ -19,6 +24,7 @@ interface TelemetryPanelProps {
   onReset: () => void;
   onOpenReport: () => void;
   onExportResults?: () => void;
+  activeUsbPolicy?: UsbSurfaceScanPolicy;
 }
 
 export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
@@ -34,7 +40,8 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
   onStop,
   onReset,
   onOpenReport,
-  onExportResults
+  onExportResults,
+  activeUsbPolicy
 }) => {
   const formatTime = (totalSeconds: number) => {
     if (isNaN(totalSeconds) || totalSeconds < 0 || totalSeconds === Infinity) return '--:--';
@@ -54,6 +61,8 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
   // NVMe Deep Telemetry (Log Page 02h - null when kernel Log 02h unavailable)
   const nvmeTelemetry = DS_GetNvmeDeepTelemetry(drive);
   const isTauri = isNativeHardwareRuntime() || drive.id.startsWith('drive-tauri-physical-');
+  const usbTopo = resolveDriveUsbTopology(drive);
+  const usbBottleneck = usbTopo ? detectUsbPortBottleneck(drive, usbTopo) : undefined;
 
   const tempPercent = vitals.temperatureC !== null ? Math.min(100, (vitals.temperatureC / 70) * 100) : 0;
   const powerPercent = vitals.powerWatts !== null ? Math.min(100, (vitals.powerWatts / 12) * 100) : 0;
@@ -502,21 +511,42 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               </>
             ) : (
               <>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30">
-                  USB Storage Bus
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30 whitespace-nowrap shrink-0">
+                  {usbTopo ? `${generationIdToLabel(usbTopo.generation)} · ${usbTopo.transport}` : 'USB (Win32 PnP 프로브 미수신)'}
                 </span>
                 <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
-                  프로토콜: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.usbProtocol || 'N/A'}</b> &nbsp;|&nbsp;
-                  컨트롤러: <b className="font-mono text-indigo-600 dark:text-indigo-400">{drive.bridgeChipset || 'N/A'}</b> &nbsp;|&nbsp;
-                  포맷: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.fileSystem || 'N/A'}</b>
+                  브릿지: <b className="font-mono text-indigo-600 dark:text-indigo-400">{usbTopo?.bridgeChipset || drive.bridgeChipset || 'N/A'}</b> &nbsp;|&nbsp;
+                  {activeUsbPolicy ? (
+                    <>
+                      청크: <b className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">{activeUsbPolicy.chunkKb}KB</b> &nbsp;|&nbsp;
+                      판정: <b className="font-mono tabular-nums text-amber-600 dark:text-amber-400">{activeUsbPolicy.slowThresholdMs}/{activeUsbPolicy.criticalThresholdMs}ms</b> &nbsp;|&nbsp;
+                      쿨다운: <b className="font-mono tabular-nums text-slate-600 dark:text-slate-300">{activeUsbPolicy.cooldownEveryNBlocks > 0 ? `${activeUsbPolicy.cooldownEveryNBlocks}블록/${activeUsbPolicy.cooldownMs}ms` : '없음'}</b>
+                    </>
+                  ) : (
+                    <>
+                      프로토콜: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.usbProtocol || 'N/A'}</b> &nbsp;|&nbsp;
+                      포맷: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.fileSystem || 'N/A'}</b>
+                    </>
+                  )}
                 </span>
               </>
+            )}
+            {usbTopo && (drive.type === 'EXTERNAL_SSD' || drive.type === 'EXTERNAL_HDD' || drive.type === 'NVMe') && (
+              <span className="text-[10px] font-mono tabular-nums text-cyan-600 dark:text-cyan-400">
+                [{generationIdToLabel(usbTopo.generation)} / {usbTopo.transport}
+                {activeUsbPolicy ? ` · ${activeUsbPolicy.chunkKb}KB / ${activeUsbPolicy.slowThresholdMs}ms` : ''}]
+              </span>
+            )}
+            {usbBottleneck && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                {usbBottleneck}
+              </span>
             )}
           </div>
 
           <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 dark:text-slate-400 shrink-0">
             <span className={`w-1.5 h-1.5 rounded-full ${isTauri ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
-            <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+            <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1 whitespace-nowrap">
               <ShieldCheck className="w-3 h-3 text-emerald-500" />
               {isTauri ? 'Tauri Win32 Direct IOCTL' : 'Tauri IPC 대기 중'}
             </span>

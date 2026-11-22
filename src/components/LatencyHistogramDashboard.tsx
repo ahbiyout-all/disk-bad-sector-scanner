@@ -8,6 +8,16 @@ import {
   PredictiveFailureReport
 } from '../utils/predictiveFailureAnalysis';
 import {
+  AcousticProfileReport,
+  analyzeAcousticSeekProfile,
+  resolveDriveMediaTypeCode,
+  runAcousticSeekAnalysis
+} from '../utils/predictiveAnalyticsBridge';
+import {
+  ForensicsZScoreReport,
+  runForensicsZScoreAnalysis
+} from '../utils/forensicsDllBridge';
+import {
   BarChart3,
   AlertTriangle,
   ShieldCheck,
@@ -126,6 +136,56 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
       }),
     [blocks, scanMode]
   );
+
+  // Acoustic Seek Instability & RMSSD Jitter (DiskSentinelPredictive.dll parity + Tauri IPC)
+  const syncAcousticProfile = useMemo<AcousticProfileReport | null>(() => {
+    const scannedSorted = blocks
+      .filter(b => b.status !== 'unscanned')
+      .sort((a, b) => a.id - b.id);
+    if (scannedSorted.length < 2) return null;
+    const samples = scannedSorted.map(b => ({
+      lba: b.lba,
+      latencyMs: Number.isFinite(b.responseTimeMs) ? b.responseTimeMs : -1,
+      statusCode:
+        b.status === 'bad'
+          ? 4
+          : b.status === 'critical'
+          ? 3
+          : b.status === 'slow'
+          ? 2
+          : b.status === 'normal'
+          ? 1
+          : 0
+    }));
+    return analyzeAcousticSeekProfile(samples, resolveDriveMediaTypeCode(drive));
+  }, [blocks, drive]);
+
+  const [nativeAcousticProfile, setNativeAcousticProfile] = useState<AcousticProfileReport | null>(null);
+  const [nativeForensicsZScore, setNativeForensicsZScore] = useState<ForensicsZScoreReport | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (isScanning || !syncAcousticProfile) {
+      setNativeAcousticProfile(null);
+      setNativeForensicsZScore(null);
+      return;
+    }
+    runAcousticSeekAnalysis(blocks, drive).then(res => {
+      if (!cancelled && res) {
+        setNativeAcousticProfile(res);
+      }
+    });
+    runForensicsZScoreAnalysis(blocks, drive, scanMode === 'quick' ? 'quick' : 'full').then(res => {
+      if (!cancelled && res) {
+        setNativeForensicsZScore(res);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [blocks, drive, isScanning, scanMode, syncAcousticProfile]);
+
+  const acousticProfile = nativeAcousticProfile ?? syncAcousticProfile;
 
   // Reset emitted zone tracker when switching drives or clearing scan blocks
   useEffect(() => {
@@ -1196,17 +1256,25 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
               </div>
               <div className="text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap">
                 <span>
-                  ≤1σ: {predictiveReport.zBands.normalWithin1Sigma}
+                  ≤1σ: {nativeForensicsZScore ? nativeForensicsZScore.within1SigmaCount : predictiveReport.zBands.normalWithin1Sigma}
                 </span>
                 <span>
-                  1~2σ: {predictiveReport.zBands.elevated1To2Sigma}
+                  1~2σ: {nativeForensicsZScore ? nativeForensicsZScore.sigma1To2Count : predictiveReport.zBands.elevated1To2Sigma}
                 </span>
-                <span className={predictiveReport.zBands.warning2To3Sigma > 0 ? 'text-orange-600 dark:text-orange-400 font-semibold' : ''}>
-                  2~3σ: {predictiveReport.zBands.warning2To3Sigma}
+                <span className={(nativeForensicsZScore ? nativeForensicsZScore.sigma2To3Count : predictiveReport.zBands.warning2To3Sigma) > 0 ? 'text-orange-600 dark:text-orange-400 font-semibold' : ''}>
+                  2~3σ: {nativeForensicsZScore ? nativeForensicsZScore.sigma2To3Count : predictiveReport.zBands.warning2To3Sigma}
                 </span>
-                <span className={predictiveReport.zBands.outlierAbove3Sigma > 0 ? 'text-red-600 dark:text-red-400 font-bold' : ''}>
-                  &gt;3σ: {predictiveReport.zBands.outlierAbove3Sigma}
+                <span className={(nativeForensicsZScore ? nativeForensicsZScore.over3SigmaCount : predictiveReport.zBands.outlierAbove3Sigma) > 0 ? 'text-red-600 dark:text-red-400 font-bold' : ''}>
+                  &gt;3σ: {nativeForensicsZScore ? nativeForensicsZScore.over3SigmaCount : predictiveReport.zBands.outlierAbove3Sigma}
                 </span>
+                {nativeForensicsZScore && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      {nativeForensicsZScore.engineSource === 'native-cpp-dll' ? 'Forensics DLL' : 'Parity Core'}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -1274,6 +1342,94 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
                     : '없음 (연속 ≥3블록 미검출)'}
                 </div>
               </div>
+            </div>
+
+            {/* Acoustic Seek RMSSD Jitter & FTL Micro-Stall Profiling (DiskSentinelPredictive.dll) */}
+            <div className="mt-2.5 pt-2.5 border-t border-slate-200/80 dark:border-slate-800/80">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-1.5">
+                <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-800 dark:text-slate-200">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                  <span>음향 탐색 지터 (RMSSD) &amp; FTL 마이크로 스톨 프로파일</span>
+                </div>
+                {acousticProfile ? (
+                  <div className="text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap">
+                    <span
+                      className={
+                        acousticProfile.acousticGradeCode >= 3
+                          ? 'text-red-600 dark:text-red-400 font-semibold'
+                          : acousticProfile.acousticGradeCode === 2
+                          ? 'text-amber-600 dark:text-amber-400 font-semibold'
+                          : 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                      }
+                    >
+                      {acousticProfile.acousticGradeCode === 3
+                        ? '심각 불안정'
+                        : acousticProfile.acousticGradeCode === 2
+                        ? '공진·GC 지연'
+                        : acousticProfile.acousticGradeCode === 1
+                        ? '경미한 지터'
+                        : '안정'}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>불안정 지수 {acousticProfile.acousticInstabilityScore.toFixed(1)}/100</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{acousticProfile.engineSource === 'native-cpp-dll' ? 'Predictive DLL' : 'Parity Core'}</span>
+                  </div>
+                ) : (
+                  <span className="text-[10px] font-mono text-slate-400">
+                    스캔 샘플 대기 (2블록 이상 필요)
+                  </span>
+                )}
+              </div>
+
+              {acousticProfile && (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-[11px] font-mono tabular-nums">
+                  <div>
+                    <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">
+                      연속 탐색 RMSSD 지터
+                    </div>
+                    <div className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
+                      {acousticProfile.rmssdJitterMs.toFixed(decimalDigits)} ms
+                      <span className="text-[10px] font-normal text-slate-500 dark:text-slate-400 ml-1">
+                        (피크 Δ {acousticProfile.peakStepDeltaMs.toFixed(1)}ms)
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">
+                      순차 vs 스트라이드 지터
+                    </div>
+                    <div className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
+                      {acousticProfile.sequentialJitterMs.toFixed(2)} / {acousticProfile.randomSeekJitterMs.toFixed(2)} ms
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">
+                      마이크로 스톨 버스트
+                    </div>
+                    <div
+                      className={`font-semibold mt-0.5 ${
+                        acousticProfile.microStallBurstCount > 0
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-slate-900 dark:text-slate-100'
+                      }`}
+                    >
+                      {acousticProfile.microStallBurstCount}회
+                      <span className="text-[10px] font-normal text-slate-500 dark:text-slate-400 ml-1">
+                        (공진비 {acousticProfile.resonanceRatio.toFixed(2)}x)
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">
+                      기계·펌웨어 진단 소견
+                    </div>
+                    <div className="font-sans text-[10.5px] font-medium text-slate-700 dark:text-slate-300 mt-0.5 truncate" title={acousticProfile.diagnosticSummary}>
+                      {acousticProfile.diagnosticSummary}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {predictiveReport.contiguousZones.length > 0 && (

@@ -130,7 +130,23 @@ extern "C" {
 
 ---
 
+## 3.1 포렌식 DLL 전수 감사 및 개선 내역 (Audit Findings & Resolutions)
+
+| 점검 대상 함수 | 식별된 결함 / 위험성 | 개선 및 해결 조치 |
+| :--- | :--- | :--- |
+| **`DSF_AnalyzeSectorTelemetryZScore`** | `NaN`/`Inf`·음수 지연이 Welford 평균/분산 누적에 혼입될 위험, 모표준편차($N$) vs 표본표준편차($N-1$) 불일치, 비정렬 입력 시 연속 클러스터 누락 | `!isfinite`/`< 0` 필터링, `validLatCount - 1` 표본 표준편차 적용, `blockId` 오름차순 사전 정렬로 비정렬 텔레메트리에서도 연속 클러스터 정확 탐지 |
+| **`DSF_ComputeExtentBadDensityHeatmap`** | `totalSectors`·`cumulativeOffset` 64비트 누적 오버플로 위험, `badLbaCount <= 1` 불필요 `malloc`/`qsort`, 비중첩 익스텐트 불필요 탐색 | `UINT64_MAX` 포화 가드, `<= 1` 힙 할당 생략, `[minBadLba, maxBadLba]` 범위 사전 스킵으로 탐색 가속 |
+| **`DSF_InspectBootAndPartitionTable`** | `partEntriesLba * secBytes` 및 `sizeBytes` 곱셈 오버플로 위험, GPT UTF-16LE 라벨 비ASCII 문자(`'?'` 손실) | 64비트 오버플로 사전 검사 및 BMP·서로게이트 페어 완전 **UTF-16LE → UTF-8 디코더(`dsf_utf16le_to_utf8`)** 구현 |
+| **`DSF_InspectVbrBootSector`** | EXFAT 시프트(`secShift < 9 || > 12`, `clusShift > 25`) 오류 시에도 `true` 반환 및 FAT32/미식별 버퍼 `true` 폴백 오탐 위험 | NTFS/FAT32/exFAT 2의 거듭제곱 BPB 기하·시프트 범위(`<=32MB` 클러스터 상한) 엄격 검증 및 미식별/비정상 버퍼 `false` 반환으로 차단 |
+
+---
+
 ## 4. 다국어 FFI 연동 및 빌드 가이드
+
+### Tauri v2 데스크톱 FFI (`src-tauri/src/main.rs`) & React 연동
+- Tauri 백엔드는 `LoadLibraryW`로 `DiskSentinelForensics.dll` 6대 심볼을 동적 로드하고, 비Windows 또는 DLL 미배치 환경에서는 동일 수식의 Rust 패리티 폴백(`rust-parity-fallback`)을 자동 실행합니다.
+- 노출된 6대 Tauri IPC 커맨드: `inspect_forensics_dll_status`, `analyze_forensics_sector_zscore`, `compute_forensics_extent_heatmap`, `compute_forensics_sector_entropy`, `inspect_forensics_partition_table`, `inspect_forensics_vbr_sector`.
+- 프론트엔드 `src/utils/forensicsDllBridge.ts`를 통해 `SectorHexPartitionModal`(섀넌 엔트로피·CRC32·VBR·GPT 헤더/배열 무결성)과 `LatencyHistogramDashboard`(Z-Score 열화 밴드)에 실시간 연동됩니다.
 
 ### C# (.NET P/Invoke) 연동 (`DiskSentinelLauncher.cs` 탑재)
 - 런처는 시작 시 동일 폴더의 `DiskSentinelForensics.dll`을 `LoadLibraryW`로 로드하며, `/api/native/status`에서 `forensicsDllLoaded` 플래그를 반환합니다.

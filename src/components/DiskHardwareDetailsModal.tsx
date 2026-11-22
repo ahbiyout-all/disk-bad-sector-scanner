@@ -18,7 +18,8 @@ import {
   Search,
   Copy,
   Check,
-  Gauge
+  Gauge,
+  AlertTriangle
 } from 'lucide-react';
 
 interface DiskHardwareDetailsModalProps {
@@ -181,13 +182,13 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
     busType: drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'Unknown',
     busInterfaceSpeed: drive.interface,
     formFactor: drive.type === 'NVMe' ? 'M.2 NVMe' : drive.isExternal ? 'Portable Storage' : 'Host Storage',
-    controllerVendor: drive.bridgeChipset || 'Host Storage Controller',
+    controllerVendor: drive.bridgeChipset || 'N/A (커널 컨트롤러 미제공)',
     totalCapacityBytes: drive.capacityGb !== null ? Math.round(drive.capacityGb * 1024 * 1024 * 1024) : null,
     totalCapacityGb: drive.capacityGb,
     totalLbaSectors: drive.totalSectors > 0 ? drive.totalSectors : null,
-    logicalSectorSize: 512,
-    physicalSectorSize: 4096,
-    isAdvancedFormat: true,
+    logicalSectorSize: null,
+    physicalSectorSize: null,
+    isAdvancedFormat: null,
     partitionStyle: 'Unknown',
     alignmentStatus: 'N/A',
     mediaType: drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD'
@@ -322,9 +323,9 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
                   {specs.busType}
                 </span>
-                {specs.isAdvancedFormat && (
+                {specs.isAdvancedFormat === true && (
                   <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
-                    4K AF (4096B)
+                    4K AF ({specs.physicalSectorSize}B)
                   </span>
                 )}
               </div>
@@ -380,15 +381,24 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
         {/* Top Quick Status Bar */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-xs">
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">인터페이스 대역폭</div>
-            <div className="font-mono font-bold text-slate-900 dark:text-slate-100 truncate mt-0.5">
-              {specs.busInterfaceSpeed}
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between gap-1">
+              <span>인터페이스 대역폭</span>
+              {specs.linkProbe?.isLinkDowngraded && (
+                <span className="px-1 py-0.2 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[9px] font-bold">
+                  저하됨
+                </span>
+              )}
+            </div>
+            <div className="font-mono font-bold text-slate-900 dark:text-slate-100 truncate mt-0.5" title={specs.busInterfaceSpeed}>
+              {specs.linkProbe?.currentSpeedLabel || specs.busInterfaceSpeed}
             </div>
           </div>
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">물리 섹터 규격</div>
             <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate mt-0.5">
-              {specs.physicalSectorSize}B ({specs.isAdvancedFormat ? 'Advanced Format' : 'Standard'})
+              {specs.physicalSectorSize !== null
+                ? `${specs.physicalSectorSize}B (${specs.isAdvancedFormat ? 'Advanced Format' : 'Standard'})`
+                : 'N/A'}
             </div>
           </div>
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
@@ -520,7 +530,35 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                       {futureClass.protocolStandard}
                     </span>
                   </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
+                    <span className="text-slate-500">실측 링크 협상 속도 (Current / Max)</span>
+                    <span className={`font-mono font-semibold text-right truncate max-w-[240px] ${
+                      specs.linkProbe?.isLinkDowngraded
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-slate-800 dark:text-slate-200'
+                    }`}>
+                      {specs.linkProbe?.currentSpeedLabel
+                        ? `${specs.linkProbe.currentSpeedLabel}${specs.linkProbe.maxSpeedLabel ? ` / Max ${specs.linkProbe.maxSpeedLabel}` : ''}`
+                        : specs.busInterfaceSpeed || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
+                    <span className="text-slate-500">컨트롤러 PCI ID / NVMe 규격</span>
+                    <span className="font-mono text-slate-800 dark:text-slate-200 truncate max-w-[240px]">
+                      {specs.linkProbe
+                        ? `${specs.linkProbe.pciVendorIdHex && specs.linkProbe.pciDeviceIdHex ? `${specs.linkProbe.pciVendorIdHex}:${specs.linkProbe.pciDeviceIdHex}` : 'PCI ID N/A'}${specs.linkProbe.nvmeSpecVersion ? ` · ${specs.linkProbe.nvmeSpecVersion}` : ''} (${specs.linkProbe.probeSource})`
+                        : '커널 프로브 미수신 (N/A)'}
+                    </span>
+                  </div>
                 </div>
+                {specs.linkProbe?.isLinkDowngraded && (
+                  <div className="mt-3 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-300 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500" />
+                    <span>
+                      장치 최대 지원 속도({specs.linkProbe.maxSpeedLabel || 'N/A'}) 대비 현재 협상 링크({specs.linkProbe.currentSpeedLabel || 'N/A'})가 다운그레이드되어 실행 중입니다. 슬롯 레인 공유, 케이블 또는 USB 허브 대역폭 병목을 점검하세요.
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800">
@@ -599,12 +637,16 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">물리 섹터 크기 (Physical Sector)</span>
                     <span className="font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                      {specs.physicalSectorSize} Bytes ({specs.isAdvancedFormat ? '4Kn / 512e Advanced Format' : 'Standard'})
+                      {specs.physicalSectorSize !== null
+                        ? `${specs.physicalSectorSize} Bytes (${specs.isAdvancedFormat ? '4Kn / 512e Advanced Format' : 'Standard'})`
+                        : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">논리 섹터 크기 (Logical Sector)</span>
-                    <span className="font-mono text-slate-800 dark:text-slate-200">{specs.logicalSectorSize} Bytes</span>
+                    <span className="font-mono text-slate-800 dark:text-slate-200">
+                      {specs.logicalSectorSize !== null ? `${specs.logicalSectorSize} Bytes` : 'N/A'}
+                    </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">4K 섹터 정렬 상태 (Alignment)</span>

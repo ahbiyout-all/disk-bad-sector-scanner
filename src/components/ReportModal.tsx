@@ -46,8 +46,8 @@ export const ReportModal: React.FC<ReportModalProps> = ({
   const isHealthy = record.badCount === 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col">
+    <div className="print-modal-root fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
+      <div className="print-modal-card relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col">
         {/* Top Modal Header */}
         <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 print:hidden bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2">
@@ -115,7 +115,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
         </div>
 
         {/* Scrollable Printable Report Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 text-slate-900 dark:text-slate-100 print:text-black print:p-0">
+        <div className="print-modal-scroll p-4 sm:p-6 overflow-y-auto space-y-4 text-slate-900 dark:text-slate-100 print:text-black print:p-0">
           {/* Report Header Title Block */}
           <div className="border-b border-slate-200 dark:border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-end justify-between gap-2.5">
             <div>
@@ -193,7 +193,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
                   {isHealthy ? '정상 판정 (PASS - 배드섹터 0개)' : `주의/경고 판정 (FAIL - 배드섹터 ${record.badCount}개 검출)`}
                 </span>
                 <span className="px-2 py-0.2 rounded text-[10px] font-mono font-bold bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100">
-                  건강도: {record.healthScore}%
+                  건강도: {record.healthScore !== null ? `${record.healthScore}%` : 'N/A'}
                 </span>
               </div>
               <p className="text-[11px] leading-relaxed text-slate-700 dark:text-slate-300">
@@ -242,7 +242,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
                 <ShieldAlert className="w-3.5 h-3.5" />
                 Detected Bad Sector LBA Addresses ({record.badCount})
               </h3>
-              <div className="max-h-44 overflow-y-auto border border-red-500/30 rounded-lg overflow-hidden">
+              <div className="max-h-44 print:max-h-none overflow-y-auto print:overflow-visible border border-red-500/30 rounded-lg overflow-hidden">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-red-950/60 text-red-200 font-semibold font-mono text-[10px]">
                     <tr>

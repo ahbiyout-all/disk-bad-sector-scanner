@@ -1,19 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ErrorLogItem } from '../types';
-import { Terminal, Copy, Check, Trash2, ArrowDown, AlertOctagon, AlertTriangle, ShieldCheck, Download, FileSearch } from 'lucide-react';
+import { Terminal, Copy, Check, Trash2, ArrowDown, AlertOctagon, AlertTriangle, ShieldCheck, Download, FileSearch, Binary, HardDriveDownload } from 'lucide-react';
 
 interface ErrorLogStreamProps {
   logs: ErrorLogItem[];
   onClearLogs: () => void;
   onSelectLogLba?: (lba: number) => void;
   onTraceLogLba?: (lba: number) => void;
+  onOpenHexLogLba?: (lba: number) => void;
+  onCloneLogLba?: (lba: number) => void;
 }
 
 export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
   logs,
   onClearLogs,
   onSelectLogLba,
-  onTraceLogLba
+  onTraceLogLba,
+  onOpenHexLogLba,
+  onCloneLogLba
 }) => {
   const [filter, setFilter] = useState<'all' | 'bad' | 'slow'>('all');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -270,7 +274,21 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
                   <span>{log.description}</span>
                   <span className="text-slate-500 font-mono text-[10px]">LBA #{log.lba.toLocaleString()}</span>
                 </div>
-                <div className="flex items-center gap-2 shrink-0 font-mono">
+                <div className="flex items-center gap-1.5 shrink-0 font-mono flex-wrap justify-end">
+                  {onOpenHexLogLba && log.lba >= 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenHexLogLba(log.lba);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[10px] font-sans font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      title="이 LBA 원시 섹터 Hex 바이트 검사"
+                    >
+                      <Binary className="w-2.5 h-2.5" />
+                      <span>Hex</span>
+                    </button>
+                  )}
                   {onTraceLogLba && log.lba >= 0 && (isBad || isCritical || log.status === 'slow') && (
                     <button
                       type="button"
@@ -285,7 +303,21 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
                       <span>파일 추적</span>
                     </button>
                   )}
-                  <div className="text-slate-400 text-[10px]">
+                  {onCloneLogLba && log.lba >= 0 && (isBad || isCritical || log.status === 'slow') && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCloneLogLba(log.lba);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-sky-600/20 hover:bg-sky-600/40 text-sky-300 border border-sky-500/30 text-[10px] font-sans font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      title="이 LBA 구간을 ddrescue 이미지 백업으로 전달"
+                    >
+                      <HardDriveDownload className="w-2.5 h-2.5" />
+                      <span>백업</span>
+                    </button>
+                  )}
+                  <div className="text-slate-400 text-[10px] tabular-nums ml-0.5">
                     {log.latencyMs > 0 ? `${log.latencyMs}ms` : 'TIMEOUT'}
                   </div>
                 </div>

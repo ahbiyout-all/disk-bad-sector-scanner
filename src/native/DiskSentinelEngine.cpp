@@ -67,14 +67,35 @@ typedef struct {
     uint32_t bufferCapacity;
     uint32_t allocationGranularity;
     bool     isVirtualAllocBuffer;
+    bool     canRead;
+    bool     canWrite;
     uint64_t lastByteOffset;
     bool     offsetValid;
     LARGE_INTEGER timerFrequency;
 } DSDriveContext;
 
+// Lazy 64KB-aligned VirtualAlloc DMA buffer allocation:
+// Metadata/SMART/Tray Guardian queries never incur multi-MB virtual memory churn.
+static bool ds_ensure_aligned_buffer(DSDriveContext* ctx) {
+    if (!ctx) return false;
+    if (ctx->alignedBuffer) return true;
+    if (ctx->bufferCapacity == 0) ctx->bufferCapacity = 2U * 1024U * 1024U;
+    ctx->alignedBuffer = VirtualAlloc(NULL, ctx->bufferCapacity, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (ctx->alignedBuffer) {
+        ctx->isVirtualAllocBuffer = true;
+        return true;
+    }
+    ctx->isVirtualAllocBuffer = false;
+    ctx->alignedBuffer = DS_ALIGNED_ALLOC(ctx->bufferCapacity, 4096);
+    return ctx->alignedBuffer != NULL;
+}
+
 DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* outSectorSize) {
     wchar_t devicePath[64];
     swprintf(devicePath, 64, L"\\\\.\\PhysicalDrive%u", physicalDriveIndex);
+
+    bool canRead = true;
+    bool canWrite = true;
 
     // Module 1: Direct OS Cache Bypass File Open with full sharing flags
     HANDLE hDevice = CreateFileW(
@@ -88,6 +109,7 @@ DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* o
     );
 
     if (hDevice == INVALID_HANDLE_VALUE) {
+        canWrite = false;
         // Fallback to read-only if write rights are not elevated
         hDevice = CreateFileW(
             devicePath,
@@ -101,6 +123,8 @@ DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* o
     }
 
     if (hDevice == INVALID_HANDLE_VALUE) {
+        canRead = false;
+        canWrite = false;
         // Secondary fallback to Query Access (0) for metadata/geometry enumeration without elevation
         hDevice = CreateFileW(
             devicePath,
@@ -128,6 +152,8 @@ DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* o
     ctx->driveIndex = physicalDriveIndex;
     ctx->sectorSize = 512; // Standard default until geometry IOCTL confirms 512 / 4096
     ctx->physicalSectorSize = 4096;
+    ctx->canRead = canRead;
+    ctx->canWrite = canWrite;
 
     SYSTEM_INFO sysInfo;
     GetSystemInfo(&sysInfo);
@@ -182,19 +208,8 @@ DS_API void* DS_CALL DS_OpenDriveDirect(uint32_t physicalDriveIndex, uint32_t* o
     }
 
     ctx->bufferCapacity = optimalBurstBytes;
-    // VirtualAlloc reserves & commits 64KB-aligned OS pages for zero-copy MDL locking in Direct DMA
-    ctx->alignedBuffer = VirtualAlloc(NULL, ctx->bufferCapacity, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (ctx->alignedBuffer) {
-        ctx->isVirtualAllocBuffer = true;
-    } else {
-        ctx->isVirtualAllocBuffer = false;
-        ctx->alignedBuffer = DS_ALIGNED_ALLOC(ctx->bufferCapacity, 4096);
-    }
-    if (!ctx->alignedBuffer) {
-        CloseHandle(hDevice);
-        free(ctx);
-        return NULL;
-    }
+    ctx->alignedBuffer = NULL; // Allocated lazily on first Read/Write DMA I/O
+    ctx->isVirtualAllocBuffer = false;
     QueryPerformanceFrequency(&ctx->timerFrequency);
 
     if (outSectorSize) {
@@ -208,10 +223,50 @@ DS_API bool DS_CALL DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, 
     if (!hDrive || !outResult || count == 0) return false;
     DSDriveContext* ctx = (DSDriveContext*)hDrive;
 
-    uint64_t totalBytesToRead = (uint64_t)count * (uint64_t)ctx->sectorSize;
-    uint64_t targetByteOffset = lba * (uint64_t)ctx->sectorSize;
+    if (!ctx->canRead || ctx->sectorSize == 0) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_ACCESS_DENIED;
+        safe_strncpy(outResult->errorMnemonic, "ACCESS_DENIED", sizeof(outResult->errorMnemonic));
+        return false;
+    }
 
-    // 64-bit integer overflow protection
+    const uint64_t secSize64 = (uint64_t)ctx->sectorSize;
+    const uint64_t maxSignedBytes = (uint64_t)INT64_MAX;
+    if (lba > (maxSignedBytes / secSize64) || (uint64_t)count > (maxSignedBytes / secSize64)) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_INVALID_PARAMETER;
+        safe_strncpy(outResult->errorMnemonic, "LBA_OVERFLOW", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
+    uint64_t totalBytesToRead = (uint64_t)count * secSize64;
+    uint64_t targetByteOffset = lba * secSize64;
+    if (targetByteOffset > (maxSignedBytes - totalBytesToRead)) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_INVALID_PARAMETER;
+        safe_strncpy(outResult->errorMnemonic, "OFFSET_OVERFLOW", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
+    if (!ds_ensure_aligned_buffer(ctx)) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_OUTOFMEMORY;
+        safe_strncpy(outResult->errorMnemonic, "NOMEM_DMA", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
     LARGE_INTEGER offset;
     offset.QuadPart = (LONGLONG)targetByteOffset;
 
@@ -259,7 +314,9 @@ DS_API bool DS_CALL DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, 
 
     QueryPerformanceCounter(&endTick);
 
-    double elapsedMs = (double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart;
+    double elapsedMs = (ctx->timerFrequency.QuadPart > 0)
+        ? ((double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart)
+        : 0.0;
 
     outResult->startLba = lba;
     outResult->sectorCount = count;
@@ -272,6 +329,8 @@ DS_API bool DS_CALL DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, 
             safe_strncpy(outResult->errorMnemonic, "CRC (Data Error)", sizeof(outResult->errorMnemonic));
         } else if (outResult->win32ErrorCode == ERROR_SECTOR_NOT_FOUND) {
             safe_strncpy(outResult->errorMnemonic, "IDNF (Sector Not Found)", sizeof(outResult->errorMnemonic));
+        } else if (outResult->win32ErrorCode == ERROR_ACCESS_DENIED) {
+            safe_strncpy(outResult->errorMnemonic, "ACCESS_DENIED", sizeof(outResult->errorMnemonic));
         } else {
             safe_strncpy(outResult->errorMnemonic, "UNC (Uncorrectable Error)", sizeof(outResult->errorMnemonic));
         }
@@ -294,6 +353,171 @@ DS_API bool DS_CALL DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, 
     return true;
 }
 
+DS_API bool DS_CALL DS_ScanLbaBlockWithPolicy(
+    void* hDrive,
+    uint64_t lba,
+    uint32_t count,
+    uint32_t slowThresholdMs,
+    uint32_t criticalThresholdMs,
+    uint32_t maxRetries,
+    uint32_t retryDelayMs,
+    DSBlockResult* outResult
+) {
+    if (!hDrive || !outResult || count == 0) return false;
+    DSDriveContext* ctx = (DSDriveContext*)hDrive;
+
+    if (!ctx->canRead || ctx->sectorSize == 0) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_ACCESS_DENIED;
+        safe_strncpy(outResult->errorMnemonic, "ACCESS_DENIED", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
+    const uint64_t secSize64 = (uint64_t)ctx->sectorSize;
+    const uint64_t maxSignedBytes = (uint64_t)INT64_MAX;
+    if (lba > (maxSignedBytes / secSize64) || (uint64_t)count > (maxSignedBytes / secSize64)) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_INVALID_PARAMETER;
+        safe_strncpy(outResult->errorMnemonic, "LBA_OVERFLOW", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
+    uint64_t totalBytesToRead = (uint64_t)count * secSize64;
+    uint64_t targetByteOffset = lba * secSize64;
+    if (targetByteOffset > (maxSignedBytes - totalBytesToRead)) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_INVALID_PARAMETER;
+        safe_strncpy(outResult->errorMnemonic, "OFFSET_OVERFLOW", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
+    if (!ds_ensure_aligned_buffer(ctx)) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->statusCode = DS_STATUS_BAD;
+        outResult->win32ErrorCode = ERROR_OUTOFMEMORY;
+        safe_strncpy(outResult->errorMnemonic, "NOMEM_DMA", sizeof(outResult->errorMnemonic));
+        return false;
+    }
+
+    uint32_t safeRetries = (maxRetries > 5U) ? 5U : maxRetries;
+    uint32_t safeDelayMs = (retryDelayMs > 2000U) ? 2000U : retryDelayMs;
+    double slowLimit = (slowThresholdMs > 0U) ? (double)slowThresholdMs : 50.0;
+    double critLimit = (criticalThresholdMs > slowThresholdMs) ? (double)criticalThresholdMs : (slowLimit * 3.0);
+
+    LARGE_INTEGER startTick, endTick;
+    QueryPerformanceCounter(&startTick);
+
+    BOOL readSuccess = FALSE;
+    DWORD lastErr = 0;
+
+    for (uint32_t attempt = 0; attempt <= safeRetries; ++attempt) {
+        if (attempt > 0) {
+            ctx->offsetValid = false;
+            if (safeDelayMs > 0) Sleep(safeDelayMs);
+        }
+
+        LARGE_INTEGER offset;
+        offset.QuadPart = (LONGLONG)targetByteOffset;
+        bool needSeek = !(ctx->offsetValid && ctx->lastByteOffset == targetByteOffset);
+        if (needSeek && !SetFilePointerEx(ctx->hDevice, offset, NULL, FILE_BEGIN)) {
+            ctx->offsetValid = false;
+            lastErr = GetLastError();
+            readSuccess = FALSE;
+        } else {
+            uint64_t remainingBytes = totalBytesToRead;
+            uint64_t cursorOffset = targetByteOffset;
+            readSuccess = TRUE;
+            lastErr = 0;
+
+            while (remainingBytes > 0) {
+                DWORD chunkSize = (remainingBytes > (uint64_t)ctx->bufferCapacity)
+                    ? ctx->bufferCapacity
+                    : (DWORD)remainingBytes;
+                DWORD bytesRead = 0;
+                if (!ReadFile(ctx->hDevice, ctx->alignedBuffer, chunkSize, &bytesRead, NULL) || bytesRead != chunkSize) {
+                    readSuccess = FALSE;
+                    lastErr = GetLastError();
+                    ctx->offsetValid = false;
+                    break;
+                }
+                cursorOffset += chunkSize;
+                remainingBytes -= chunkSize;
+            }
+
+            if (readSuccess) {
+                ctx->lastByteOffset = cursorOffset;
+                ctx->offsetValid = true;
+                break;
+            }
+        }
+
+        bool isTransientUsbErr =
+            (lastErr == ERROR_SEM_TIMEOUT) ||
+            (lastErr == ERROR_IO_DEVICE) ||
+            (lastErr == ERROR_NOT_READY) ||
+            (lastErr == ERROR_BUSY) ||
+            (lastErr == ERROR_GEN_FAILURE) ||
+            (lastErr == ERROR_DEVICE_NOT_CONNECTED) ||
+            (lastErr == 433 /* ERROR_NO_SUCH_DEVICE */);
+        if (!isTransientUsbErr) {
+            break;
+        }
+    }
+
+    QueryPerformanceCounter(&endTick);
+
+    double elapsedMs = (ctx->timerFrequency.QuadPart > 0)
+        ? ((double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart)
+        : 0.0;
+
+    outResult->startLba = lba;
+    outResult->sectorCount = count;
+    outResult->latencyMs = elapsedMs;
+    outResult->win32ErrorCode = readSuccess ? 0 : lastErr;
+
+    if (!readSuccess) {
+        outResult->statusCode = DS_STATUS_BAD;
+        if (outResult->win32ErrorCode == ERROR_CRC) {
+            safe_strncpy(outResult->errorMnemonic, "CRC (Data Error)", sizeof(outResult->errorMnemonic));
+        } else if (outResult->win32ErrorCode == ERROR_SECTOR_NOT_FOUND) {
+            safe_strncpy(outResult->errorMnemonic, "IDNF (Sector Not Found)", sizeof(outResult->errorMnemonic));
+        } else if (outResult->win32ErrorCode == ERROR_SEM_TIMEOUT) {
+            safe_strncpy(outResult->errorMnemonic, "USB_TIMEOUT", sizeof(outResult->errorMnemonic));
+        } else if (outResult->win32ErrorCode == ERROR_ACCESS_DENIED) {
+            safe_strncpy(outResult->errorMnemonic, "ACCESS_DENIED", sizeof(outResult->errorMnemonic));
+        } else {
+            safe_strncpy(outResult->errorMnemonic, "UNC (Uncorrectable Error)", sizeof(outResult->errorMnemonic));
+        }
+    } else {
+        if (elapsedMs < (slowLimit * 0.35)) {
+            outResult->statusCode = DS_STATUS_GOOD;
+            safe_strncpy(outResult->errorMnemonic, "OK", sizeof(outResult->errorMnemonic));
+        } else if (elapsedMs < slowLimit) {
+            outResult->statusCode = DS_STATUS_NORMAL;
+            safe_strncpy(outResult->errorMnemonic, "OK", sizeof(outResult->errorMnemonic));
+        } else if (elapsedMs < critLimit) {
+            outResult->statusCode = DS_STATUS_SLOW;
+            safe_strncpy(outResult->errorMnemonic, "SLOW", sizeof(outResult->errorMnemonic));
+        } else {
+            outResult->statusCode = DS_STATUS_CRITICAL;
+            safe_strncpy(outResult->errorMnemonic, "CRITICAL_LATENCY", sizeof(outResult->errorMnemonic));
+        }
+    }
+
+    return readSuccess ? true : false;
+}
+
 /**
  * Pure Creative Algorithm: Adaptive Burst & Micro-LBA Seeker
  */
@@ -307,18 +531,38 @@ DS_API bool DS_CALL DS_AdaptiveScanChunk(
     uint32_t* outDetectedBadCount
 ) {
     if (!hDrive || chunkSectorCount == 0) return false;
+    DSDriveContext* ctx = (DSDriveContext*)hDrive;
+    if (!ctx->canRead) return false;
     if (burstStep == 0) burstStep = 256; // Default 256 sectors (~1MB)
 
     uint32_t badCount = 0;
     uint64_t currentLba = chunkStartLba;
-    uint64_t endLba = chunkStartLba + chunkSectorCount;
+    uint64_t endLba = (chunkSectorCount > UINT64_MAX - chunkStartLba)
+        ? UINT64_MAX
+        : (chunkStartLba + (uint64_t)chunkSectorCount);
+
+    auto isFatalHandleError = [](DWORD errCode) -> bool {
+        return errCode == ERROR_ACCESS_DENIED ||
+               errCode == ERROR_INVALID_HANDLE ||
+               errCode == ERROR_NO_SUCH_DEVICE ||
+               errCode == ERROR_DEVICE_NOT_CONNECTED ||
+               errCode == ERROR_DEV_NOT_EXIST ||
+               errCode == ERROR_NOT_READY ||
+               errCode == ERROR_BAD_UNIT;
+    };
 
     while (currentLba < endLba) {
-        uint32_t sectorsToTest = (uint32_t)(endLba - currentLba);
-        if (sectorsToTest > burstStep) sectorsToTest = burstStep;
+        uint64_t rem = endLba - currentLba;
+        uint32_t sectorsToTest = (rem > (uint64_t)burstStep) ? burstStep : (uint32_t)rem;
 
         DSBlockResult burstResult;
+        memset(&burstResult, 0, sizeof(burstResult));
         bool ok = DS_ScanLbaBlock(hDrive, currentLba, sectorsToTest, &burstResult);
+
+        if ((!ok || burstResult.statusCode == DS_STATUS_BAD) && isFatalHandleError(burstResult.win32ErrorCode)) {
+            if (outDetectedBadCount) *outDetectedBadCount = badCount;
+            return false;
+        }
 
         // Healthy burst block: skip directly to next burst block (High-speed phase)
         if (ok && burstResult.statusCode <= DS_STATUS_NORMAL) {
@@ -348,8 +592,13 @@ DS_API bool DS_CALL DS_AdaptiveScanChunk(
             if (sub.count <= 4U) {
                 for (uint32_t k = 0; k < sub.count; ++k) {
                     DSBlockResult singleResult;
-                    DS_ScanLbaBlock(hDrive, sub.start + k, 1, &singleResult);
-                    if (singleResult.statusCode >= DS_STATUS_SLOW) {
+                    memset(&singleResult, 0, sizeof(singleResult));
+                    bool singleOk = DS_ScanLbaBlock(hDrive, sub.start + k, 1, &singleResult);
+                    if ((!singleOk || singleResult.statusCode == DS_STATUS_BAD) && isFatalHandleError(singleResult.win32ErrorCode)) {
+                        if (outDetectedBadCount) *outDetectedBadCount = badCount;
+                        return false;
+                    }
+                    if (!singleOk || singleResult.statusCode >= DS_STATUS_SLOW) {
                         if (outBadResults && badCount < maxBadResults) {
                             outBadResults[badCount] = singleResult;
                         }
@@ -358,7 +607,12 @@ DS_API bool DS_CALL DS_AdaptiveScanChunk(
                 }
             } else {
                 DSBlockResult subRes;
+                memset(&subRes, 0, sizeof(subRes));
                 bool subOk = DS_ScanLbaBlock(hDrive, sub.start, sub.count, &subRes);
+                if ((!subOk || subRes.statusCode == DS_STATUS_BAD) && isFatalHandleError(subRes.win32ErrorCode)) {
+                    if (outDetectedBadCount) *outDetectedBadCount = badCount;
+                    return false;
+                }
                 if (subOk && subRes.statusCode <= DS_STATUS_NORMAL) {
                     continue; // Healthy half skipped in 1 ReadFile syscall
                 }
@@ -369,8 +623,13 @@ DS_API bool DS_CALL DS_AdaptiveScanChunk(
                 } else {
                     for (uint32_t k = 0; k < sub.count; ++k) {
                         DSBlockResult singleResult;
-                        DS_ScanLbaBlock(hDrive, sub.start + k, 1, &singleResult);
-                        if (singleResult.statusCode >= DS_STATUS_SLOW) {
+                        memset(&singleResult, 0, sizeof(singleResult));
+                        bool singleOk = DS_ScanLbaBlock(hDrive, sub.start + k, 1, &singleResult);
+                        if ((!singleOk || singleResult.statusCode == DS_STATUS_BAD) && isFatalHandleError(singleResult.win32ErrorCode)) {
+                            if (outDetectedBadCount) *outDetectedBadCount = badCount;
+                            return false;
+                        }
+                        if (!singleOk || singleResult.statusCode >= DS_STATUS_SLOW) {
                             if (outBadResults && badCount < maxBadResults) {
                                 outBadResults[badCount] = singleResult;
                             }
@@ -390,27 +649,48 @@ DS_API bool DS_CALL DS_AdaptiveScanChunk(
     return true;
 }
 
-// Lazy thread-safe 256-entry IEEE 802.3 CRC32 lookup table (0xEDB88320)
-struct DSCrc32LookupTable {
-    uint32_t entries[256];
-    DSCrc32LookupTable() {
+// Lazy thread-safe Slicing-by-8 IEEE 802.3 CRC32 lookup table (0xEDB88320)
+// Processes 8 bytes per loop iteration with independent table lookups for 4x-8x throughput.
+struct DSCrc32Slice8Table {
+    uint32_t t[8][256];
+    DSCrc32Slice8Table() {
         for (uint32_t i = 0; i < 256; ++i) {
             uint32_t c = i;
             for (int k = 0; k < 8; ++k) {
-                c = (c >> 1) ^ ((c & 1) ? 0xEDB88320U : 0U);
+                c = (c >> 1) ^ ((c & 1U) ? 0xEDB88320U : 0U);
             }
-            entries[i] = c;
+            t[0][i] = c;
+        }
+        for (uint32_t i = 0; i < 256; ++i) {
+            for (int slice = 1; slice < 8; ++slice) {
+                uint32_t prev = t[slice - 1][i];
+                t[slice][i] = (prev >> 8) ^ t[0][prev & 0xFFU];
+            }
         }
     }
 };
 
-static const uint32_t* DS_GetCrc32Table() {
-    static const DSCrc32LookupTable s_table;
-    return s_table.entries;
+static const DSCrc32Slice8Table& DS_GetCrc32Slice8() {
+    static const DSCrc32Slice8Table s_table;
+    return s_table;
+}
+
+static inline uint32_t DS_Crc32Slice8Step(const DSCrc32Slice8Table& tbl, uint32_t crc, const uint8_t* p8) {
+    uint32_t lo = (uint32_t)p8[0] | ((uint32_t)p8[1] << 8) | ((uint32_t)p8[2] << 16) | ((uint32_t)p8[3] << 24);
+    uint32_t hi = (uint32_t)p8[4] | ((uint32_t)p8[5] << 8) | ((uint32_t)p8[6] << 16) | ((uint32_t)p8[7] << 24);
+    crc ^= lo;
+    return tbl.t[7][crc & 0xFFU] ^
+           tbl.t[6][(crc >> 8) & 0xFFU] ^
+           tbl.t[5][(crc >> 16) & 0xFFU] ^
+           tbl.t[4][(crc >> 24) & 0xFFU] ^
+           tbl.t[3][hi & 0xFFU] ^
+           tbl.t[2][(hi >> 8) & 0xFFU] ^
+           tbl.t[1][(hi >> 16) & 0xFFU] ^
+           tbl.t[0][(hi >> 24) & 0xFFU];
 }
 
 /**
- * Pure Creative Algorithm: Fast Hardware ECC Parity & LUT-Accelerated CRC32 Generator
+ * Pure Creative Algorithm: Fast Hardware ECC Parity & Slicing-by-8 CRC32 Generator
  */
 DS_API bool DS_CALL DS_CalculateParityChecksum(
     const uint8_t* pBuffer,
@@ -420,32 +700,24 @@ DS_API bool DS_CALL DS_CalculateParityChecksum(
 ) {
     if (!pBuffer || bufferLength == 0) return false;
 
-    const uint32_t* table = DS_GetCrc32Table();
+    const DSCrc32Slice8Table& tbl = DS_GetCrc32Slice8();
     uint32_t crc = 0xFFFFFFFFU;
     uint64_t xorParity = 0ULL;
 
     uint32_t i = 0;
     uint32_t wordLimit = bufferLength & ~7U;
 
-    // 8-byte unrolled loop for O(N) CRC32 LUT + 64-bit Galois XOR parity
+    // 8-byte Slicing-by-8 CRC32 + 64-bit Galois XOR parity
     for (; i < wordLimit; i += 8) {
         uint64_t word64 = 0;
         memcpy(&word64, pBuffer + i, sizeof(uint64_t));
         xorParity ^= word64;
-
-        crc = table[(crc ^ pBuffer[i])     & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 1]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 2]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 3]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 4]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 5]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 6]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 7]) & 0xFFU] ^ (crc >> 8);
+        crc = DS_Crc32Slice8Step(tbl, crc, pBuffer + i);
     }
 
     for (; i < bufferLength; ++i) {
         uint8_t byteVal = pBuffer[i];
-        crc = table[(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
+        crc = tbl.t[0][(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
         uint32_t shift = (i & 7U) * 8U;
         xorParity ^= ((uint64_t)byteVal << shift);
     }
@@ -517,19 +789,36 @@ DS_API bool DS_CALL DS_EvaluateDriveReliability(
     }
 
     if (score < 0.0) score = 0.0;
+    if (score > 100.0) score = 100.0;
     outReport->reliabilityScore = score;
 
+    // Continuous reliability-to-remaining-days model factoring thermal stress, POH, and active UNC/pending faults
+    double normScore = score / 100.0;
+    double baseDays = 10.0 + (1815.0 * pow(normScore, 2.2));
+    double thermalFactor = (outReport->temperatureCelsius > 55)
+        ? fmax(0.35, 1.0 - ((double)(outReport->temperatureCelsius - 55) * 0.03))
+        : 1.0;
+    double pohAgingFactor = (outReport->totalPowerOnHours > 35000)
+        ? fmax(0.55, 1.0 - ((double)(outReport->totalPowerOnHours - 35000) / 120000.0))
+        : 1.0;
+    double activeFaultFactor = 1.0;
+    if (outReport->pendingSectors > 0 || outReport->uncorrectableErrors > 0) {
+        double activeFaults = (double)(outReport->pendingSectors + outReport->uncorrectableErrors);
+        activeFaultFactor = fmax(0.15, 1.0 / (1.0 + activeFaults * 0.35));
+    }
+
+    int32_t computedDays = (int32_t)(baseDays * thermalFactor * pohAgingFactor * activeFaultFactor + 0.5);
+    if (computedDays < 1) computedDays = 1;
+    if (computedDays > 3650) computedDays = 3650;
+    outReport->estimatedRemainingDays = (uint32_t)computedDays;
+
     if (score >= 90.0) {
-        outReport->estimatedRemainingDays = 1825; // ~5 years
         safe_strncpy(outReport->overallGrade, "EXCELLENT", sizeof(outReport->overallGrade));
     } else if (score >= 75.0) {
-        outReport->estimatedRemainingDays = 730;  // ~2 years
         safe_strncpy(outReport->overallGrade, "GOOD", sizeof(outReport->overallGrade));
     } else if (score >= 45.0) {
-        outReport->estimatedRemainingDays = 120;  // ~4 months
         safe_strncpy(outReport->overallGrade, "WARNING", sizeof(outReport->overallGrade));
     } else {
-        outReport->estimatedRemainingDays = 14;   // Critical: immediate backup
         safe_strncpy(outReport->overallGrade, "CRITICAL", sizeof(outReport->overallGrade));
     }
 
@@ -602,8 +891,10 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
             uint8_t threshOutBuf[sizeof(SENDCMDOUTPARAMS) + READ_THRESHOLD_BUFFER_SIZE];
             memset(threshOutBuf, 0, sizeof(threshOutBuf));
             DWORD threshBytes = 0;
+            const DWORD minSmartPayloadBytes = (DWORD)(FIELD_OFFSET(SENDCMDOUTPARAMS, bBuffer) + 362U);
             if (DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &threshIn, sizeof(threshIn),
-                                threshOutBuf, sizeof(threshOutBuf), &threshBytes, NULL) && threshBytes >= sizeof(SENDCMDOUTPARAMS)) {
+                                threshOutBuf, sizeof(threshOutBuf), &threshBytes, NULL) &&
+                threshBytes >= minSmartPayloadBytes) {
                 SENDCMDOUTPARAMS* pThreshOut = (SENDCMDOUTPARAMS*)threshOutBuf;
                 const uint8_t* tData = pThreshOut->bBuffer;
                 for (int i = 0; i < 30; ++i) {
@@ -631,9 +922,11 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
         uint8_t attrOutBuf[sizeof(SENDCMDOUTPARAMS) + READ_ATTRIBUTE_BUFFER_SIZE];
         memset(attrOutBuf, 0, sizeof(attrOutBuf));
         DWORD attrBytes = 0;
+        const DWORD minAttrPayloadBytes = (DWORD)(FIELD_OFFSET(SENDCMDOUTPARAMS, bBuffer) + 362U);
 
         if (DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &attrIn, sizeof(attrIn),
-                            attrOutBuf, sizeof(attrOutBuf), &attrBytes, NULL) && attrBytes >= 528) {
+                            attrOutBuf, sizeof(attrOutBuf), &attrBytes, NULL) &&
+            attrBytes >= minAttrPayloadBytes) {
             SENDCMDOUTPARAMS* pAttrOut = (SENDCMDOUTPARAMS*)attrOutBuf;
             const uint8_t* pData = pAttrOut->bBuffer;
 
@@ -684,7 +977,9 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
         memset(&tempDesc, 0, sizeof(tempDesc));
         DWORD tempBytes = 0;
         if (DeviceIoControl(ctx->hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &tempQuery, sizeof(tempQuery),
-                            &tempDesc, sizeof(tempDesc), &tempBytes, NULL) && tempDesc.InfoCount > 0) {
+                            &tempDesc, sizeof(tempDesc), &tempBytes, NULL) &&
+            tempBytes >= sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR) &&
+            tempDesc.InfoCount > 0) {
             int16_t tempC = tempDesc.TemperatureInfo[0].Temperature;
             if (tempC > -40 && tempC < 150) {
                 DSSmartEntry* entry = &outEntries[count];
@@ -707,7 +1002,9 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
         memset(&checkFailure, 0, sizeof(checkFailure));
         DWORD predBytes = 0;
         if (DeviceIoControl(ctx->hDevice, IOCTL_STORAGE_PREDICT_FAILURE, NULL, 0,
-                            &checkFailure, sizeof(checkFailure), &predBytes, NULL) && checkFailure.PredictFailure) {
+                            &checkFailure, sizeof(checkFailure), &predBytes, NULL) &&
+            predBytes >= sizeof(STORAGE_PREDICT_FAILURE) &&
+            checkFailure.PredictFailure) {
             outEntries[0].healthStatus = 2;
         }
     }
@@ -721,20 +1018,39 @@ DS_API bool DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, ui
         return false;
     }
     DSDriveContext* ctx = (DSDriveContext*)hDrive;
+    if (!ctx->canWrite || !ctx->canRead || ctx->sectorSize == 0) {
+        if (outRecoveredStatus) *outRecoveredStatus = 0;
+        return false;
+    }
+    if (!ds_ensure_aligned_buffer(ctx)) {
+        if (outRecoveredStatus) *outRecoveredStatus = 0;
+        return false;
+    }
+
     uint32_t safeCount = (count == 0) ? 1 : count;
-    uint32_t maxSectorsPerChunk = (ctx->sectorSize > 0) ? (ctx->bufferCapacity / ctx->sectorSize) : 1;
+    uint32_t maxSectorsPerChunk = ctx->bufferCapacity / ctx->sectorSize;
     if (maxSectorsPerChunk == 0) maxSectorsPerChunk = 1;
 
     uint32_t remainingSectors = safeCount;
     uint64_t currentLba = badLba;
     ctx->offsetValid = false;
 
+    const uint64_t secSize64 = (uint64_t)ctx->sectorSize;
+    const uint64_t maxSignedBytes = (uint64_t)INT64_MAX;
+
     while (remainingSectors > 0) {
         uint32_t batch = (remainingSectors > maxSectorsPerChunk) ? maxSectorsPerChunk : remainingSectors;
         DWORD totalBytes = batch * ctx->sectorSize;
 
+        if (currentLba > (maxSignedBytes / secSize64) ||
+            (currentLba * secSize64) > (maxSignedBytes - (uint64_t)totalBytes)) {
+            ctx->offsetValid = false;
+            if (outRecoveredStatus) *outRecoveredStatus = 0;
+            return false;
+        }
+
         LARGE_INTEGER offset;
-        offset.QuadPart = ((LONGLONG)currentLba) * ((LONGLONG)ctx->sectorSize);
+        offset.QuadPart = (LONGLONG)(currentLba * secSize64);
 
         if (!SetFilePointerEx(ctx->hDevice, offset, NULL, FILE_BEGIN)) {
             ctx->offsetValid = false;
@@ -751,6 +1067,10 @@ DS_API bool DS_CALL DS_AttemptSoftSectorRepair(void* hDrive, uint64_t badLba, ui
             if (outRecoveredStatus) *outRecoveredStatus = 0;
             return false;
         }
+
+        // Poison DMA buffer with 0xA5 sentinel bytes prior to read-back so stale zeros
+        // cannot produce a false-positive verification pass.
+        memset(ctx->alignedBuffer, 0xA5, totalBytes);
 
         // Re-verify read-back matches all zeros
         if (!SetFilePointerEx(ctx->hDevice, offset, NULL, FILE_BEGIN)) {
@@ -920,8 +1240,8 @@ DS_API bool DS_CALL DS_CalculateAvx2ChecksumAndZeroCheck(
 ) {
     if (!pBuffer || bufferLength == 0 || !outIsAllZeros || !outCrc32 || !outAvxParity) return false;
 
-    // Single-pass fused Zero-Check + 64-bit XOR Parity + 256-entry IEEE 802.3 CRC32 LUT
-    const uint32_t* table = DS_GetCrc32Table();
+    // Single-pass fused Zero-Check + 64-bit XOR Parity + Slicing-by-8 IEEE 802.3 CRC32
+    const DSCrc32Slice8Table& tbl = DS_GetCrc32Slice8();
     uint32_t crc = 0xFFFFFFFFU;
     uint64_t zeroAcc = 0ULL;
     uint64_t xorParity = 0ULL;
@@ -934,15 +1254,7 @@ DS_API bool DS_CALL DS_CalculateAvx2ChecksumAndZeroCheck(
         memcpy(&word64, pBuffer + i, sizeof(uint64_t));
         zeroAcc |= word64;
         xorParity ^= word64;
-
-        crc = table[(crc ^ pBuffer[i])     & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 1]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 2]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 3]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 4]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 5]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 6]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 7]) & 0xFFU] ^ (crc >> 8);
+        crc = DS_Crc32Slice8Step(tbl, crc, pBuffer + i);
     }
 
     for (; i < bufferLength; ++i) {
@@ -950,7 +1262,7 @@ DS_API bool DS_CALL DS_CalculateAvx2ChecksumAndZeroCheck(
         zeroAcc |= (uint64_t)byteVal;
         uint32_t shift = (i & 7U) * 8U;
         xorParity ^= ((uint64_t)byteVal << shift);
-        crc = table[(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
+        crc = tbl.t[0][(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
     }
 
     *outIsAllZeros = (zeroAcc == 0ULL);
@@ -980,7 +1292,7 @@ static DWORD WINAPI DS_ParallelScanWorker(LPVOID lpParam) {
     void* hDrive = DS_OpenDriveDirect(target->driveIndex, &sectorSize);
     if (!hDrive) {
         QueryPerformanceCounter(&t1);
-        summary->elapsedMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
+        summary->elapsedMs = (freq.QuadPart > 0) ? ((double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart) : 0.0;
         summary->isCompleted = false;
         summary->statusCode = DS_STATUS_BAD;
         return 0;
@@ -1015,8 +1327,9 @@ static DWORD WINAPI DS_ParallelScanWorker(LPVOID lpParam) {
     DS_CloseDrive(hDrive);
 
     QueryPerformanceCounter(&t1);
-    double elapsedMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
-    uint64_t chunkOps = (target->sectorCount + step - 1) / step;
+    double elapsedMs = (freq.QuadPart > 0) ? ((double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart) : 0.0;
+    uint64_t step64 = (uint64_t)step;
+    uint64_t chunkOps = (target->sectorCount / step64) + ((target->sectorCount % step64) != 0 ? 1ULL : 0ULL);
     if (chunkOps == 0) chunkOps = 1;
 
     summary->totalSectorsScanned = target->sectorCount;
@@ -1043,8 +1356,9 @@ DS_API bool DS_CALL DS_ScanMultipleDrivesParallel(
         uint32_t batch = targetCount - offset;
         if (batch > maxWorkers) batch = maxWorkers;
 
-        HANDLE threads[64];
+        HANDLE threads[64] = { NULL };
         DSParallelWorkerArg args[64];
+        memset(args, 0, sizeof(args));
         for (uint32_t i = 0; i < batch; ++i) {
             args[i].target = &targets[offset + i];
             args[i].summary = &outSummaries[offset + i];
@@ -1199,13 +1513,21 @@ DS_API bool DS_CALL DS_ExecuteBitCarvingRecovery(
     safe_strncpy((char*)outResult->signatureName, "Unknown / Unreadable Raw Data", sizeof(outResult->signatureName));
 
     DSDriveContext* ctx = (DSDriveContext*)hDrive;
-    if (ctx->hDevice == INVALID_HANDLE_VALUE) return false;
+    if (ctx->hDevice == INVALID_HANDLE_VALUE || !ctx->canRead) return false;
 
     uint32_t span = (clusterSpan == 0) ? 8 : (clusterSpan > 64 ? 64 : clusterSpan);
     uint32_t sectorBytes = (ctx->sectorSize > 0) ? ctx->sectorSize : 512;
     uint32_t bufferSize = span * sectorBytes;
     if (bufferSize > ctx->bufferCapacity) {
         bufferSize = ctx->bufferCapacity;
+    }
+
+    if (targetLba > ((uint64_t)INT64_MAX / (uint64_t)sectorBytes) ||
+        (targetLba * (uint64_t)sectorBytes) > ((uint64_t)INT64_MAX - (uint64_t)bufferSize)) {
+        return false;
+    }
+    if (!ds_ensure_aligned_buffer(ctx)) {
+        return false;
     }
 
     LARGE_INTEGER offset;
@@ -1288,15 +1610,18 @@ static void PopulateDriveDetailFromHandle(HANDLE hDevice, uint32_t driveIndex, D
     memset(descBuffer, 0, sizeof(descBuffer));
     DWORD bytesReturned = 0;
 
-    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), descBuffer, sizeof(descBuffer), &bytesReturned, NULL)) {
+    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), descBuffer, sizeof(descBuffer), &bytesReturned, NULL) &&
+        bytesReturned >= sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+        DWORD safeReturned = (bytesReturned <= sizeof(descBuffer)) ? bytesReturned : (DWORD)sizeof(descBuffer);
+        descBuffer[safeReturned - 1U] = '\0';
         STORAGE_DEVICE_DESCRIPTOR* pDesc = (STORAGE_DEVICE_DESCRIPTOR*)descBuffer;
 
         char vendorStr[64] = {0};
         char productStr[64] = {0};
-        if (pDesc->VendorIdOffset != 0 && pDesc->VendorIdOffset < sizeof(descBuffer)) {
+        if (pDesc->VendorIdOffset != 0 && pDesc->VendorIdOffset < safeReturned) {
             safe_strncpy(vendorStr, (char*)(descBuffer + pDesc->VendorIdOffset), sizeof(vendorStr));
         }
-        if (pDesc->ProductIdOffset != 0 && pDesc->ProductIdOffset < sizeof(descBuffer)) {
+        if (pDesc->ProductIdOffset != 0 && pDesc->ProductIdOffset < safeReturned) {
             safe_strncpy(productStr, (char*)(descBuffer + pDesc->ProductIdOffset), sizeof(productStr));
         }
 
@@ -1339,14 +1664,14 @@ static void PopulateDriveDetailFromHandle(HANDLE hDevice, uint32_t driveIndex, D
             safe_strncpy(detail->model, "Physical Storage Drive", sizeof(detail->model));
         }
 
-        if (pDesc->SerialNumberOffset != 0 && pDesc->SerialNumberOffset < sizeof(descBuffer)) {
+        if (pDesc->SerialNumberOffset != 0 && pDesc->SerialNumberOffset < safeReturned) {
             safe_strncpy(detail->serialNumber, (char*)(descBuffer + pDesc->SerialNumberOffset), sizeof(detail->serialNumber));
             trimStr(detail->serialNumber);
         } else {
             snprintf(detail->serialNumber, sizeof(detail->serialNumber), "DISK-PHYS-%u", driveIndex);
         }
 
-        if (pDesc->ProductRevisionOffset != 0 && pDesc->ProductRevisionOffset < sizeof(descBuffer)) {
+        if (pDesc->ProductRevisionOffset != 0 && pDesc->ProductRevisionOffset < safeReturned) {
             safe_strncpy(detail->firmwareRev, (char*)(descBuffer + pDesc->ProductRevisionOffset), sizeof(detail->firmwareRev));
             trimStr(detail->firmwareRev);
         } else {
@@ -1464,7 +1789,8 @@ static void PopulateDriveDetailFromHandle(HANDLE hDevice, uint32_t driveIndex, D
     DEVICE_SEEK_PENALTY_DESCRIPTOR seekDesc;
     memset(&seekDesc, 0, sizeof(seekDesc));
     DWORD seekBytes = 0;
-    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &seekQuery, sizeof(seekQuery), &seekDesc, sizeof(seekDesc), &seekBytes, NULL)) {
+    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &seekQuery, sizeof(seekQuery), &seekDesc, sizeof(seekDesc), &seekBytes, NULL) &&
+        seekBytes >= sizeof(DEVICE_SEEK_PENALTY_DESCRIPTOR)) {
         detail->isSsd = (seekDesc.IncursSeekPenalty == 0);
     }
 
@@ -1476,7 +1802,8 @@ static void PopulateDriveDetailFromHandle(HANDLE hDevice, uint32_t driveIndex, D
     DEVICE_TRIM_DESCRIPTOR trimDesc;
     memset(&trimDesc, 0, sizeof(trimDesc));
     DWORD trimBytes = 0;
-    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &trimQuery, sizeof(trimQuery), &trimDesc, sizeof(trimDesc), &trimBytes, NULL)) {
+    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &trimQuery, sizeof(trimQuery), &trimDesc, sizeof(trimDesc), &trimBytes, NULL) &&
+        trimBytes >= sizeof(DEVICE_TRIM_DESCRIPTOR)) {
         detail->isTrimSupported = (trimDesc.TrimEnabled != 0);
     } else {
         detail->isTrimSupported = false;
@@ -1490,7 +1817,9 @@ static void PopulateDriveDetailFromHandle(HANDLE hDevice, uint32_t driveIndex, D
     STORAGE_TEMPERATURE_DATA_DESCRIPTOR tempDesc;
     memset(&tempDesc, 0, sizeof(tempDesc));
     DWORD tempBytes = 0;
-    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &tempQuery, sizeof(tempQuery), &tempDesc, sizeof(tempDesc), &tempBytes, NULL) && tempDesc.InfoCount > 0) {
+    if (DeviceIoControl(hDevice, IOCTL_STORAGE_QUERY_PROPERTY, &tempQuery, sizeof(tempQuery), &tempDesc, sizeof(tempDesc), &tempBytes, NULL) &&
+        tempBytes >= sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR) &&
+        tempDesc.InfoCount > 0) {
         int16_t tC = tempDesc.TemperatureInfo[0].Temperature;
         if (tC > 0 && tC < 150) {
             detail->temperatureCelsius = (uint32_t)tC;
@@ -1576,6 +1905,15 @@ DS_API uint32_t DS_CALL DS_EnumeratePhysicalDrives(
 DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count, DSBlockResult* outResult) {
     if (!hDrive || !outResult || count == 0) return false;
     DSDriveContext* ctx = (DSDriveContext*)hDrive;
+    if (ctx->hDevice == INVALID_HANDLE_VALUE || !ctx->canRead) {
+        outResult->startLba = lba;
+        outResult->sectorCount = count;
+        outResult->latencyMs = -1.0;
+        outResult->win32ErrorCode = (ctx->hDevice == INVALID_HANDLE_VALUE) ? ERROR_INVALID_HANDLE : ERROR_ACCESS_DENIED;
+        outResult->statusCode = DS_STATUS_BAD;
+        safe_strncpy(outResult->errorMnemonic, "VERIFY_NO_HANDLE", sizeof(outResult->errorMnemonic));
+        return false;
+    }
     uint32_t sectorSize = (ctx->sectorSize >= 512) ? ctx->sectorSize : 512;
     uint32_t maxSectorsPerIoctl = 0x4000000U / sectorSize; // 64MB chunks prevent 32-bit DWORD overflow
     if (maxSectorsPerIoctl == 0) maxSectorsPerIoctl = 1;
@@ -1590,6 +1928,13 @@ DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count
 
     while (remaining > 0) {
         uint32_t batch = (remaining > maxSectorsPerIoctl) ? maxSectorsPerIoctl : remaining;
+        uint64_t batchBytes = (uint64_t)batch * (uint64_t)sectorSize;
+        if (currentLba > ((uint64_t)INT64_MAX / (uint64_t)sectorSize) ||
+            (currentLba * (uint64_t)sectorSize) > ((uint64_t)INT64_MAX - batchBytes)) {
+            ok = FALSE;
+            lastErr = ERROR_INVALID_PARAMETER;
+            break;
+        }
         VERIFY_INFORMATION verifyInfo;
         verifyInfo.StartingOffset.QuadPart = ((LONGLONG)currentLba) * ((LONGLONG)sectorSize);
         verifyInfo.Length = batch * sectorSize;
@@ -1616,7 +1961,9 @@ DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count
     QueryPerformanceCounter(&endTick);
 
     if (ok) {
-        double elapsedMs = (double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart;
+        double elapsedMs = (ctx->timerFrequency.QuadPart > 0)
+            ? ((double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart)
+            : 0.0;
         outResult->startLba = lba;
         outResult->sectorCount = count;
         outResult->latencyMs = elapsedMs;
@@ -1633,7 +1980,9 @@ DS_API bool DS_CALL DS_VerifyLbaBlock(void* hDrive, uint64_t lba, uint32_t count
         return DS_ScanLbaBlock(hDrive, lba, count, outResult);
     }
 
-    double elapsedMs = (double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart;
+    double elapsedMs = (ctx->timerFrequency.QuadPart > 0)
+        ? ((double)(endTick.QuadPart - startTick.QuadPart) * 1000.0 / (double)ctx->timerFrequency.QuadPart)
+        : 0.0;
     outResult->startLba = lba;
     outResult->sectorCount = count;
     outResult->latencyMs = elapsedMs;
@@ -1691,8 +2040,10 @@ DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCod
     uint8_t outBuf[sizeof(SENDCMDOUTPARAMS) + READ_ATTRIBUTE_BUFFER_SIZE];
     memset(outBuf, 0, sizeof(outBuf));
     DWORD bytesReturned = 0;
+    const DWORD minSelfTestBytes = (DWORD)(FIELD_OFFSET(SENDCMDOUTPARAMS, bBuffer) + 364U);
     if (!DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &scip, sizeof(scip),
-                         outBuf, sizeof(outBuf), &bytesReturned, NULL) || bytesReturned < 528) {
+                         outBuf, sizeof(outBuf), &bytesReturned, NULL) ||
+        bytesReturned < minSelfTestBytes) {
         return false;
     }
 
@@ -1880,7 +2231,7 @@ DS_API bool DS_CALL DS_ScanMappedLbaRange(
     uint32_t winSecs = (windowSectors == 0) ? ((16U * 1024U * 1024U) / secSize) : windowSectors;
     if (winSecs == 0) winSecs = 1;
 
-    const uint32_t* table = DS_GetCrc32Table();
+    const DSCrc32Slice8Table& tbl = DS_GetCrc32Slice8();
     uint32_t crc = 0xFFFFFFFFU;
     uint64_t parity = 0ULL;
     uint64_t zeroSectors = 0ULL;
@@ -1909,20 +2260,13 @@ DS_API bool DS_CALL DS_ScanMappedLbaRange(
                 memcpy(&w, secPtr + i, sizeof(uint64_t));
                 zeroAcc |= w;
                 parity ^= w;
-                crc = table[(crc ^ secPtr[i])     & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 1]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 2]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 3]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 4]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 5]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 6]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 7]) & 0xFFU] ^ (crc >> 8);
+                crc = DS_Crc32Slice8Step(tbl, crc, secPtr + i);
             }
             for (; i < secSize; ++i) {
                 uint8_t b = secPtr[i];
                 zeroAcc |= (uint64_t)b;
                 parity ^= ((uint64_t)b << ((i & 7U) * 8U));
-                crc = table[(crc ^ b) & 0xFFU] ^ (crc >> 8);
+                crc = tbl.t[0][(crc ^ b) & 0xFFU] ^ (crc >> 8);
             }
             if (zeroAcc == 0ULL) zeroSectors++;
         }
@@ -1957,13 +2301,15 @@ DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
     }
 
     DSDriveContext* ctx = (DSDriveContext*)hDrive;
-    if (ctx->hDevice == INVALID_HANDLE_VALUE) {
-        if (outWin32Error) *outWin32Error = ERROR_INVALID_HANDLE;
+    if (ctx->hDevice == INVALID_HANDLE_VALUE || !ctx->canRead) {
+        if (outWin32Error) *outWin32Error = (ctx->hDevice == INVALID_HANDLE_VALUE) ? ERROR_INVALID_HANDLE : ERROR_ACCESS_DENIED;
         return false;
     }
 
     uint32_t secSize = (ctx->sectorSize >= 512) ? ctx->sectorSize : 512U;
-    if (destStartLba > UINT64_MAX - totalSectors || (destStartLba + totalSectors) > (UINT64_MAX / (uint64_t)secSize)) {
+    uint64_t maxSignedSecs = (uint64_t)INT64_MAX / (uint64_t)secSize;
+    if (startLba > UINT64_MAX - totalSectors || (startLba + totalSectors) > maxSignedSecs ||
+        destStartLba > UINT64_MAX - totalSectors || (destStartLba + totalSectors) > maxSignedSecs) {
         if (outWin32Error) *outWin32Error = ERROR_INVALID_PARAMETER;
         return false;
     }
@@ -2037,29 +2383,34 @@ DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
         }
 
         if (chunkOk && !viewAligned) {
-            // Re-seek to current srcByteOffset and transfer via VirtualAlloc DMA buffer -> mapped pages
-            LARGE_INTEGER reseek;
-            reseek.QuadPart = (LONGLONG)srcByteOffset;
-            if (!SetFilePointerEx(ctx->hDevice, reseek, NULL, FILE_BEGIN)) {
-                ctx->offsetValid = false;
-                if (outWin32Error) *outWin32Error = GetLastError();
+            if (!ds_ensure_aligned_buffer(ctx)) {
+                if (outWin32Error) *outWin32Error = ERROR_OUTOFMEMORY;
                 chunkOk = false;
             } else {
-                while (bytesLeft > 0) {
-                    DWORD ioChunk = (bytesLeft > ctx->bufferCapacity) ? ctx->bufferCapacity : (DWORD)bytesLeft;
-                    DWORD bytesRead = 0;
-                    if (!ReadFile(ctx->hDevice, ctx->alignedBuffer, ioChunk, &bytesRead, NULL) || bytesRead != ioChunk) {
-                        ctx->offsetValid = false;
-                        if (outWin32Error) *outWin32Error = GetLastError();
-                        chunkOk = false;
-                        break;
+                // Re-seek to current srcByteOffset and transfer via VirtualAlloc DMA buffer -> mapped pages
+                LARGE_INTEGER reseek;
+                reseek.QuadPart = (LONGLONG)srcByteOffset;
+                if (!SetFilePointerEx(ctx->hDevice, reseek, NULL, FILE_BEGIN)) {
+                    ctx->offsetValid = false;
+                    if (outWin32Error) *outWin32Error = GetLastError();
+                    chunkOk = false;
+                } else {
+                    while (bytesLeft > 0) {
+                        DWORD ioChunk = (bytesLeft > ctx->bufferCapacity) ? ctx->bufferCapacity : (DWORD)bytesLeft;
+                        DWORD bytesRead = 0;
+                        if (!ReadFile(ctx->hDevice, ctx->alignedBuffer, ioChunk, &bytesRead, NULL) || bytesRead != ioChunk) {
+                            ctx->offsetValid = false;
+                            if (outWin32Error) *outWin32Error = GetLastError();
+                            chunkOk = false;
+                            break;
+                        }
+                        memcpy(dstPtr, ctx->alignedBuffer, bytesRead);
+                        dstPtr += bytesRead;
+                        bytesLeft -= bytesRead;
+                        srcByteOffset += bytesRead;
+                        ctx->lastByteOffset = srcByteOffset;
+                        ctx->offsetValid = true;
                     }
-                    memcpy(dstPtr, ctx->alignedBuffer, bytesRead);
-                    dstPtr += bytesRead;
-                    bytesLeft -= bytesRead;
-                    srcByteOffset += bytesRead;
-                    ctx->lastByteOffset = srcByteOffset;
-                    ctx->offsetValid = true;
                 }
             }
         }
@@ -2082,6 +2433,361 @@ DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
     return allOk;
 }
 
+static bool ds_parse_hex4_at(const wchar_t* s, uint16_t* outVal) {
+    if (!s || !outVal) return false;
+    uint16_t acc = 0;
+    for (int i = 0; i < 4; ++i) {
+        wchar_t c = s[i];
+        uint16_t nibble = 0;
+        if (c >= L'0' && c <= L'9') nibble = (uint16_t)(c - L'0');
+        else if (c >= L'A' && c <= L'F') nibble = (uint16_t)(10 + (c - L'A'));
+        else if (c >= L'a' && c <= L'f') nibble = (uint16_t)(10 + (c - L'a'));
+        else return false;
+        acc = (uint16_t)((acc << 4) | nibble);
+    }
+    *outVal = acc;
+    return true;
+}
+
+static const char* ds_lookup_usb_bridge_name(uint16_t vid) {
+    switch (vid) {
+        case 0x174C: return "ASMedia ASM236x / ASM1153E";
+        case 0x152D: return "JMicron JMS583 / JMS578";
+        case 0x0BDA: return "Realtek RTL9210B / RTS5329";
+        case 0x1058: return "Western Digital USB Bridge";
+        case 0x0BC2: return "Seagate External USB Controller";
+        case 0x0781: return "SanDisk USB Flash Controller";
+        case 0x0951: return "Kingston USB Flash Controller";
+        case 0x04E8: return "Samsung Portable SSD Controller";
+        case 0x05E3: return "Genesys Logic GL3227 Card Reader";
+        case 0x2109: return "VIA Labs VL716 / VL822";
+        case 0x8087: return "Intel Thunderbolt / USB4 Controller";
+        default: return "";
+    }
+}
+
+static bool ds_wcs_icontains(const wchar_t* haystack, const wchar_t* needle) {
+    if (!haystack || !needle || !needle[0]) return false;
+    size_t nlen = wcslen(needle);
+    for (size_t i = 0; haystack[i] != L'\0'; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < nlen; ++j) {
+            wchar_t a = haystack[i + j];
+            wchar_t b = needle[j];
+            if (a == L'\0') { match = false; break; }
+            if (a >= L'A' && a <= L'Z') a = (wchar_t)(a + 32);
+            if (b >= L'A' && b <= L'Z') b = (wchar_t)(b + 32);
+            if (a != b) { match = false; break; }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+DS_API bool DS_CALL DS_ProbeUsbTopology(
+    uint32_t driveIndex,
+    DSUsbTopologyInfo* outInfo
+) {
+    if (!outInfo) return false;
+    memset(outInfo, 0, sizeof(DSUsbTopologyInfo));
+    outInfo->driveIndex = driveIndex;
+
+    typedef LONG (WINAPI* PFN_RegOpenKeyExW)(HKEY, LPCWSTR, DWORD, REGSAM, PHKEY);
+    typedef LONG (WINAPI* PFN_RegQueryValueExW)(HKEY, LPCWSTR, LPDWORD, LPDWORD, LPBYTE, LPDWORD);
+    typedef LONG (WINAPI* PFN_RegCloseKey)(HKEY);
+
+    HMODULE hAdvapi = LoadLibraryA("advapi32.dll");
+    if (!hAdvapi) return false;
+    PFN_RegOpenKeyExW pRegOpenKeyExW = (PFN_RegOpenKeyExW)GetProcAddress(hAdvapi, "RegOpenKeyExW");
+    PFN_RegQueryValueExW pRegQueryValueExW = (PFN_RegQueryValueExW)GetProcAddress(hAdvapi, "RegQueryValueExW");
+    PFN_RegCloseKey pRegCloseKey = (PFN_RegCloseKey)GetProcAddress(hAdvapi, "RegCloseKey");
+
+    wchar_t pnpBuf[260];
+    memset(pnpBuf, 0, sizeof(pnpBuf));
+    bool gotPnp = false;
+
+    if (pRegOpenKeyExW && pRegQueryValueExW && pRegCloseKey) {
+        HKEY hEnum = NULL;
+        if (pRegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Disk\\Enum", 0, KEY_READ, &hEnum) == 0) {
+            wchar_t valName[16];
+            swprintf(valName, 16, L"%u", driveIndex);
+            DWORD valType = 0;
+            DWORD byteLen = sizeof(pnpBuf) - sizeof(wchar_t);
+            if (pRegQueryValueExW(hEnum, valName, NULL, &valType, (LPBYTE)pnpBuf, &byteLen) == 0 && pnpBuf[0] != L'\0') {
+                gotPnp = true;
+            }
+            pRegCloseKey(hEnum);
+        }
+    }
+    FreeLibrary(hAdvapi);
+
+    if (!gotPnp) {
+        return false;
+    }
+
+    char utf8Pnp[160];
+    memset(utf8Pnp, 0, sizeof(utf8Pnp));
+    WideCharToMultiByte(CP_UTF8, 0, pnpBuf, -1, utf8Pnp, sizeof(utf8Pnp) - 1, NULL, NULL);
+    safe_strncpy(outInfo->pnpDeviceId, utf8Pnp, sizeof(outInfo->pnpDeviceId));
+    outInfo->probeSucceeded = 1;
+
+    typedef DWORD (WINAPI* PFN_CM_Locate_DevNodeW)(DWORD*, const wchar_t*, ULONG);
+    typedef DWORD (WINAPI* PFN_CM_Get_Parent)(DWORD*, DWORD, ULONG);
+    typedef DWORD (WINAPI* PFN_CM_Get_Device_IDW)(DWORD, wchar_t*, ULONG, ULONG);
+    typedef DWORD (WINAPI* PFN_CM_Get_DevNode_Registry_PropertyW)(DWORD, ULONG, PULONG, PVOID, PULONG, ULONG);
+
+    bool hasUasp = false;
+    bool hasBot = false;
+    bool hasUsb4 = false;
+    bool hasNvme = false;
+    bool hasSdio = false;
+    bool hasUsb3Ancestor = false;
+
+    HMODULE hCfgMgr = LoadLibraryA("cfgmgr32.dll");
+    if (hCfgMgr) {
+        PFN_CM_Locate_DevNodeW pLocate = (PFN_CM_Locate_DevNodeW)GetProcAddress(hCfgMgr, "CM_Locate_DevNodeW");
+        PFN_CM_Get_Parent pGetParent = (PFN_CM_Get_Parent)GetProcAddress(hCfgMgr, "CM_Get_Parent");
+        PFN_CM_Get_Device_IDW pGetDevId = (PFN_CM_Get_Device_IDW)GetProcAddress(hCfgMgr, "CM_Get_Device_IDW");
+        PFN_CM_Get_DevNode_Registry_PropertyW pGetProp = (PFN_CM_Get_DevNode_Registry_PropertyW)GetProcAddress(hCfgMgr, "CM_Get_DevNode_Registry_PropertyW");
+
+        DWORD curNode = 0;
+        if (pLocate && pGetParent && pGetDevId && pLocate(&curNode, pnpBuf, 0) == 0) {
+            for (int depth = 0; depth < 8; ++depth) {
+                wchar_t nodeId[260];
+                memset(nodeId, 0, sizeof(nodeId));
+                if (pGetDevId(curNode, nodeId, 259, 0) == 0) {
+                    if (ds_wcs_icontains(nodeId, L"USB4") || ds_wcs_icontains(nodeId, L"THUNDERBOLT")) {
+                        hasUsb4 = true;
+                    }
+                    if (ds_wcs_icontains(nodeId, L"ROOT_HUB30") || ds_wcs_icontains(nodeId, L"XHCI")) {
+                        hasUsb3Ancestor = true;
+                    }
+                    if (ds_wcs_icontains(nodeId, L"USB\\VID_") && outInfo->vendorId == 0) {
+                        for (size_t k = 0; nodeId[k] != L'\0'; ++k) {
+                            if ((nodeId[k] == L'V' || nodeId[k] == L'v') &&
+                                (nodeId[k + 1] == L'I' || nodeId[k + 1] == L'i') &&
+                                (nodeId[k + 2] == L'D' || nodeId[k + 2] == L'd') &&
+                                nodeId[k + 3] == L'_') {
+                                uint16_t vid = 0;
+                                if (ds_parse_hex4_at(&nodeId[k + 4], &vid)) outInfo->vendorId = vid;
+                            }
+                            if ((nodeId[k] == L'P' || nodeId[k] == L'p') &&
+                                (nodeId[k + 1] == L'I' || nodeId[k + 1] == L'i') &&
+                                (nodeId[k + 2] == L'D' || nodeId[k + 2] == L'd') &&
+                                nodeId[k + 3] == L'_') {
+                                uint16_t pid = 0;
+                                if (ds_parse_hex4_at(&nodeId[k + 4], &pid)) outInfo->productId = pid;
+                            }
+                        }
+                    }
+                }
+
+                if (pGetProp) {
+                    wchar_t svcBuf[64];
+                    memset(svcBuf, 0, sizeof(svcBuf));
+                    ULONG propType = 0;
+                    ULONG propLen = sizeof(svcBuf) - sizeof(wchar_t);
+                    if (pGetProp(curNode, 5 /* CM_DRP_SERVICE */, &propType, svcBuf, &propLen, 0) == 0 && svcBuf[0] != L'\0') {
+                        if (depth == 1 || outInfo->driverService[0] == '\0') {
+                            char svcUtf8[32];
+                            memset(svcUtf8, 0, sizeof(svcUtf8));
+                            WideCharToMultiByte(CP_UTF8, 0, svcBuf, -1, svcUtf8, sizeof(svcUtf8) - 1, NULL, NULL);
+                            if (ds_wcs_icontains(svcBuf, L"UASPStor") || ds_wcs_icontains(svcBuf, L"USBSTOR") || ds_wcs_icontains(svcBuf, L"stornvme")) {
+                                safe_strncpy(outInfo->driverService, svcUtf8, sizeof(outInfo->driverService));
+                            }
+                        }
+                        if (ds_wcs_icontains(svcBuf, L"UASPStor")) hasUasp = true;
+                        else if (ds_wcs_icontains(svcBuf, L"USBSTOR")) hasBot = true;
+                        else if (ds_wcs_icontains(svcBuf, L"stornvme")) hasNvme = true;
+                        else if (ds_wcs_icontains(svcBuf, L"sdbus") || ds_wcs_icontains(svcBuf, L"sdstor")) hasSdio = true;
+                    }
+                }
+
+                DWORD parentNode = 0;
+                if (pGetParent(&parentNode, curNode, 0) != 0 || parentNode == 0) break;
+                curNode = parentNode;
+            }
+        }
+        FreeLibrary(hCfgMgr);
+    }
+
+    if (outInfo->vendorId != 0) {
+        const char* bridge = ds_lookup_usb_bridge_name(outInfo->vendorId);
+        if (bridge[0] != '\0') safe_strncpy(outInfo->bridgeChipset, bridge, sizeof(outInfo->bridgeChipset));
+    }
+
+    if (hasUsb4 && hasNvme) {
+        outInfo->transportCode = 3;
+        safe_strncpy(outInfo->transportLabel, "PCIe Tunnel (USB4/TB)", sizeof(outInfo->transportLabel));
+        if (outInfo->driverService[0] == '\0') safe_strncpy(outInfo->driverService, "stornvme", sizeof(outInfo->driverService));
+        outInfo->usbGenerationCode = 40;
+        outInfo->negotiatedSpeedMbps = 40000;
+        outInfo->bcdUsb = 0x0400;
+        safe_strncpy(outInfo->usbVersionLabel, "USB4 / Thunderbolt 4 (40 Gbps)", sizeof(outInfo->usbVersionLabel));
+        return true;
+    }
+
+    if (hasUasp) {
+        outInfo->transportCode = 2;
+        safe_strncpy(outInfo->transportLabel, "UASP (UASPStor)", sizeof(outInfo->transportLabel));
+    } else if (hasBot) {
+        outInfo->transportCode = 1;
+        safe_strncpy(outInfo->transportLabel, "BOT (USBSTOR)", sizeof(outInfo->transportLabel));
+    } else if (hasSdio) {
+        outInfo->transportCode = 4;
+        safe_strncpy(outInfo->transportLabel, "SDIO (SD/MMC)", sizeof(outInfo->transportLabel));
+    } else if (hasNvme) {
+        outInfo->transportCode = 3;
+        safe_strncpy(outInfo->transportLabel, "NVMe PCIe Direct", sizeof(outInfo->transportLabel));
+    }
+
+    // Enumerate USB Hub interfaces dynamically to obtain bcdUSB & real negotiated link speed
+    if (outInfo->vendorId != 0) {
+        typedef HANDLE (WINAPI* PFN_SetupDiGetClassDevsW)(const GUID*, const wchar_t*, HWND, DWORD);
+        typedef BOOL (WINAPI* PFN_SetupDiEnumDeviceInterfaces)(HANDLE, PVOID, const GUID*, DWORD, PVOID);
+        typedef BOOL (WINAPI* PFN_SetupDiGetDeviceInterfaceDetailW)(HANDLE, PVOID, PVOID, DWORD, PDWORD, PVOID);
+        typedef BOOL (WINAPI* PFN_SetupDiDestroyDeviceInfoList)(HANDLE);
+
+        HMODULE hSetupApi = LoadLibraryA("setupapi.dll");
+        if (hSetupApi) {
+            PFN_SetupDiGetClassDevsW pGetDevs = (PFN_SetupDiGetClassDevsW)GetProcAddress(hSetupApi, "SetupDiGetClassDevsW");
+            PFN_SetupDiEnumDeviceInterfaces pEnumIf = (PFN_SetupDiEnumDeviceInterfaces)GetProcAddress(hSetupApi, "SetupDiEnumDeviceInterfaces");
+            PFN_SetupDiGetDeviceInterfaceDetailW pGetDetail = (PFN_SetupDiGetDeviceInterfaceDetailW)GetProcAddress(hSetupApi, "SetupDiGetDeviceInterfaceDetailW");
+            PFN_SetupDiDestroyDeviceInfoList pDestroy = (PFN_SetupDiDestroyDeviceInfoList)GetProcAddress(hSetupApi, "SetupDiDestroyDeviceInfoList");
+
+            static const GUID DS_GUID_DEVINTERFACE_USB_HUB = {
+                0xF18A0E88U, 0xC30CU, 0x11D0U, { 0x88, 0x15, 0x00, 0xA0, 0xC9, 0x06, 0xBE, 0xD8 }
+            };
+
+            if (pGetDevs && pEnumIf && pGetDetail && pDestroy) {
+                HANDLE hDevInfo = pGetDevs(&DS_GUID_DEVINTERFACE_USB_HUB, NULL, NULL, 0x12 /* DIGCF_PRESENT | DIGCF_DEVICEINTERFACE */);
+                if (hDevInfo != INVALID_HANDLE_VALUE) {
+                    struct DS_SP_DEV_IF_DATA {
+                        DWORD cbSize;
+                        GUID  InterfaceClassGuid;
+                        DWORD Flags;
+                        ULONG_PTR Reserved;
+                    } ifData;
+
+                    bool foundPort = false;
+                    for (DWORD hubIdx = 0; !foundPort && hubIdx < 32; ++hubIdx) {
+                        memset(&ifData, 0, sizeof(ifData));
+                        ifData.cbSize = sizeof(ifData);
+                        if (!pEnumIf(hDevInfo, NULL, &DS_GUID_DEVINTERFACE_USB_HUB, hubIdx, &ifData)) {
+                            break;
+                        }
+
+                        uint8_t detailBuf[1024];
+                        memset(detailBuf, 0, sizeof(detailBuf));
+                        *(DWORD*)detailBuf = (sizeof(void*) == 8) ? 8U : 6U;
+                        DWORD reqSize = 0;
+                        if (!pGetDetail(hDevInfo, &ifData, detailBuf, sizeof(detailBuf), &reqSize, NULL)) {
+                            continue;
+                        }
+                        const wchar_t* hubPath = (const wchar_t*)(detailBuf + 4);
+                        HANDLE hHub = CreateFileW(hubPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+                        if (hHub == INVALID_HANDLE_VALUE) {
+                            hHub = CreateFileW(hubPath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+                        }
+                        if (hHub == INVALID_HANDLE_VALUE) continue;
+
+                        uint8_t hubNodeInfo[128];
+                        memset(hubNodeInfo, 0, sizeof(hubNodeInfo));
+                        DWORD bytesRet = 0;
+                        uint8_t numPorts = 16;
+                        if (DeviceIoControl(hHub, 0x00220408U /* IOCTL_USB_GET_NODE_INFORMATION */, hubNodeInfo, sizeof(hubNodeInfo),
+                                            hubNodeInfo, sizeof(hubNodeInfo), &bytesRet, NULL) && bytesRet >= 8) {
+                            if (hubNodeInfo[6] > 0) numPorts = hubNodeInfo[6];
+                        }
+                        if (numPorts > 64) numPorts = 64;
+
+                        for (uint8_t p = 1; p <= numPorts; ++p) {
+                            uint8_t connEx[512];
+                            memset(connEx, 0, sizeof(connEx));
+                            *(uint32_t*)connEx = (uint32_t)p;
+                            DWORD exRet = 0;
+                            if (!DeviceIoControl(hHub, 0x00220448U /* IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX */,
+                                                 connEx, sizeof(connEx), connEx, sizeof(connEx), &exRet, NULL) || exRet < 35) {
+                                continue;
+                            }
+                            uint16_t bcdUsb = (uint16_t)(connEx[6] | ((uint16_t)connEx[7] << 8));
+                            uint16_t vid = (uint16_t)(connEx[12] | ((uint16_t)connEx[13] << 8));
+                            uint16_t pid = (uint16_t)(connEx[14] | ((uint16_t)connEx[15] << 8));
+                            uint8_t speedByte = connEx[23];
+                            uint8_t isHub = connEx[24];
+                            uint32_t connStatus = *(const uint32_t*)(connEx + 31);
+
+                            if (connStatus == 1 && isHub == 0 && vid == outInfo->vendorId && pid == outInfo->productId) {
+                                outInfo->bcdUsb = bcdUsb;
+                                outInfo->portNumber = p;
+
+                                uint32_t v2Buf[4] = { (uint32_t)p, 16U, 0x0FU, 0U };
+                                DWORD v2Ret = 0;
+                                uint32_t v2Flags = 0;
+                                if (DeviceIoControl(hHub, 0x0022045CU /* IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 */,
+                                                    v2Buf, sizeof(v2Buf), v2Buf, sizeof(v2Buf), &v2Ret, NULL) && v2Ret >= 16) {
+                                    v2Flags = v2Buf[3];
+                                }
+
+                                if ((v2Flags & 0x04U) != 0U || bcdUsb >= 0x0320U) {
+                                    if (bcdUsb >= 0x0320U) {
+                                        outInfo->usbGenerationCode = 32;
+                                        outInfo->negotiatedSpeedMbps = 20000;
+                                        safe_strncpy(outInfo->usbVersionLabel, "USB 3.2 Gen2x2 (20 Gbps)", sizeof(outInfo->usbVersionLabel));
+                                    } else {
+                                        outInfo->usbGenerationCode = 31;
+                                        outInfo->negotiatedSpeedMbps = 10000;
+                                        safe_strncpy(outInfo->usbVersionLabel, "USB 3.2 Gen2 (10 Gbps)", sizeof(outInfo->usbVersionLabel));
+                                    }
+                                } else if ((v2Flags & 0x01U) != 0U || speedByte >= 3) {
+                                    if (bcdUsb >= 0x0310U) {
+                                        outInfo->usbGenerationCode = 31;
+                                        outInfo->negotiatedSpeedMbps = 10000;
+                                        safe_strncpy(outInfo->usbVersionLabel, "USB 3.2 Gen2 (10 Gbps)", sizeof(outInfo->usbVersionLabel));
+                                    } else {
+                                        outInfo->usbGenerationCode = 30;
+                                        outInfo->negotiatedSpeedMbps = 5000;
+                                        safe_strncpy(outInfo->usbVersionLabel, "USB 3.0 / 3.2 Gen1 (5 Gbps)", sizeof(outInfo->usbVersionLabel));
+                                    }
+                                } else if (speedByte == 2) {
+                                    outInfo->usbGenerationCode = 20;
+                                    outInfo->negotiatedSpeedMbps = 480;
+                                    safe_strncpy(outInfo->usbVersionLabel, "USB 2.0 High-Speed (480 Mbps)", sizeof(outInfo->usbVersionLabel));
+                                } else {
+                                    outInfo->usbGenerationCode = 11;
+                                    outInfo->negotiatedSpeedMbps = 12;
+                                    safe_strncpy(outInfo->usbVersionLabel, "USB 1.1 Full-Speed (12 Mbps)", sizeof(outInfo->usbVersionLabel));
+                                }
+                                foundPort = true;
+                                break;
+                            }
+                        }
+                        CloseHandle(hHub);
+                    }
+                    pDestroy(hDevInfo);
+                }
+            }
+            FreeLibrary(hSetupApi);
+        }
+    }
+
+    if (outInfo->usbGenerationCode == 0 && (hasUasp || hasBot || outInfo->vendorId != 0)) {
+        if (hasUasp || hasUsb3Ancestor) {
+            outInfo->usbGenerationCode = 30;
+            outInfo->negotiatedSpeedMbps = 5000;
+            if (outInfo->bcdUsb == 0) outInfo->bcdUsb = 0x0300;
+            safe_strncpy(outInfo->usbVersionLabel, "USB 3.0 / 3.2 Gen1 (5 Gbps)", sizeof(outInfo->usbVersionLabel));
+        } else {
+            outInfo->usbGenerationCode = 20;
+            outInfo->negotiatedSpeedMbps = 480;
+            if (outInfo->bcdUsb == 0) outInfo->bcdUsb = 0x0200;
+            safe_strncpy(outInfo->usbVersionLabel, "USB 2.0 High-Speed (480 Mbps)", sizeof(outInfo->usbVersionLabel));
+        }
+    }
+
+    return true;
+}
+
 #else
 // Cross-Platform POSIX / Linux Implementation (Supports Memory-Mapped Image I/O + CRC32/Parity)
 #include <fcntl.h>
@@ -2091,22 +2797,42 @@ DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
 #include <stdlib.h>
 #include <string.h>
 
-struct DSCrc32LookupTable {
-    uint32_t entries[256];
-    DSCrc32LookupTable() {
+struct DSCrc32Slice8Table {
+    uint32_t t[8][256];
+    DSCrc32Slice8Table() {
         for (uint32_t i = 0; i < 256; ++i) {
             uint32_t c = i;
             for (int k = 0; k < 8; ++k) {
-                c = (c >> 1) ^ ((c & 1) ? 0xEDB88320U : 0U);
+                c = (c >> 1) ^ ((c & 1U) ? 0xEDB88320U : 0U);
             }
-            entries[i] = c;
+            t[0][i] = c;
+        }
+        for (uint32_t i = 0; i < 256; ++i) {
+            for (int slice = 1; slice < 8; ++slice) {
+                uint32_t prev = t[slice - 1][i];
+                t[slice][i] = (prev >> 8) ^ t[0][prev & 0xFFU];
+            }
         }
     }
 };
 
-static const uint32_t* DS_GetCrc32Table() {
-    static const DSCrc32LookupTable s_table;
-    return s_table.entries;
+static const DSCrc32Slice8Table& DS_GetCrc32Slice8() {
+    static const DSCrc32Slice8Table s_table;
+    return s_table;
+}
+
+static inline uint32_t DS_Crc32Slice8Step(const DSCrc32Slice8Table& tbl, uint32_t crc, const uint8_t* p8) {
+    uint32_t lo = (uint32_t)p8[0] | ((uint32_t)p8[1] << 8) | ((uint32_t)p8[2] << 16) | ((uint32_t)p8[3] << 24);
+    uint32_t hi = (uint32_t)p8[4] | ((uint32_t)p8[5] << 8) | ((uint32_t)p8[6] << 16) | ((uint32_t)p8[7] << 24);
+    crc ^= lo;
+    return tbl.t[7][crc & 0xFFU] ^
+           tbl.t[6][(crc >> 8) & 0xFFU] ^
+           tbl.t[5][(crc >> 16) & 0xFFU] ^
+           tbl.t[4][(crc >> 24) & 0xFFU] ^
+           tbl.t[3][hi & 0xFFU] ^
+           tbl.t[2][(hi >> 8) & 0xFFU] ^
+           tbl.t[1][(hi >> 16) & 0xFFU] ^
+           tbl.t[0][(hi >> 24) & 0xFFU];
 }
 
 DS_API bool DS_CALL DS_CalculateParityChecksum(
@@ -2116,7 +2842,7 @@ DS_API bool DS_CALL DS_CalculateParityChecksum(
     uint64_t* outEccParity
 ) {
     if (!pBuffer || bufferLength == 0) return false;
-    const uint32_t* table = DS_GetCrc32Table();
+    const DSCrc32Slice8Table& tbl = DS_GetCrc32Slice8();
     uint32_t crc = 0xFFFFFFFFU;
     uint64_t xorParity = 0ULL;
     uint32_t i = 0;
@@ -2126,18 +2852,11 @@ DS_API bool DS_CALL DS_CalculateParityChecksum(
         uint64_t word64 = 0;
         memcpy(&word64, pBuffer + i, sizeof(uint64_t));
         xorParity ^= word64;
-        crc = table[(crc ^ pBuffer[i])     & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 1]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 2]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 3]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 4]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 5]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 6]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 7]) & 0xFFU] ^ (crc >> 8);
+        crc = DS_Crc32Slice8Step(tbl, crc, pBuffer + i);
     }
     for (; i < bufferLength; ++i) {
         uint8_t byteVal = pBuffer[i];
-        crc = table[(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
+        crc = tbl.t[0][(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
         xorParity ^= ((uint64_t)byteVal << ((i & 7U) * 8U));
     }
     if (outCrc32) *outCrc32 = ~crc;
@@ -2153,7 +2872,7 @@ DS_API bool DS_CALL DS_CalculateAvx2ChecksumAndZeroCheck(
     uint64_t* outAvxParity
 ) {
     if (!pBuffer || bufferLength == 0 || !outIsAllZeros || !outCrc32 || !outAvxParity) return false;
-    const uint32_t* table = DS_GetCrc32Table();
+    const DSCrc32Slice8Table& tbl = DS_GetCrc32Slice8();
     uint32_t crc = 0xFFFFFFFFU;
     uint64_t zeroAcc = 0ULL;
     uint64_t xorParity = 0ULL;
@@ -2165,20 +2884,13 @@ DS_API bool DS_CALL DS_CalculateAvx2ChecksumAndZeroCheck(
         memcpy(&word64, pBuffer + i, sizeof(uint64_t));
         zeroAcc |= word64;
         xorParity ^= word64;
-        crc = table[(crc ^ pBuffer[i])     & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 1]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 2]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 3]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 4]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 5]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 6]) & 0xFFU] ^ (crc >> 8);
-        crc = table[(crc ^ pBuffer[i + 7]) & 0xFFU] ^ (crc >> 8);
+        crc = DS_Crc32Slice8Step(tbl, crc, pBuffer + i);
     }
     for (; i < bufferLength; ++i) {
         uint8_t byteVal = pBuffer[i];
         zeroAcc |= (uint64_t)byteVal;
         xorParity ^= ((uint64_t)byteVal << ((i & 7U) * 8U));
-        crc = table[(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
+        crc = tbl.t[0][(crc ^ byteVal) & 0xFFU] ^ (crc >> 8);
     }
     *outIsAllZeros = (zeroAcc == 0ULL);
     *outCrc32 = ~crc;
@@ -2253,6 +2965,7 @@ DS_API bool DS_CALL DS_MapSectorWindow(
     memset(outWindow, 0, sizeof(DSMappedSectorWindow));
     DSPosixMappedTarget* mCtx = (DSPosixMappedTarget*)hMapped;
 
+    if (startLba > (UINT64_MAX / (uint64_t)mCtx->sectorSize)) return false;
     uint64_t reqOffset = startLba * (uint64_t)mCtx->sectorSize;
     if (reqOffset >= mCtx->fileSizeBytes) return false;
 
@@ -2314,7 +3027,7 @@ DS_API bool DS_CALL DS_ScanMappedLbaRange(
     uint32_t winSecs = (windowSectors == 0) ? ((16U * 1024U * 1024U) / secSize) : windowSectors;
     if (winSecs == 0) winSecs = 1;
 
-    const uint32_t* table = DS_GetCrc32Table();
+    const DSCrc32Slice8Table& tbl = DS_GetCrc32Slice8();
     uint32_t crc = 0xFFFFFFFFU;
     uint64_t parity = 0ULL;
     uint64_t zeroSectors = 0ULL;
@@ -2340,20 +3053,13 @@ DS_API bool DS_CALL DS_ScanMappedLbaRange(
                 memcpy(&w, secPtr + i, sizeof(uint64_t));
                 zeroAcc |= w;
                 parity ^= w;
-                crc = table[(crc ^ secPtr[i])     & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 1]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 2]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 3]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 4]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 5]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 6]) & 0xFFU] ^ (crc >> 8);
-                crc = table[(crc ^ secPtr[i + 7]) & 0xFFU] ^ (crc >> 8);
+                crc = DS_Crc32Slice8Step(tbl, crc, secPtr + i);
             }
             for (; i < secSize; ++i) {
                 uint8_t b = secPtr[i];
                 zeroAcc |= (uint64_t)b;
                 parity ^= ((uint64_t)b << ((i & 7U) * 8U));
-                crc = table[(crc ^ b) & 0xFFU] ^ (crc >> 8);
+                crc = tbl.t[0][(crc ^ b) & 0xFFU] ^ (crc >> 8);
             }
             if (zeroAcc == 0ULL) zeroSectors++;
         }
@@ -2387,5 +3093,7 @@ DS_API bool DS_CALL DS_StartSmartSelfTest(void*, uint32_t) { return false; }
 DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void*, uint32_t*, uint32_t*) { return false; }
 DS_API bool DS_CALL DS_GetDriveDetails(void*, DSPhysicalDriveDetail*) { return false; }
 DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(void*, uint64_t, uint64_t, const char*, uint64_t, uint32_t, uint64_t*, uint32_t*) { return false; }
+DS_API bool DS_CALL DS_ProbeUsbTopology(uint32_t, DSUsbTopologyInfo*) { return false; }
+DS_API bool DS_CALL DS_ScanLbaBlockWithPolicy(void*, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, DSBlockResult*) { return false; }
 #endif
 

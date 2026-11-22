@@ -120,8 +120,7 @@ function normalizeScanRecord(item: unknown): SavedScanRecord | null {
     !Number.isFinite(r.timestamp) ||
     typeof r.totalBlocks !== 'number' ||
     !Number.isFinite(r.totalBlocks) ||
-    typeof r.healthScore !== 'number' ||
-    !Number.isFinite(r.healthScore)
+    (r.healthScore !== null && (typeof r.healthScore !== 'number' || !Number.isFinite(r.healthScore)))
   ) {
     return null;
   }
@@ -157,7 +156,10 @@ function normalizeScanRecord(item: unknown): SavedScanRecord | null {
     criticalCount: Math.max(0, Math.round(toFiniteNumber(r.criticalCount, 0))),
     badCount: Math.max(0, Math.round(toFiniteNumber(r.badCount, safeBadLbaList.length))),
     badLbaList: safeBadLbaList,
-    healthScore: Math.max(0, Math.min(100, Math.round(r.healthScore))),
+    healthScore:
+      typeof r.healthScore === 'number' && Number.isFinite(r.healthScore)
+        ? Math.max(0, Math.min(100, Math.round(r.healthScore)))
+        : null,
     durationSeconds: Math.max(0, toFiniteNumber(r.durationSeconds, 0)),
     avgLatencyMs: Math.max(0, toFiniteNumber(r.avgLatencyMs, 0)),
     maxLatencyMs: Math.max(0, toFiniteNumber(r.maxLatencyMs, 0)),

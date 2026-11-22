@@ -108,7 +108,27 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(const DSFTelemetrySample*
 DSF_API bool DSF_CALL DSF_ComputeExtentBadDensityHeatmap(const DSFExtentInput* extents, uint32_t extentCount, const uint64_t* badLbas, uint32_t badLbaCount, bool badLbasAlreadySorted, uint32_t cellCount, uint32_t* outCellBadCounts, double* outCellDensityPct, DSFHeatmapSummary* outSummary);
 DSF_API bool DSF_CALL DSF_ComputeSectorEntropyAndPattern(const uint8_t* pBuffer, uint32_t bufferLength, DSFSectorEntropyResult* outResult);
 DSF_API bool DSF_CALL DSF_InspectBootAndPartitionTable(const uint8_t* rawLbaBuffer, uint32_t bufferLength, uint32_t sectorSize, DSFPartitionTableReport* outReport, DSFPartitionRecord* outPartitions, uint32_t maxPartitions);
-DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, uint32_t bufferLength, DSFVbrInfo* outInfo);`;
+DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, uint32_t bufferLength, DSFVbrInfo* outInfo);
+
+// ---------------------------------------------------------------------------
+// DiskSentinelPredictive.h - Pure Creative Prognostic & Acoustic DLL (DiskSentinelPredictive.dll)
+// ---------------------------------------------------------------------------
+DSP_API bool DSP_CALL DSP_GetPredictiveEngineInfo(DSPEngineInfo* outInfo);
+DSP_API bool DSP_CALL DSP_ComputeWeibullRul(const DSPWeibullInput* input, DSPWeibullRulReport* outReport);
+DSP_API bool DSP_CALL DSP_AnalyzeAcousticSeekProfile(const DSPAcousticSample* samples, uint32_t sampleCount, uint32_t mediaType, DSPAcousticProfile* outProfile);
+DSP_API bool DSP_CALL DSP_EvaluateThermalWearStress(const DSPThermalWearInput* input, DSPThermalWearReport* outReport);
+DSP_API bool DSP_CALL DSP_ProjectSmartDegradationTrend(const DSPSmartHistoryPoint* points, uint32_t pointCount, double warningThreshold, double criticalThreshold, uint32_t lowerIsWorse, DSPSmartTrendProjection* outProjection);
+
+// ---------------------------------------------------------------------------
+// DiskSentinelRecovery.h - Pure Creative Deep Recovery & Verify DLL (DiskSentinelRecovery.dll)
+// ---------------------------------------------------------------------------
+DSR_API bool DSR_CALL DSR_GetRecoveryEngineInfo(DSREngineInfo* outInfo);
+DSR_API bool DSR_CALL DSR_InspectRecoveryCarveBuffer(const uint8_t* pBuffer, uint32_t bufferLength, DSRCarveInspectionResult* outResult);
+DSR_API bool DSR_CALL DSR_ParseNtfsMftRecord(uint8_t* recordBytes, uint32_t recordLength, uint32_t recordIndexHint, bool applyUsaFixupInPlace, DSRNtfsMftParsedRecord* outRecord, DSRNtfsDataRun* outRuns, uint32_t maxRuns);
+DSR_API bool DSR_CALL DSR_ScanMftBufferForCluster(const uint8_t* mftBuffer, uint32_t bufferLength, uint32_t mftRecordSize, uint32_t firstRecordIndex, uint64_t batchStartLba, uint32_t sectorSize, uint64_t targetLba, uint64_t targetLcn, DSRNtfsMftParsedRecord* outMatchedRecords, uint32_t maxMatched, uint32_t* outMatchedCount, DSRNtfsDataRun* outRunsFlat, uint32_t maxRunsFlat, uint32_t* outWrittenRuns);
+DSR_API bool DSR_CALL DSR_GenerateWipePatternBuffer(uint8_t* pOutBuffer, uint32_t bufferLength, uint32_t patternMode, uint8_t constantByte, uint64_t seed64, uint64_t lbaOffset, uint32_t* outCrc32);
+DSR_API bool DSR_CALL DSR_VerifyWipedBuffer(const uint8_t* pBuffer, uint32_t bufferLength, uint32_t patternMode, uint8_t constantByte, uint64_t seed64, uint64_t lbaOffset, DSRWipeVerifyReport* outReport);
+DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueIntervalC* inIntervals, uint32_t inCount, uint32_t chunkSectors, DSRDdrescueIntervalC* outCoalesced, uint32_t maxOut, DSRDdrescuePlanSummary* outSummary);`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
@@ -123,14 +143,14 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                  DiskSentinelNativeCore.dll &amp; Forensics.dll 기술 명세서
+                  DiskSentinel Quad-DLL 순수 창작 네이티브 엔진 기술 명세서
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
-                  순수 창작 네이티브 DLL
+                <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 font-semibold whitespace-nowrap">
+                  · Core + Forensics + Predictive + Recovery
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                초저지연 다이렉트 I/O 코어 엔진 + 무의존성 Z-Score·엔트로피·GPT CRC32 포렌식 엔진
+                Direct DMA/mmap · Welford/GPT 포렌식 · Weibull/RMSSD/OLS 예지 · 16종 카빙/MFT/NIST 소거검증
               </p>
             </div>
           </div>
@@ -147,7 +167,7 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
         <div className="flex items-center gap-1 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium overflow-x-auto">
           <button
             onClick={() => setActiveSection('architecture')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSection === 'architecture'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
@@ -159,7 +179,7 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
 
           <button
             onClick={() => setActiveSection('modules')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSection === 'modules'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
@@ -171,7 +191,7 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
 
           <button
             onClick={() => setActiveSection('audit')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSection === 'audit'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
@@ -183,19 +203,19 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
 
           <button
             onClick={() => setActiveSection('api')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSection === 'api'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
-            C/C++ API 명세 (31종)
+            C/C++ API 명세 (43종)
           </button>
 
           <button
             onClick={() => setActiveSection('usage')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSection === 'usage'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
@@ -225,20 +245,27 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
 
               {/* Architecture Diagram */}
               <div className="bg-slate-900 text-slate-100 p-4 rounded-lg font-mono text-[11px] overflow-x-auto border border-slate-800 leading-snug">
-                <div className="text-emerald-400 font-bold mb-2">┌─── Dual Pure Creative DLL Architecture (Core + Forensics) ───┐</div>
-                <div>│                                                                 │</div>
-                <div>│  <span className="text-indigo-400">[DiskSentinelNativeCore.dll] Kernel Direct DMA &amp; mmap Engine</span> │</div>
-                <div>│  └─ Physical: FILE_FLAG_NO_BUFFERING + VirtualAlloc MDL Buffers │</div>
-                <div>│  └─ Image/Clone: CreateFileMappingW / MapViewOfFile Zero-Copy   │</div>
-                <div>│  └─ O(log K) AdaptiveBurstSeeker + ATA/NVMe Log Page 02h        │</div>
-                <div>│  └─ Single-Pass Fused Zero/Parity + 256-Entry LUT CRC32         │</div>
-                <div>│                                                                 │</div>
-                <div>│  <span className="text-purple-400">[DiskSentinelForensics.dll] Zero-Handle Analytics Engine (신규)</span>│</div>
-                <div>│  └─ Welford One-Pass Z-Score &amp; Contiguous Cluster Detector      │</div>
-                <div>│  └─ O(N log M) File-Extent Bad-Density Heatmap Mapper           │</div>
-                <div>│  └─ Shannon Entropy H=-Σp·log2(p) &amp; Erased-NAND Classifier      │</div>
-                <div>│  └─ MBR/GPT Header &amp; Array IEEE CRC32 Validator + VBR Decoder   │</div>
-                <div className="text-emerald-400 font-bold mt-2">└─────────────────────────────────────────────────────────────────┘</div>
+                <div className="text-emerald-400 font-bold mb-2">┌─── Quad-DLL Pure Creative Architecture (Core + Forensics + Predictive + Recovery) ───┐</div>
+                <div>│                                                                                      │</div>
+                <div>│  <span className="text-indigo-400">[DiskSentinelNativeCore.dll] Kernel Direct DMA &amp; mmap Engine</span>                      │</div>
+                <div>│  └─ Physical: FILE_FLAG_NO_BUFFERING + Lazy VirtualAlloc MDL Buffers                 │</div>
+                <div>│  └─ Image/Clone: CreateFileMappingW / MapViewOfFile Zero-Copy                        │</div>
+                <div>│  └─ O(log K) AdaptiveBurstSeeker + Slicing-by-8 CRC32 + ATA/NVMe IOCTL               │</div>
+                <div>│                                                                                      │</div>
+                <div>│  <span className="text-purple-400">[DiskSentinelForensics.dll] Zero-Handle Forensics Engine</span>                          │</div>
+                <div>│  └─ Welford One-Pass Z-Score(N-1) &amp; Contiguous Cluster Detector                      │</div>
+                <div>│  └─ O(N log M) Extent Heatmap + Shannon Entropy + GPT CRC32/UTF-8 + VBR              │</div>
+                <div>│                                                                                      │</div>
+                <div>│  <span className="text-cyan-400">[DiskSentinelPredictive.dll] Pure Creative Prognostic Engine</span>                       │</div>
+                <div>│  └─ Weibull Bathtub Conditional Failure &amp; Median RUL Estimator                       │</div>
+                <div>│  └─ Acoustic Seek RMSSD Jitter, Resonance &amp; FTL GC Stall Profiler                    │</div>
+                <div>│  └─ Arrhenius(0.7eV) Thermal Aging + Centered OLS S.M.A.R.T. Regressor               │</div>
+                <div>│                                                                                      │</div>
+                <div>│  <span className="text-emerald-400">[DiskSentinelRecovery.dll] Deep Recovery, MFT &amp; Sanitize Verify DLL (신규)</span>          │</div>
+                <div>│  └─ 16+ Signature Carver + EOF Boundary &amp; Hamming(1~2bit) Bit-Flip Tolerance         │</div>
+                <div>│  └─ NTFS $MFT USA Fixup + UTF-16LE Name + $DATA Non-Resident Runlist Decoder        │</div>
+                <div>│  └─ NIST SP 800-88 Xoshiro256** Wipe Gen/Verify &amp; ddrescue Interval Planner          │</div>
+                <div className="text-emerald-400 font-bold mt-2">└──────────────────────────────────────────────────────────────────────────────────────┘</div>
               </div>
             </div>
           )}
@@ -302,7 +329,47 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
                   <span>6. 섀넌 엔트로피 &amp; GPT CRC32 검증 (Forensics.dll)</span>
                 </div>
                 <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
-                  256-bin 엔트로피(0~8 bits/byte)와 0xFF 소거 NAND/반복 패턴을 분류하며, LBA 0~33 원시 버퍼에서 GPT 헤더 및 파티션 배열의 IEEE 802.3 CRC32와 NTFS/FAT32/exFAT VBR 구조를 검증합니다.
+                  256-bin 엔트로피(0~8 bits/byte)와 0xFF 소거 NAND/반복 패턴을 분류하며, LBA 0~33 원시 버퍼에서 GPT 헤더 및 파티션 배열의 IEEE 802.3 CRC32(완전 UTF-16LE→UTF-8 라벨)와 NTFS/FAT32/exFAT VBR 구조를 검증합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-sky-600 dark:text-sky-400 text-xs">
+                  <Cpu className="w-4 h-4 shrink-0" />
+                  <span>7. Weibull RUL &amp; 음향 탐색 RMSSD 지터 (Predictive.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  매체별(HDD/SATA/NVMe/USB) 특성 수명(η)·형상 모수(β) 동적 보정으로 30/90/365일 조건부 고장 확률과 잔여 일수(RUL)를 추정하고, 연속 탐색 지연의 RMSSD 지터와 FTL 마이크로 스톨 버스트를 정밀 분리합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-teal-600 dark:text-teal-400 text-xs">
+                  <Activity className="w-4 h-4 shrink-0" />
+                  <span>8. Arrhenius 열가속 &amp; S.M.A.R.T. OLS 회귀 (Predictive.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  Ea=0.7 eV Arrhenius 열가속 방정식으로 35°C 기준 등가 노화 시간과 TBW 잔여 수명을 산출하며, 중심화 2-Pass OLS 회귀로 S.M.A.R.T. R²·30일 전망치·임계치 도달 예상 일수를 계산합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-emerald-600 dark:text-emerald-400 text-xs">
+                  <Binary className="w-4 h-4 shrink-0" />
+                  <span>9. 16종 카빙·Hamming 복원 &amp; NTFS MFT 디코더 (Recovery.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  16+ 파일 시그니처와 EOF 경계(FF D9/IEND/EOCD)를 검증하고 Hamming(1~2bit) 손상 헤더를 구출하며, NTFS $MFT 레코드 USA Fixup과 비거주 $DATA Runlist를 배치 고속 해독합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-indigo-600 dark:text-indigo-400 text-xs">
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>10. NIST Xoshiro256** 소거 검증 &amp; ddrescue 플래너 (Recovery.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  SplitMix64+Xoshiro256** 결정적 PRNG와 IEEE CRC32로 소거 후 Read-Back 잔존 데이터(최초 불일치 오프셋)를 감사하고, ddrescue 도메인 구간을 병합·스케줄링합니다.
                 </p>
               </div>
             </div>
@@ -380,6 +447,30 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
                       물리 드라이브 스캔에는 <code>VirtualAlloc</code> 64KB 정렬 스크래치 재사용, <code>StorageAdapterProperty</code>(<code>MaximumTransferLength</code>) 기반 1~4MB 버스트 스케일링, 순차 LBA 읽기 시 <code>SetFilePointerEx</code> 생략 및 <code>O(log K)</code> 이진 분할을 적용했습니다. 디스크 이미지/복제 경로에는 <code>CreateFileMappingW</code>/<code>MapViewOfFile</code>(POSIX <code>mmap</code>) 영속 섹션 매핑과 <code>ReadFile</code>→매핑 페이지 Direct DMA 기록(<code>DS_OpenMappedTarget</code>~<code>DS_CopyLbaRangeToMappedFile</code>, Rust <code>DS_CopyLbaRangeChunk</code>)을 탑재해 불필요한 버퍼 복사를 제거했습니다.
                     </p>
                   </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-rose-500 mr-2">[v4.6.2 전수 감사 수정]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">Core(C++/Rust) &amp; Forensics DLL 안전성·메모리·Slicing-by-8·Tauri 통합 패치:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      <code>DiskSentinelNativeCore</code>(C++/Rust <code>lib.rs</code>) 양측에 지연 DMA 버퍼 할당(유휴 메모리 절감), <code>StorageAccessAlignmentProperty(6)</code>/<code>StorageDeviceWriteCacheProperty(4)</code>/<code>GET_LENGTH_INFO</code> 실측, 64비트 <code>checked_mul</code> 오버플로 가드, 치명적 핸들 오류 즉시 중단, <code>0xA5</code> 센티넬 포이즈닝 청크 수복, <strong>Slicing-by-8 8배 가속 CRC32</strong>를 동시 적용했습니다. <code>DiskSentinelForensics.dll</code>은 EXFAT/FAT32 시프트 엄격 차단·UTF-16LE 서로게이트→UTF-8 디코딩 패치와 함께 Tauri <code>LoadLibraryW</code> 및 섹터 헥스·Z-Score 대시보드에 정식 연동했습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-violet-500 mr-2">[v4.6.2 신규 DLL]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">DiskSentinelPredictive.dll 출범 &amp; Tauri 네이티브 통합:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      순수 창작 예지보전·음향/지터 엔진(2-파라미터 Weibull RUL + 90% 신뢰구간, RMSSD 음향 시크 지터 &amp; FTL 마이크로 스톨 버스트, Arrhenius 온도 가속 열화 계수, 시간축 중심화 OLS R² 회귀) 5대 C ABI API를 C++ DLL로 구축하고, Tauri <code>LoadLibraryW</code> 동적 FFI 및 GitHub Actions MSVC 빌드 파이프라인에 정식 통합했습니다.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-emerald-500 mr-2">[v4.6.0 감사 &amp; Quad-DLL]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">DiskSentinelRecovery.dll 출범 및 기존 3종 DLL 버그 전수 패치:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      (1) <code>DS_AdaptiveScanChunk</code> 내 <code>DS_ScanLbaBlock</code> 반환 규약으로 인한 치명 핸들 오류 데드코드 수정 및 <code>DS_VerifyLbaBlock</code>·<code>DS_CopyLbaRangeToMappedFile</code> 핸들/QPF 가드 추가, (2) <code>DSP_ComputeWeibullRul</code> NVMe <code>availableSparePct==0</code> 고갈 판정 보강, (3) TypeScript <code>DS_CalculateAvx2ChecksumAndZeroCheck</code> 룩업 테이블 가속 통일, (4) MFT/PE 헤더 32비트 정수 래핑 방어, (5) <code>tauri.conf.json</code> 리소스 번들 및 GitHub Actions 선행 DLL 스테이징과 함께 신규 <code>DiskSentinelRecovery.dll</code> 7대 API를 전 기능에 통합했습니다.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -390,11 +481,11 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-[11px] font-bold text-indigo-500">
-                  DiskSentinelEngine.h + DiskSentinelForensics.h (Standard C ABI Export)
+                  DiskSentinelEngine.h + Forensics.h + Predictive.h + Recovery.h (Standard C ABI Export)
                 </span>
                 <button
                   onClick={() => copyToClipboard(headerCodeSample, 'header-code')}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-xs transition-colors"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-xs transition-colors whitespace-nowrap shrink-0"
                 >
                   {copiedCode === 'header-code' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedCode === 'header-code' ? '복사 완료' : '헤더 복사'}</span>
@@ -411,20 +502,24 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(const uint8_t* vbrSectorBuffer, u
           {activeSection === 'usage' && (
             <div className="space-y-3">
               <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200">
-                타 언어 및 런타임 FFI 바인딩 가이드
+                타 언어 및 런타임 FFI 바인딩 가이드 (Quad-DLL Suite)
               </h4>
               <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
-                표준 `__stdcall` 및 C ABI를 따르므로 <strong>C# (.NET P/Invoke)</strong>, <strong>Python (ctypes)</strong>, <strong>Electron / Node.js (Node-API / koffi)</strong>, <strong>Rust</strong>에서 아무런 래퍼 라이브러리 없이 직접 호출할 수 있습니다.
+                표준 <code>__stdcall</code> 및 C ABI(<code>#pragma pack(push, 8)</code>)를 따르므로 <strong>C# (.NET P/Invoke)</strong>, <strong>Python (ctypes)</strong>, <strong>Tauri / Rust (LoadLibraryW + FFI)</strong>에서 아무런 래퍼 라이브러리 없이 직접 호출할 수 있습니다.
               </p>
 
-              <div className="bg-slate-900 text-slate-200 p-3 rounded-lg font-mono text-[10px] space-y-1 border border-slate-800">
-                <div className="text-slate-400">// Python ctypes 호출 예시 (Core + Forensics):</div>
-                <div>from ctypes import cdll, c_uint32, c_uint8, byref</div>
+              <div className="bg-slate-900 text-slate-200 p-3 rounded-lg font-mono text-[10px] space-y-1 border border-slate-800 overflow-x-auto">
+                <div className="text-slate-400">// Python ctypes 호출 예시 (Core + Forensics + Predictive + Recovery):</div>
+                <div>from ctypes import cdll, c_uint32, byref</div>
                 <div>core_dll = cdll.LoadLibrary('./DiskSentinelNativeCore.dll')</div>
                 <div>forensics_dll = cdll.LoadLibrary('./DiskSentinelForensics.dll')</div>
+                <div>predictive_dll = cdll.LoadLibrary('./DiskSentinelPredictive.dll')</div>
+                <div>recovery_dll = cdll.LoadLibrary('./DiskSentinelRecovery.dll')</div>
                 <div>sector_size = c_uint32(0)</div>
                 <div>h_drive = core_dll.DS_OpenDriveDirect(0, byref(sector_size))</div>
+                <div># predictive_dll.DSP_ComputeWeibullRul(byref(weibull_in), byref(weibull_out))</div>
                 <div># forensics_dll.DSF_ComputeSectorEntropyAndPattern(buf, 512, byref(entropy_res))</div>
+                <div># recovery_dll.DSR_InspectRecoveryCarveBuffer(buf, 512, byref(carve_res))</div>
               </div>
             </div>
           )}

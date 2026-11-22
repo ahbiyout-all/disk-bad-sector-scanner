@@ -171,6 +171,24 @@ typedef struct {
     uint8_t  isReadOnly;             // 1 if mapped read-only
     uint8_t  reserved[6];
 } DSMappedSectorWindow;
+
+// Real Win32 USB Host/Hub Topology & Transport Descriptor Metadata
+typedef struct {
+    uint32_t driveIndex;
+    uint32_t usbGenerationCode;      // 0=Non-USB/Unknown, 11=USB 1.1, 20=USB 2.0, 30=USB 3.0/3.2 Gen1, 31=USB 3.2 Gen2, 32=USB 3.2 Gen2x2, 40=USB4/TB
+    uint32_t negotiatedSpeedMbps;    // 12, 480, 5000, 10000, 20000, 40000
+    uint32_t transportCode;          // 0=Unknown, 1=BOT (USBSTOR), 2=UASP (UASPStor), 3=PCIe Tunnel (stornvme/USB4), 4=SDIO
+    uint16_t vendorId;
+    uint16_t productId;
+    uint16_t bcdUsb;                 // e.g. 0x0200, 0x0300, 0x0310, 0x0320, 0x0400
+    uint8_t  portNumber;
+    uint8_t  probeSucceeded;
+    char     usbVersionLabel[32];    // e.g. "USB 3.2 Gen2 (10 Gbps)"
+    char     transportLabel[32];     // e.g. "UASP (UASPStor)"
+    char     driverService[32];      // e.g. "UASPStor", "USBSTOR", "stornvme"
+    char     bridgeChipset[64];
+    char     pnpDeviceId[160];
+} DSUsbTopologyInfo;
 #pragma pack(pop)
 
 
@@ -374,6 +392,28 @@ DS_API bool DS_CALL DS_CopyLbaRangeToMappedFile(
     uint32_t chunkSectors,
     uint64_t* outBytesCopied,
     uint32_t* outWin32Error
+);
+
+/**
+ * 26. Probe Win32 PnP & USB Hub Topology Descriptor (bcdUSB, BOT vs UASP, Hub Port Speed, VID/PID)
+ */
+DS_API bool DS_CALL DS_ProbeUsbTopology(
+    uint32_t driveIndex,
+    DSUsbTopologyInfo* outInfo
+);
+
+/**
+ * 27. Policy-Tuned Hardware LBA Scan with Transient USB Retry Backoff & Dynamic Latency Classification
+ */
+DS_API bool DS_CALL DS_ScanLbaBlockWithPolicy(
+    void* hDrive,
+    uint64_t lba,
+    uint32_t count,
+    uint32_t slowThresholdMs,
+    uint32_t criticalThresholdMs,
+    uint32_t maxRetries,
+    uint32_t retryDelayMs,
+    DSBlockResult* outResult
 );
 
 #ifdef __cplusplus

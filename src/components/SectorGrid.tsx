@@ -36,6 +36,7 @@ interface SectorGridProps {
   onOpenHexInspector?: (lba: number) => void;
   onTraceLbaFile?: (lba: number) => void;
   onCloneLbaRange?: (range: { startLba: number; endLba: number }) => void;
+  onOpenRemapForBlock?: (blockId: number, lba: number) => void;
 }
 
 export type ZoomLevel = 1 | 2 | 4 | 8;
@@ -171,6 +172,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
   onOpenHexInspector,
   onTraceLbaFile,
   onCloneLbaRange,
+  onOpenRemapForBlock,
 }) => {
   const [hoveredBlock, setHoveredBlock] = useState<SectorBlock | null>(null);
   const [highlightFilter, setHighlightFilter] = useState<'all' | 'bad' | 'slow'>('all');
@@ -1009,6 +1011,18 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
               >
                 <HardDriveDownload className="w-2.5 h-2.5" />
                 <span>이미지 백업</span>
+              </button>
+            )}
+
+            {/* Direct S.M.A.R.T. Remap Trigger for Bad/Slow Block */}
+            {onOpenRemapForBlock && (inspectedBlock.status === 'bad' || inspectedBlock.status === 'critical' || inspectedBlock.status === 'slow') && (
+              <button
+                onClick={() => onOpenRemapForBlock(inspectedBlock.id, inspectedBlock.lba)}
+                className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                title="이 블록 LBA를 S.M.A.R.T. 섹터 재매핑(제로필) 도구로 즉시 열기"
+              >
+                <Wrench className="w-2.5 h-2.5" />
+                <span>S.M.A.R.T. 수복</span>
               </button>
             )}
           </div>

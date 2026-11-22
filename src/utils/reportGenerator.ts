@@ -32,20 +32,25 @@ export function createScanRecordFromSession(
     ? Number((speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1))
     : undefined;
 
-  // Calculate dynamic health score based on scan findings and base drive health
-  let calculatedHealth = drive.healthScore ?? 100;
-  if (badCount > 0) {
-    calculatedHealth = Math.max(10, calculatedHealth - (badCount * 12));
+  // Calculate dynamic health score only when base hardware health or scanned blocks exist
+  let calculatedHealth: number | null = null;
+  if (drive.healthScore !== null || scannedBlocks.length > 0) {
+    let score = drive.healthScore ?? 100;
+    if (badCount > 0) {
+      score = Math.max(10, score - (badCount * 12));
+    }
+    if (criticalCount > 0) {
+      score = Math.max(20, score - (criticalCount * 3));
+    }
+    if (slowCount > 0) {
+      score = Math.max(30, score - (slowCount * 0.5));
+    }
+    calculatedHealth = Math.round(score);
   }
-  if (criticalCount > 0) {
-    calculatedHealth = Math.max(20, calculatedHealth - (criticalCount * 3));
-  }
-  if (slowCount > 0) {
-    calculatedHealth = Math.max(30, calculatedHealth - (slowCount * 0.5));
-  }
-  calculatedHealth = Math.round(calculatedHealth);
 
-  let recommendation = '디스크 상태가 매우 양호합니다. 정기적인 백업을 유지하며 정상 사용하십시오.';
+  let recommendation = scannedBlocks.length === 0
+    ? '검사된 섹터가 없어 표면 무결성 판정을 보류합니다.'
+    : '디스크 상태가 매우 양호합니다. 정기적인 백업을 유지하며 정상 사용하십시오.';
   if (badCount >= 5) {
     recommendation = '【긴급 조치 요망】 다수의 물리적/논리적 배드섹터가 검출되었습니다. 즉시 중요 데이터를 다른 드라이브로 백업하고, 드라이브 교체 또는 RMA 서비스를 신청하십시오.';
   } else if (badCount > 0) {
@@ -114,7 +119,7 @@ export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[
     ['검사 모드 (Scan Mode)', record.scanMode === 'quick' ? '빠른 검사 (Quick Scan)' : '정밀 검사 (Full Scan)'],
     ['적용 검사 방식 (Method)', record.scanMethodName || '표준 다이렉트 I/O'],
     ['검사 소요 시간 (Duration)', `${Math.floor(record.durationSeconds / 60)}분 ${Math.floor(record.durationSeconds % 60)}초`],
-    ['종합 건강 지수 (Health Score)', `${record.healthScore}%`],
+    ['종합 건강 지수 (Health Score)', record.healthScore !== null ? `${record.healthScore}%` : 'N/A'],
     ['총 블록 수 (Total Blocks)', String(record.totalBlocks)],
     ['정상 블록 (<10ms)', String(record.goodCount)],
     ['일반 블록 (<50ms)', String(record.normalCount)],
@@ -299,9 +304,9 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
 
   // Left: Health Score Box
   const score = record.healthScore;
-  const scoreColor = score >= 80 ? '#10B981' : score >= 50 ? '#F59E0B' : '#EF4444';
-  const scoreGrade = score >= 90 ? 'EXCELLENT' : score >= 75 ? 'GOOD' : score >= 50 ? 'WARNING' : 'CRITICAL';
-  const scoreGradeKo = score >= 75 ? '정상 / 양호' : score >= 50 ? '주의 요망' : '위험 (교체 권장)';
+  const scoreColor = score === null ? '#64748B' : score >= 80 ? '#10B981' : score >= 50 ? '#F59E0B' : '#EF4444';
+  const scoreGrade = score === null ? 'UNAVAILABLE' : score >= 90 ? 'EXCELLENT' : score >= 75 ? 'GOOD' : score >= 50 ? 'WARNING' : 'CRITICAL';
+  const scoreGradeKo = score === null ? '계측 불가' : score >= 75 ? '정상 / 양호' : score >= 50 ? '주의 요망' : '위험 (교체 권장)';
 
   ctx.fillStyle = scoreColor;
   ctx.beginPath();
@@ -313,7 +318,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
   ctx.fillText('종합 건강 지수', 95, currentY + 46);
 
   ctx.font = 'bold 44px -apple-system, BlinkMacSystemFont, "Segoe UI", monospace';
-  ctx.fillText(`${score}%`, 95, currentY + 92);
+  ctx.fillText(score !== null ? `${score}%` : 'N/A', 95, currentY + 92);
 
   ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.fillText(`${scoreGrade} (${scoreGradeKo})`, 95, currentY + 118);
@@ -550,10 +555,14 @@ export function exportOtelMetricsReport(record: SavedScanRecord) {
   const driveLabel = `device="${sanitize(record.driveModel)}",serial="${sanitize(record.driveSerial)}"`;
 
   const lines = [
-    '# HELP storage_device_health_score Overall health score of the storage device (0-100)',
-    '# TYPE storage_device_health_score gauge',
-    `storage_device_health_score{${driveLabel}} ${record.healthScore}`,
-    '',
+    ...(record.healthScore !== null
+      ? [
+          '# HELP storage_device_health_score Overall health score of the storage device (0-100)',
+          '# TYPE storage_device_health_score gauge',
+          `storage_device_health_score{${driveLabel}} ${record.healthScore}`,
+          ''
+        ]
+      : []),
     '# HELP storage_device_bad_sectors_total Total count of physical bad sectors detected',
     '# TYPE storage_device_bad_sectors_total counter',
     `storage_device_bad_sectors_total{${driveLabel}} ${record.badCount}`,

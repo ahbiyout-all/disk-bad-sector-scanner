@@ -1,7 +1,7 @@
 @echo off
 REM ===================================================================
 REM Disk Bad Sector Scanner - Native Core DLL & Host Compilation Script
-REM Builds: DiskSentinelNativeCore.dll & DiskBadSectorScanner.exe
+REM Builds: DiskSentinelNativeCore.dll, DiskSentinelForensics.dll, DiskSentinelPredictive.dll, DiskSentinelRecovery.dll & DiskBadSectorScanner.exe
 REM Target: Windows x64 / ARM64
 REM Author: AhBiYout (CISNet)
 REM Repository: https://github.com/AhBiYout-all/disk-bad-sector-scanner
@@ -61,6 +61,32 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo -^> MSVC compiler: Compiling Pure Creative DiskSentinelPredictive.dll (x64 Release)...
+cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDSP_EXPORTS ^
+    src\native\DiskSentinelPredictive.cpp ^
+    /Fe"%OUTPUT_DIR%\DiskSentinelPredictive.dll" ^
+    /Fo"%OUTPUT_DIR%\DiskSentinelPredictive.obj"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MSVC Predictive DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo -^> MSVC compiler: Compiling Pure Creative DiskSentinelRecovery.dll (x64 Release)...
+cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDSR_EXPORTS ^
+    src\native\DiskSentinelRecovery.cpp ^
+    /Fe"%OUTPUT_DIR%\DiskSentinelRecovery.dll" ^
+    /Fo"%OUTPUT_DIR%\DiskSentinelRecovery.obj"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MSVC Recovery DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 if exist "src\native\DiskSentinelLauncher.cpp" (
     echo -^> MSVC: Compiling native desktop host DiskBadSectorScanner.exe...
     cl.exe /O2 /MD /EHsc /D_WIN32 src\native\DiskSentinelLauncher.cpp ^
@@ -97,6 +123,32 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo -^> MinGW G++: Compiling Pure Creative DiskSentinelPredictive.dll (x64 Release)...
+g++.exe -O3 -shared -m64 -DDSP_EXPORTS -D_WIN32 ^
+    src/native/DiskSentinelPredictive.cpp ^
+    -o "%OUTPUT_DIR%/DiskSentinelPredictive.dll" ^
+    -Wl,--out-implib,"%OUTPUT_DIR%/libDiskSentinelPredictive.a"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MinGW Predictive DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo -^> MinGW G++: Compiling Pure Creative DiskSentinelRecovery.dll (x64 Release)...
+g++.exe -O3 -shared -m64 -DDSR_EXPORTS -D_WIN32 ^
+    src/native/DiskSentinelRecovery.cpp ^
+    -o "%OUTPUT_DIR%/DiskSentinelRecovery.dll" ^
+    -Wl,--out-implib,"%OUTPUT_DIR%/libDiskSentinelRecovery.a"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MinGW Recovery DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 if exist "src\native\DiskSentinelLauncher.cpp" (
     echo -^> MinGW: Compiling native desktop host DiskBadSectorScanner.exe...
     g++.exe -O3 -m64 -mwindows src/native/DiskSentinelLauncher.cpp ^
@@ -109,6 +161,8 @@ echo ===================================================================
 echo   BUILD SUCCESSFUL:
 echo     - %OUTPUT_DIR%\DiskSentinelNativeCore.dll
 echo     - %OUTPUT_DIR%\DiskSentinelForensics.dll
+echo     - %OUTPUT_DIR%\DiskSentinelPredictive.dll
+echo     - %OUTPUT_DIR%\DiskSentinelRecovery.dll
 echo ===================================================================
 
 if /i "%1"=="--no-pause" goto EXIT_NOW

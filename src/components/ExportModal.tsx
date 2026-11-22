@@ -150,9 +150,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <div className="text-right">
                 <div className="text-[10px] text-slate-400 uppercase font-sans">건강 점수</div>
                 <div className={`text-base font-bold ${
-                  record.healthScore >= 80 ? 'text-emerald-500' : record.healthScore >= 50 ? 'text-amber-500' : 'text-red-500'
+                  record.healthScore === null
+                    ? 'text-slate-400'
+                    : record.healthScore >= 80
+                    ? 'text-emerald-500'
+                    : record.healthScore >= 50
+                    ? 'text-amber-500'
+                    : 'text-red-500'
                 }`}>
-                  {record.healthScore}%
+                  {record.healthScore !== null ? `${record.healthScore}%` : 'N/A'}
                 </div>
               </div>
               <div className="text-right">

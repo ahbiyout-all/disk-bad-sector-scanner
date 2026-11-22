@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import {
   CustomSmartThresholdRule,
@@ -8,6 +8,13 @@ import {
   SmartHistorySnapshot
 } from '../types';
 import { matchesDriveRecord } from '../utils/smartHistoryStore';
+import {
+  projectSmartDegradationTrend,
+  runSmartTrendProjection,
+  SmartHistoryPointInput,
+  SmartTrendProjectionReport
+} from '../utils/predictiveAnalyticsBridge';
+import { isTauriDesktopRuntime } from '../utils/nativeDriveEngine';
 import {
   TrendingUp,
   AlertTriangle,
@@ -159,6 +166,13 @@ interface SeriesAnalysis {
   projectedNext2: number | null;
   latestThreshold: number | null;
   maxValidValue: number;
+  olsTimeProjection: SmartTrendProjectionReport | null;
+  trendInput: {
+    timePts: SmartHistoryPointInput[];
+    warnThresh: number;
+    critThresh: number;
+    lowerIsWorse: boolean;
+  } | null;
 }
 
 export function parseSmartRawCount(attr?: DriveSmartAttribute): number | null {
@@ -297,7 +311,20 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
   );
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [snapshotSavedHint, setSnapshotSavedHint] = useState<boolean>(false);
+  const [nativeProjections, setNativeProjections] = useState<Record<number, SmartTrendProjectionReport>>({});
   const svgRef = useRef<SVGSVGElement>(null);
+  const isMountedRef = useRef<boolean>(true);
+  const activeDriveIdRef = useRef<string>(drive.id);
+  activeDriveIdRef.current = drive.id;
+  const trendReqIdRef = useRef<number>(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      trendReqIdRef.current += 1;
+    };
+  }, []);
 
   const hasLiveSmart = drive.smartAttributes.length > 0;
 
@@ -457,6 +484,32 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
       const latestThreshold = validThresholds.length > 0 ? validThresholds[validThresholds.length - 1] : null;
       const maxValidValue = validPairs.length > 0 ? Math.max(...validPairs.map(p => p.y)) : 0;
 
+      const customRule = customSmartThresholds.find(r => r.enabled && r.attributeId === config.id);
+      const lowerIsWorse = valueMode === 'normalized' || customRule?.comparisonMode === 'normalized_below';
+      const warnThresh =
+        customRule && ((valueMode === 'raw' && customRule.comparisonMode === 'raw_above') || valueMode === 'normalized')
+          ? (customRule.warningThreshold ?? -1)
+          : -1;
+      const critThresh =
+        customRule && ((valueMode === 'raw' && customRule.comparisonMode === 'raw_above') || valueMode === 'normalized')
+          ? (customRule.criticalThreshold ?? (valueMode === 'normalized' && latestThreshold !== null ? latestThreshold : -1))
+          : valueMode === 'normalized' && latestThreshold !== null
+          ? latestThreshold
+          : -1;
+
+      const timePts = values
+        .map((v, idx) => {
+          const ts = timelinePoints[idx]?.timestamp;
+          if (v === null || !Number.isFinite(ts) || ts <= 0) return null;
+          return { timestampSec: Math.round(ts / 1000), value: v };
+        })
+        .filter((p): p is { timestampSec: number; value: number } => p !== null);
+
+      const olsTimeProjection =
+        timePts.length >= 2
+          ? projectSmartDegradationTrend(timePts, warnThresh, critThresh, lowerIsWorse)
+          : null;
+
       return {
         config,
         values,
@@ -471,10 +524,56 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
         projectedNext1,
         projectedNext2,
         latestThreshold,
-        maxValidValue
+        maxValidValue,
+        olsTimeProjection,
+        trendInput:
+          timePts.length >= 2
+            ? { timePts, warnThresh, critThresh, lowerIsWorse }
+            : null
       };
     });
-  }, [availableAttributes, timelinePoints, valueMode]);
+  }, [availableAttributes, timelinePoints, valueMode, customSmartThresholds]);
+
+  useEffect(() => {
+    const reqId = ++trendReqIdRef.current;
+    const reqDriveId = drive.id;
+    setNativeProjections({});
+
+    if (!isTauriDesktopRuntime()) {
+      return;
+    }
+
+    const candidates = seriesAnalyses.filter(s => s.trendInput !== null);
+    if (candidates.length === 0) {
+      return;
+    }
+
+    void Promise.all(
+      candidates.map(async s => {
+        const inp = s.trendInput!;
+        const report = await runSmartTrendProjection(
+          inp.timePts,
+          inp.warnThresh,
+          inp.critThresh,
+          inp.lowerIsWorse
+        );
+        return [s.config.id, report] as const;
+      })
+    ).then(entries => {
+      if (
+        !isMountedRef.current ||
+        activeDriveIdRef.current !== reqDriveId ||
+        trendReqIdRef.current !== reqId
+      ) {
+        return;
+      }
+      const nextMap: Record<number, SmartTrendProjectionReport> = {};
+      for (const [id, rep] of entries) {
+        nextMap[id] = rep;
+      }
+      setNativeProjections(nextMap);
+    });
+  }, [drive.id, seriesAnalyses]);
 
   const activeSeries = useMemo(
     () => seriesAnalyses.filter(s => activeIds.includes(s.config.id)),
@@ -805,6 +904,21 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             <span className="font-mono tabular-nums">누적 이력 {historicalCount}건</span>
             <span aria-hidden="true">·</span>
             <span>01h 읽기 오류율 · 05h 치환 섹터 · C5h 보류 섹터</span>
+            {(Object.values(nativeProjections) as SmartTrendProjectionReport[]).some(p => p?.engineSource === 'native-cpp-dll') ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                  DiskSentinelPredictive.dll OLS
+                </span>
+              </>
+            ) : (Object.values(nativeProjections) as SmartTrendProjectionReport[]).some(p => p?.engineSource === 'rust-parity-fallback') ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono text-slate-500 dark:text-slate-400">
+                  Rust Parity OLS
+                </span>
+              </>
+            ) : null}
           </p>
         </div>
 
@@ -1549,13 +1663,25 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
               <div className="flex items-center gap-3 text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0 flex-wrap">
                 {activeSeries
                   .filter(s => s.slopePerSession !== null)
-                  .map(s => (
-                    <span key={s.config.id} className="whitespace-nowrap">
-                      <strong className={s.config.textClass}>{s.config.hexId}h</strong>{' '}
-                      기울기 {s.slopePerSession! > 0 ? `+${s.slopePerSession.toLocaleString()}` : s.slopePerSession!.toLocaleString()}/회
-                      {canProject && s.projectedNext1 !== null ? ` → 예상 ${s.projectedNext1.toLocaleString()}` : ''}
-                    </span>
-                  ))}
+                  .map(s => {
+                    const proj = nativeProjections[s.config.id] ?? s.olsTimeProjection;
+                    const daysHit =
+                      proj && proj.projectedDaysToCritical > 0
+                        ? ` · 위험도달 ~${Math.round(proj.projectedDaysToCritical)}일`
+                        : proj && proj.projectedDaysToWarning > 0
+                        ? ` · 주의도달 ~${Math.round(proj.projectedDaysToWarning)}일`
+                        : '';
+                    const r2Label = proj && proj.observationSpanDays > 0 ? ` (R²=${proj.rSquared.toFixed(2)})` : '';
+                    return (
+                      <span key={s.config.id} className="whitespace-nowrap">
+                        <strong className={s.config.textClass}>{s.config.hexId}h</strong>{' '}
+                        기울기 {s.slopePerSession! > 0 ? `+${s.slopePerSession.toLocaleString()}` : s.slopePerSession!.toLocaleString()}/회
+                        {canProject && s.projectedNext1 !== null ? ` → 예상 ${s.projectedNext1.toLocaleString()}` : ''}
+                        {r2Label}
+                        {daysHit}
+                      </span>
+                    );
+                  })}
               </div>
             )}
           </div>

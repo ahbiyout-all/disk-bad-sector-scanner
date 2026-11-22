@@ -6,13 +6,44 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
 @media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
   body {
     background-color: white !important;
     color: black !important;
   }
   header, footer, nav, button {
     display: none !important;
+  }
+  .print-modal-root {
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+  .print-modal-card {
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: white !important;
+  }
+  .print-modal-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
   }
 }
 

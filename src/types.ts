@@ -1,6 +1,8 @@
 export type SectorState = 'unscanned' | 'good' | 'normal' | 'slow' | 'critical' | 'bad';
 
-export type MainAppTab = 'scan' | 'logs' | 'health' | 'smart' | 'history';
+export type MainAppTab = 'fleet' | 'scan' | 'logs' | 'integrity' | 'health' | 'smart' | 'history';
+
+export type AppLocale = 'ko' | 'en';
 
 export type StorageCategory = 'HDD' | 'SATA_SSD' | 'NVME_SSD' | 'USB_STORAGE' | 'SD_CARD';
 
@@ -19,7 +21,9 @@ export type SpecializedScanMethodId =
   | 'usb_bot_jitter_filter'
   | 'usb_uasp_streaming'
   | 'usb_fat_meta_priority'
-  | 'usb_power_glitch_recovery';
+  | 'usb_power_glitch_recovery'
+  | 'usb_usb4_pcie_direct'
+  | 'usb_fake_capacity_guard';
 
 export interface ScanMethodDefinition {
   id: SpecializedScanMethodId;
@@ -87,6 +91,7 @@ export interface DiskDrive {
   mountPoint?: string;
   fileSystem?: 'NTFS' | 'exFAT' | 'FAT32' | 'APFS' | 'ext4' | 'f2fs' | 'Unknown';
   isEjected?: boolean;
+  usbTopology?: UsbTopologyMetadata;
   hardwareSpecs?: DiskHardwareSpecs;
 }
 
@@ -131,9 +136,9 @@ export interface DiskHardwareSpecs {
   totalCapacityBytes: number | null;
   totalCapacityGb: number | null;
   totalLbaSectors: number | null;
-  logicalSectorSize: number; // 512 or 4096
-  physicalSectorSize: number; // 4096
-  isAdvancedFormat: boolean;
+  logicalSectorSize: number | null; // 512 or 4096 when reported by OS/IOCTL
+  physicalSectorSize: number | null; // 4096 or 512 when reported by OS/IOCTL
+  isAdvancedFormat: boolean | null;
   partitionStyle: 'GPT (GUID Partition Table)' | 'MBR (Master Boot Record)' | 'Unknown';
   alignmentStatus: 'Aligned (4K sector boundary)' | 'Misaligned' | 'N/A';
 
@@ -156,6 +161,7 @@ export interface DiskHardwareSpecs {
   hostWritesTb: number | null;
   percentageUsed: number | null;
   availableSparePercent: number | null;
+  availableSpareThreshold?: number | null;
   powerOnHours: number | null;
   powerCycles: number | null;
   unsafeShutdowns: number | null;
@@ -182,6 +188,9 @@ export interface DiskHardwareSpecs {
     usbVersion?: string;
     deviceClass?: number;
   };
+
+  // Real PCIe / SATA Negotiated vs. Max Link Speed & Controller Probe
+  linkProbe?: DriveBusLinkProbe | null;
 
   // Partitions & Volumes
   partitions?: DiskVolumePartition[];
@@ -237,7 +246,7 @@ export interface SavedScanRecord {
   criticalCount: number;
   badCount: number;
   badLbaList: number[];
-  healthScore: number;
+  healthScore: number | null;
   durationSeconds: number;
   avgLatencyMs: number;
   maxLatencyMs: number;
@@ -749,3 +758,235 @@ export interface FleetMatrixRow {
   trimSupported: boolean | null;
   overallStatus: 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'UNKNOWN';
 }
+
+// ---------------------------------------------------------------------------
+// USB Version & Device-Class Adaptive Surface Scan Matrix & Fake-Capacity Guard
+// ---------------------------------------------------------------------------
+export type UsbGenerationId =
+  | 'usb_1_1'
+  | 'usb_2_0'
+  | 'usb_3_0_gen1'
+  | 'usb_3_2_gen2'
+  | 'usb_3_2_gen2x2'
+  | 'usb4_tb';
+
+export type UsbTransportProtocol =
+  | 'BOT'
+  | 'UASP'
+  | 'PCIe_Tunnel'
+  | 'SDIO';
+
+export type UsbDeviceClassId =
+  | 'flash_thumb'
+  | 'sd_card_uhs'
+  | 'external_hdd'
+  | 'external_sata_ssd'
+  | 'external_nvme_ssd';
+
+export interface UsbTopologyMetadata {
+  generation: UsbGenerationId;
+  generationCode: number; // 11 | 20 | 30 | 31 | 32 | 40
+  generationLabel: string;
+  negotiatedSpeedMbps: number;
+  maxPracticalMbSec: number;
+  transport: UsbTransportProtocol;
+  transportCode: number; // 1=BOT, 2=UASP, 3=PCIe, 4=SDIO
+  transportLabel: string;
+  deviceClass: UsbDeviceClassId;
+  deviceClassLabel: string;
+  driverService: string;
+  vendorIdHex?: string;
+  productIdHex?: string;
+  bcdUsbHex?: string;
+  portNumber?: number;
+  bridgeChipset?: string;
+  pnpDeviceId?: string;
+  probeSource: 'win32_pnp_hub' | 'manual_override';
+  bottleneckWarning?: string;
+}
+
+export interface UsbSurfaceScanPolicy {
+  profileKey: string;
+  profileName: string;
+  generation: UsbGenerationId;
+  generationLabel: string;
+  transport: UsbTransportProtocol;
+  deviceClass: UsbDeviceClassId;
+  deviceClassLabel: string;
+  methodId: SpecializedScanMethodId;
+  chunkKb: number;
+  chunkSectors: number;
+  batchSize: number;
+  slowThresholdMs: number;
+  criticalThresholdMs: number;
+  ioTimeoutMs: number;
+  maxRetries: number;
+  retryDelayMs: number;
+  cooldownEveryNBlocks: number;
+  cooldownMs: number;
+  thermalCapC: number;
+  rationale: string;
+}
+
+export interface FakeCapacityCheckpointResult {
+  label: string;
+  lba: number;
+  offsetBytes: number;
+  crc32Hex: string;
+  entropyBits: number;
+  isAllZero: boolean;
+  latencyMs: number;
+  status: 'PASS' | 'ALIAS_COLLISION' | 'UNREACHABLE' | 'WRITE_CORRUPTION' | 'WRITE_LOCKED';
+  note: string;
+}
+
+export interface FakeCapacityGuardReport {
+  driveId: string;
+  driveIndex: number | null;
+  tier: 'tier1_readonly_alias' | 'tier2_prng_roundtrip';
+  reportedCapacityBytes: number;
+  verifiedBoundaryBytes: number;
+  verdict: 'GENUINE_CAPACITY_VERIFIED' | 'SUSPECTED_FAKE_CAPACITY' | 'SIMULATION_UNAVAILABLE';
+  summary: string;
+  checkpoints: FakeCapacityCheckpointResult[];
+  executedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Real PCIe / SATA Link Speed & Controller Identification Probe
+// ---------------------------------------------------------------------------
+export interface DriveBusLinkProbe {
+  linkType: 'PCIe' | 'SATA' | 'USB' | 'Unknown';
+  currentSpeedLabel: string | null;
+  maxSpeedLabel: string | null;
+  currentWidth: number | null;
+  maxWidth: number | null;
+  pcieCurrentGen: number | null;
+  pcieMaxGen: number | null;
+  sataCurrentGen: number | null;
+  sataMaxGen: number | null;
+  nvmeSpecVersion: string | null;
+  effectiveBandwidthGbps: number | null;
+  isLinkDowngraded: boolean | null;
+  pciVendorIdHex: string | null;
+  pciDeviceIdHex: string | null;
+  controllerName: string | null;
+  probeSource: 'win32_cfgmgr32_pci' | 'ata_identify' | 'nvme_identify' | 'unavailable';
+}
+
+// ---------------------------------------------------------------------------
+// Persistent Surface Scan Checkpoints (Pause/Resume & Restart Safety)
+// ---------------------------------------------------------------------------
+export interface SurfaceScanCheckpointBlockPatch {
+  id: number;
+  status: SectorState;
+  responseTimeMs: number;
+  throughputMbSec?: number;
+  errorCode?: string;
+}
+
+export interface SurfaceScanCheckpoint {
+  version: number;
+  driveId: string;
+  driveModel: string;
+  driveSerial: string;
+  totalBlocks: number;
+  testType: SurfaceTestType;
+  scanMode: 'quick' | 'full';
+  methodId: SpecializedScanMethodId;
+  startBlock: number;
+  endBlock: number;
+  completedSteps: number;
+  totalSteps: number;
+  currentBlockIndex: number;
+  currentLba: number;
+  elapsedSeconds: number;
+  speedMbPerSec: number;
+  buckets: ResponseBucketCounts;
+  scannedBlocks: SurfaceScanCheckpointBlockPatch[];
+  savedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Critical Folder / File LBA Mapping & Bit-Rot Integrity Watch
+// ---------------------------------------------------------------------------
+export interface IntegrityFileExtent {
+  startLba: number;
+  endLba: number;
+  sectorCount: number;
+}
+
+export type IntegrityWatchStatus =
+  | 'VERIFIED'
+  | 'HASH_MISMATCH'
+  | 'BAD_LBA_OVERLAP'
+  | 'SLOW_LBA_OVERLAP'
+  | 'MISSING_FILE'
+  | 'UNREADABLE'
+  | 'UNVERIFIED';
+
+export interface IntegrityProbeResult {
+  filePath: string;
+  status: 'ok' | 'missing' | 'skipped_too_large' | 'unreadable';
+  sizeBytes: number;
+  modifiedMs: number | null;
+  sha256: string | null;
+  driveIndex: number | null;
+  extents: IntegrityFileExtent[];
+  note?: string;
+}
+
+export interface IntegrityWatchEntry {
+  id: string;
+  watchRootPath: string;
+  filePath: string;
+  fileName: string;
+  driveIndex: number | null;
+  sizeBytes: number;
+  modifiedMs: number | null;
+  baselineSha256: string | null;
+  currentSha256: string | null;
+  extents: IntegrityFileExtent[];
+  status: IntegrityWatchStatus;
+  overlappingBadLbas: number[];
+  overlappingSlowLbas: number[];
+  lastCheckedAt: number;
+  baselineRecordedAt: number;
+  note?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Scan & S.M.A.R.T. Attribute Diff Row
+// ---------------------------------------------------------------------------
+export interface ScanSmartDiffRow {
+  attributeId: number;
+  attributeName: string;
+  rawA: string | null;
+  rawB: string | null;
+  numericRawA: number | null;
+  numericRawB: number | null;
+  rawDelta: number | null;
+  currentA: number | null;
+  currentB: number | null;
+  currentDelta: number | null;
+  statusA: DriveSmartAttribute['status'] | null;
+  statusB: DriveSmartAttribute['status'] | null;
+  worsened: boolean;
+  improved: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Global Command Palette Action Model
+// ---------------------------------------------------------------------------
+export interface CommandPaletteAction {
+  id: string;
+  category: 'navigation' | 'tools' | 'drive' | 'actions';
+  label: string;
+  description?: string;
+  shortcut?: string;
+  keywords?: string[];
+  disabled?: boolean;
+  execute: () => void;
+}
+
+

@@ -7,6 +7,7 @@ import {
 } from '../types';
 import { isTauriDesktopRuntime, queryTauriRawSectorBytes, queryTauriRawSectorRange } from './nativeDriveEngine';
 import { detectVbrBootInfo, parsePartitionTableFromRawBytes } from './partitionParser';
+import { RecoveryEngineSource, runRecoveryMftBatchScan } from './recoveryDllBridge';
 
 type ByteBufferLike = number[] | Uint8Array;
 
@@ -684,6 +685,7 @@ export async function traceAffectedFilesForLba(
   const matchedRecords: ParsedNtfsRecord[] = [];
   let scanned = 0;
   let aborted = Boolean(options.signal?.aborted);
+  let mftEngineSource: RecoveryEngineSource = 'ts-parity';
 
   const maxBatchSectors = 512;
   const batchRecords = Math.max(
@@ -712,32 +714,77 @@ export async function traceAffectedFilesForLba(
 
     const availableBytes = Math.max(0, batchRes.bytes.length - loc.byteSkip);
     const actualCount = Math.min(readRecordsNow, Math.floor(availableBytes / mftRecordSize));
-    for (let i = 0; i < actualCount; i++) {
-      const idx = recCursor + i;
-      const recByteStart = loc.byteSkip + i * mftRecordSize;
-      const slice = batchRes.bytes.subarray(recByteStart, recByteStart + mftRecordSize);
-      const parsed = parseNtfsMftRecord(slice, idx, true);
-      scanned++;
-      if (!parsed) continue;
 
-      if (parsed.fileName) {
-        nameCache.set(parsed.recordNumber, {
-          name: parsed.fileName,
-          parent: parsed.parentRecordNumber
-        });
-      }
-
-      // Check if targetLba falls inside any non-resident $DATA run of this file
-      const hitsExtent = parsed.dataRuns.some(
-        r => targetLcn >= r.lcnStart && targetLcn < r.lcnStart + r.clusterCount
+    let nativeHandledBatch = false;
+    if (actualCount > 0 && loc.byteSkip % secSize === 0) {
+      const mftBatchSlice = batchRes.bytes.slice(
+        loc.byteSkip,
+        loc.byteSkip + actualCount * mftRecordSize
       );
-      // Also check if targetLba directly falls inside this specific $MFT record itself!
-      const recordLbaStart = loc.lba + Math.floor(recByteStart / secSize);
-      const recordLbaEnd = loc.lba + Math.floor((recByteStart + mftRecordSize - 1) / secSize);
-      const hitsResidentRecord = targetLba >= recordLbaStart && targetLba <= recordLbaEnd;
+      const nativeBatch = await runRecoveryMftBatchScan({
+        mftBytes: mftBatchSlice,
+        mftRecordSize,
+        firstRecordIndex: recCursor,
+        batchStartLba: loc.lba + Math.floor(loc.byteSkip / secSize),
+        sectorSize: secSize,
+        targetLba,
+        targetLcn
+      });
+      if (nativeBatch) {
+        nativeHandledBatch = true;
+        mftEngineSource = nativeBatch.engineSource;
+        scanned += actualCount;
+        for (const nr of nativeBatch.matchedRecords) {
+          if (nr.fileName) {
+            nameCache.set(nr.recordNumber, {
+              name: nr.fileName,
+              parent: nr.parentRecordNumber
+            });
+          }
+          matchedRecords.push({
+            recordNumber: nr.recordNumber,
+            inUse: nr.inUse,
+            isDirectory: nr.isDirectory,
+            fileName: nr.fileName,
+            parentRecordNumber: nr.parentRecordNumber,
+            namespace: nr.namespace,
+            isResidentData: nr.isResidentData,
+            fileSizeBytes: nr.fileSizeBytes,
+            creationTimestampMs: nr.creationTimestampMs ?? undefined,
+            dataRuns: nr.dataRuns
+          });
+        }
+      }
+    }
 
-      if (hitsExtent || hitsResidentRecord) {
-        matchedRecords.push(parsed);
+    if (!nativeHandledBatch) {
+      for (let i = 0; i < actualCount; i++) {
+        const idx = recCursor + i;
+        const recByteStart = loc.byteSkip + i * mftRecordSize;
+        const slice = batchRes.bytes.subarray(recByteStart, recByteStart + mftRecordSize);
+        const parsed = parseNtfsMftRecord(slice, idx, true);
+        scanned++;
+        if (!parsed) continue;
+
+        if (parsed.fileName) {
+          nameCache.set(parsed.recordNumber, {
+            name: parsed.fileName,
+            parent: parsed.parentRecordNumber
+          });
+        }
+
+        // Check if targetLba falls inside any non-resident $DATA run of this file
+        const hitsExtent = parsed.dataRuns.some(
+          r => targetLcn >= r.lcnStart && targetLcn < r.lcnStart + r.clusterCount
+        );
+        // Also check if targetLba directly falls inside this specific $MFT record itself!
+        const recordLbaStart = loc.lba + Math.floor(recByteStart / secSize);
+        const recordLbaEnd = loc.lba + Math.floor((recByteStart + mftRecordSize - 1) / secSize);
+        const hitsResidentRecord = targetLba >= recordLbaStart && targetLba <= recordLbaEnd;
+
+        if (hitsExtent || hitsResidentRecord) {
+          matchedRecords.push(parsed);
+        }
       }
     }
 
@@ -842,11 +889,18 @@ export async function traceAffectedFilesForLba(
     });
   }
 
+  const engineTag =
+    mftEngineSource === 'native-cpp-dll'
+      ? ' [DiskSentinelRecovery.dll]'
+      : mftEngineSource === 'rust-parity-fallback'
+      ? ' [Recovery Rust Parity]'
+      : '';
+
   const diagnosticNote = aborted
-    ? `사용자 요청으로 추적이 중단되었습니다 (${scanned.toLocaleString()}개 MFT 레코드 검사됨).`
+    ? `사용자 요청으로 추적이 중단되었습니다 (${scanned.toLocaleString()}개 MFT 레코드 검사됨).${engineTag}`
     : affectedFiles.length > 0
-    ? `NTFS 클러스터 LCN #${targetLcn.toLocaleString()} 매핑 완료 — 영향 파일 ${affectedFiles.length}건 식별 (${scanned.toLocaleString()}개 레코드 분석)`
-    : `상위 ${scanned.toLocaleString()}개 MFT 레코드에서 LCN #${targetLcn.toLocaleString()}에 매핑된 파일이 발견되지 않았습니다 (비할당 여유 공간 또는 더 높은 MFT 레코드 번호에 위치할 수 있음).`;
+    ? `NTFS 클러스터 LCN #${targetLcn.toLocaleString()} 매핑 완료 — 영향 파일 ${affectedFiles.length}건 식별 (${scanned.toLocaleString()}개 레코드 분석)${engineTag}`
+    : `상위 ${scanned.toLocaleString()}개 MFT 레코드에서 LCN #${targetLcn.toLocaleString()}에 매핑된 파일이 발견되지 않았습니다 (비할당 여유 공간 또는 더 높은 MFT 레코드 번호에 위치할 수 있음).${engineTag}`;
 
   return {
     supported: true,

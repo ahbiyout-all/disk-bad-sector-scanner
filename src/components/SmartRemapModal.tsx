@@ -69,8 +69,9 @@ interface SmartRemapModalProps {
   activeDrive: DiskDrive;
   blocks: SectorBlock[];
   initialQueuedBlockIds?: number[];
+  initialTargetLba?: number | null;
   onSyncRepairQueue?: (blockIds: number[]) => void;
-  onRepairSectors: (driveId: string, repairedBlockIds: number[]) => void;
+  onRepairSectors: (driveId: string, repairedBlockIds: number[], latencyByBlockId?: Record<number, number>) => void;
 }
 
 export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
@@ -79,6 +80,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   activeDrive,
   blocks,
   initialQueuedBlockIds = [],
+  initialTargetLba = null,
   onSyncRepairQueue,
   onRepairSectors
 }) => {
@@ -109,15 +111,15 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   const getDriveSpeedProfile = () => {
     const measuredMb = activeDrive.hardwareSpecs?.measuredSequentialWriteMbSec;
-    const speedLabel = measuredMb !== null && measuredMb !== undefined ? `실측 쓰기 ${measuredMb} MB/s` : '실시간 쓰기 검증';
+    const speedLabel = measuredMb !== null && measuredMb !== undefined ? `실측 쓰기 ${measuredMb} MB/s` : '실행 시 실측';
     if (activeDrive.type === 'NVMe') {
-      return { label: `NVMe PCIe Direct (${speedLabel})`, baseTimePerBlock: 0.08 };
+      return { label: `NVMe PCIe Direct (${speedLabel})`, measuredMb };
     } else if (activeDrive.type === 'SSD' || activeDrive.type === 'EXTERNAL_SSD') {
-      return { label: `SSD / Storage API (${speedLabel})`, baseTimePerBlock: 0.15 };
+      return { label: `SSD / Storage API (${speedLabel})`, measuredMb };
     } else if (activeDrive.type === 'HDD') {
-      return { label: `HDD 자기 플래터 (${speedLabel})`, baseTimePerBlock: 0.45 };
+      return { label: `HDD 자기 플래터 (${speedLabel})`, measuredMb };
     } else {
-      return { label: `USB / 외장 스토리지 (${speedLabel})`, baseTimePerBlock: 0.6 };
+      return { label: `USB / 외장 스토리지 (${speedLabel})`, measuredMb };
     }
   };
 
@@ -134,7 +136,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
   const difficultyMultiplier = getDifficultyMultiplier();
   const blockCount = Math.max(1, selectedBlockIds.length);
-  const estimatedSeconds = Math.max(1, Math.round(blockCount * speedProfile.baseTimePerBlock * difficultyMultiplier));
+  const hasMeasuredWriteSpeed = typeof speedProfile.measuredMb === 'number' && speedProfile.measuredMb > 0;
+  const estimatedSeconds = hasMeasuredWriteSpeed
+    ? Math.max(1, Math.round((blockCount * 0.064 / speedProfile.measuredMb!) * difficultyMultiplier))
+    : null;
 
   const formatEstimatedTime = (sec: number) => {
     if (sec < 60) return `약 ${sec}초`;
@@ -143,7 +148,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     return `약 ${mins}분 ${secs > 0 ? `${secs}초` : ''}`;
   };
 
-  const estimatedCompletionTimeStr = new Date(Date.now() + estimatedSeconds * 1000).toLocaleTimeString();
+  const estimatedCompletionTimeStr = estimatedSeconds !== null
+    ? new Date(Date.now() + estimatedSeconds * 1000).toLocaleTimeString()
+    : null;
 
   const badBlocks = useMemo(() => blocks.filter(b => b.status === 'bad'), [blocks]);
   const slowBlocks = useMemo(
@@ -232,9 +239,30 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
       const validIdSet = new Set(blocks.map(b => b.id));
       const validQueued = initialQueuedBlockIds.filter(id => validIdSet.has(id));
+      let lbaMatchedBlockId: number | null = null;
+      if (initialTargetLba !== null && initialTargetLba !== undefined && blocks.length > 0) {
+        const exact = blocks.find(b => initialTargetLba >= b.lba && initialTargetLba <= b.endLba);
+        if (exact) {
+          lbaMatchedBlockId = exact.id;
+        } else {
+          let closest = blocks[0];
+          let minDiff = Math.abs(blocks[0].lba - initialTargetLba);
+          for (let i = 1; i < blocks.length; i++) {
+            const diff = Math.abs(blocks[i].lba - initialTargetLba);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closest = blocks[i];
+            }
+          }
+          lbaMatchedBlockId = closest.id;
+        }
+      }
 
-      if (validQueued.length > 0) {
-        setSelectedBlockIds(validQueued);
+      const initialSet = new Set<number>(validQueued);
+      if (lbaMatchedBlockId !== null) initialSet.add(lbaMatchedBlockId);
+
+      if (initialSet.size > 0) {
+        setSelectedBlockIds(Array.from(initialSet));
       } else if (badBlocks.length > 0) {
         setSelectedBlockIds(badBlocks.map(b => b.id));
       } else if (slowBlocks.length > 0) {
@@ -384,6 +412,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     ]);
 
     const succeededIds: number[] = [];
+    const repairedLatencyMap: Record<number, number> = {};
     let failedCount = 0;
     let firstFailureReason: string | null = null;
     let completedPipelineSteps = 0;
@@ -429,7 +458,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
       const targetBlockId = targetsSnapshot[i];
       const targetBlock = blocksById.get(targetBlockId);
-      const lba = targetBlock ? targetBlock.lba : targetBlockId * 1000;
+      const lba = targetBlock ? targetBlock.lba : 0;
       setCurrentLba(lba);
 
       let sectorFailed = false;
@@ -604,6 +633,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
       if (wasAborted) {
         if (!sectorFailed && writeResult?.success) {
           succeededIds.push(targetBlockId);
+          repairedLatencyMap[targetBlockId] = writeResult.latencyMs;
           updateSectorStep(
             targetBlockId,
             i,
@@ -617,6 +647,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
       if (!sectorFailed) {
         succeededIds.push(targetBlockId);
+        if (writeResult?.success) {
+          repairedLatencyMap[targetBlockId] = writeResult.latencyMs;
+        }
         updateSectorStep(targetBlockId, i, totalStepsPerSector - 1, 'verified', '수복 완료');
         soundManager.playBeep(800 + (i % 10) * 40, 0.05);
       }
@@ -640,7 +673,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
         ...prev,
         `[${new Date().toLocaleTimeString()}] [${wasAborted ? '부분 완료' : '완료'}] ${succeededIds.length}개 비연속 섹터 다단계 0x00 검증 수복 완료 (실패/미지원 ${failedCount}개).`
       ]);
-      onRepairSectors(driveSnapshot.id, succeededIds);
+      onRepairSectors(driveSnapshot.id, succeededIds, repairedLatencyMap);
       if (onSyncRepairQueue) {
         const succeededSet = new Set(succeededIds);
         onSyncRepairQueue(selectedBlockIds.filter(id => !succeededSet.has(id)));
@@ -820,7 +853,11 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 수복 방식 및 난이도 선택 (Repair Method &amp; Difficulty)
               </div>
               <div className="text-[11px] font-mono text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded border border-indigo-500/20">
-                예상 소요: <strong className="text-white">{formatEstimatedTime(estimatedSeconds)}</strong> ({estimatedCompletionTimeStr})
+                예상 소요:{' '}
+                <strong className="text-white">
+                  {estimatedSeconds !== null ? formatEstimatedTime(estimatedSeconds) : '실행 시 실측'}
+                </strong>
+                {estimatedCompletionTimeStr ? ` (${estimatedCompletionTimeStr})` : ''}
               </div>
             </div>
 

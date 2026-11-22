@@ -22,9 +22,15 @@ import {
   DriveIdentifyField,
   DriveIdentifySnapshot,
   SmartExtendedLogsResponse,
-  RawSectorRangeResponse
+  RawSectorRangeResponse,
+  UsbSurfaceScanPolicy,
+  UsbTopologyMetadata,
+  DriveBusLinkProbe,
+  IntegrityProbeResult
 } from '../types';
-import { classifyFutureDriveStandards, detectVendor, getVendorProfile } from './vendorDiagnostics';
+import { detectVendor, getVendorProfile } from './vendorDiagnostics';
+import { parseRawUsbTopologyToMetadata, resolveUsbSurfaceScanPolicy } from './usbScanMatrix';
+import { parsePartitionTableFromRawBytes } from './partitionParser';
 
 export interface NativeIoBenchmarkResult {
   supported: boolean;
@@ -162,7 +168,7 @@ function getHostOsLabel(): string {
   return 'Unknown Host OS';
 }
 
-function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
+export function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
   const driveIndex = typeof rd.driveIndex === 'number' ? rd.driveIndex : idx;
   const capBytes = typeof rd.totalCapacityBytes === 'number' && rd.totalCapacityBytes > 0
     ? rd.totalCapacityBytes
@@ -177,8 +183,9 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
 
   const rawModel = (rd.model || '').trim() || `Physical Storage Device ${driveIndex}`;
   const path = rd.devicePath || `\\\\.\\PhysicalDrive${driveIndex}`;
-  const secSize = rd.sectorSize || 512;
-  const physSecSize = rd.physicalSectorSize || secSize;
+  const secSize: number | null = typeof rd.sectorSize === 'number' && rd.sectorSize > 0 ? rd.sectorSize : null;
+  const physSecSize: number | null =
+    typeof rd.physicalSectorSize === 'number' && rd.physicalSectorSize > 0 ? rd.physicalSectorSize : secSize;
   const serial = (rd.serialNumber || '').trim() || `PhysicalDrive${driveIndex}`;
   const bus = (rd.busType || 'Unknown').trim();
   const busUpper = bus.toUpperCase();
@@ -237,7 +244,7 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
   const totalVolUsedGb = partitions.reduce((acc, p) => acc + p.usedGb, 0);
   const aggUsedPct = totalVolGb > 0 ? Number(((totalVolUsedGb / totalVolGb) * 100).toFixed(1)) : null;
 
-  const totalLba = capBytes !== null && secSize > 0 ? Math.floor(capBytes / secSize) : 0;
+  const totalLba = capBytes !== null && secSize !== null && secSize > 0 ? Math.floor(capBytes / secSize) : 0;
 
   const smartAttributes: DriveSmartAttribute[] = Array.isArray(rd.smartAttributes)
     ? rd.smartAttributes.map((sa: any) => ({
@@ -259,12 +266,31 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
     isUsb ? (rd.isSsd ? 'EXTERNAL_SSD' : 'USB') :
     (rd.isSsd || isUfs || isScm ? 'SSD' : 'HDD');
 
-  const inferredUsbProto: DiskDrive['usbProtocol'] | undefined = isUsb
-    ? /usb4|thunderbolt|nvme/i.test(rawModel)
-      ? 'NVMe over USB (UASP 10Gbps)'
-      : rd.isSsd
-      ? 'UASP (USB Attached SCSI Protocol)'
-      : 'BOT (Bulk-Only Transport)'
+  const parsedUsbTopology: UsbTopologyMetadata | undefined = parseRawUsbTopologyToMetadata(rd.usbTopology, {
+    model: rawModel,
+    name: driveName,
+    type: driveType,
+    isExternal: isUsb || isSdOrMmc,
+    connectionType: isSdOrMmc ? 'sd_card' : isUsb ? 'usb' : 'internal',
+    hardwareSpecs: { busType: mappedBusType } as any
+  });
+
+  const inferredUsbProto: DiskDrive['usbProtocol'] | undefined = parsedUsbTopology
+    ? (parsedUsbTopology.generation === 'usb4_tb'
+        ? 'Thunderbolt 4 / PCIe Direct'
+        : parsedUsbTopology.transport === 'UASP' && parsedUsbTopology.negotiatedSpeedMbps >= 10000
+        ? 'NVMe over USB (UASP 10Gbps)'
+        : parsedUsbTopology.transport === 'UASP'
+        ? 'UASP (USB Attached SCSI Protocol)'
+        : parsedUsbTopology.generation === 'usb_2_0'
+        ? 'USB 2.0 BOT (Bulk-Only Transport 480Mbps)'
+        : parsedUsbTopology.transport === 'SDIO'
+        ? 'SDIO UHS-I'
+        : 'BOT (Bulk-Only Transport)')
+    : undefined;
+
+  const isUsb2Flag = parsedUsbTopology
+    ? parsedUsbTopology.generation === 'usb_2_0' || parsedUsbTopology.generation === 'usb_1_1'
     : undefined;
 
   const tentativeDrive = {
@@ -274,12 +300,23 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
     serialNumber: serial,
     firmware: (rd.firmware || '').trim() || 'N/A',
     type: driveType,
-    isExternal: isUsb || isSdOrMmc,
-    connectionType: isSdOrMmc ? 'sd_card' : isUsb ? 'usb' : 'internal',
+    isExternal: isUsb || isSdOrMmc || !!parsedUsbTopology,
+    connectionType: parsedUsbTopology?.generation === 'usb4_tb'
+      ? 'thunderbolt'
+      : isSdOrMmc
+      ? 'sd_card'
+      : (isUsb || parsedUsbTopology)
+      ? 'usb'
+      : 'internal',
     usbProtocol: inferredUsbProto,
+    isUsb2: isUsb2Flag,
+    bridgeChipset: parsedUsbTopology?.bridgeChipset,
+    usbTopology: parsedUsbTopology,
     capacityGb: capGb,
     totalSectors: totalLba > 0 ? totalLba : 0,
-    interface: `Tauri Native IPC (PhysicalDrive${driveIndex})`,
+    interface: parsedUsbTopology
+      ? `${parsedUsbTopology.generationLabel} · ${parsedUsbTopology.transport}`
+      : `Tauri Native IPC (PhysicalDrive${driveIndex})`,
     healthScore: reliability,
     temperatureC: temp,
     powerOnHours: poh,
@@ -295,11 +332,93 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
 
   const vendorKey = detectVendor(tentativeDrive);
   const vendorProfile = getVendorProfile(vendorKey);
-  const futureClass = classifyFutureDriveStandards(tentativeDrive);
   const resolvedVendorName =
     vendorKey !== 'generic'
       ? vendorProfile.nameEn
       : rawModel.split(/\s+/)[0] || (isUsb ? 'USB Storage' : 'Standard OEM Storage');
+
+  const resolvedPartitionStyle: DiskHardwareSpecs['partitionStyle'] =
+    rd.partitionStyle === 'GPT (GUID Partition Table)' || rd.partitionStyle === 'GPT'
+      ? 'GPT (GUID Partition Table)'
+      : rd.partitionStyle === 'MBR (Master Boot Record)' || rd.partitionStyle === 'MBR'
+      ? 'MBR (Master Boot Record)'
+      : 'Unknown';
+  const resolvedAlignmentStatus: DiskHardwareSpecs['alignmentStatus'] =
+    rd.alignmentStatus === 'Aligned (4K sector boundary)' || rd.alignmentStatus === 'Misaligned'
+      ? rd.alignmentStatus
+      : 'N/A';
+
+  const rawLinkProbe = rd.linkProbe;
+  const parsedLinkProbe: DriveBusLinkProbe | null =
+    rawLinkProbe && typeof rawLinkProbe === 'object'
+      ? {
+          linkType:
+            rawLinkProbe.linkType === 'PCIe' ||
+            rawLinkProbe.linkType === 'SATA' ||
+            rawLinkProbe.linkType === 'USB'
+              ? rawLinkProbe.linkType
+              : 'Unknown',
+          currentSpeedLabel:
+            typeof rawLinkProbe.currentSpeedLabel === 'string' && rawLinkProbe.currentSpeedLabel.trim()
+              ? rawLinkProbe.currentSpeedLabel.trim()
+              : null,
+          maxSpeedLabel:
+            typeof rawLinkProbe.maxSpeedLabel === 'string' && rawLinkProbe.maxSpeedLabel.trim()
+              ? rawLinkProbe.maxSpeedLabel.trim()
+              : null,
+          currentWidth: typeof rawLinkProbe.currentWidth === 'number' ? rawLinkProbe.currentWidth : null,
+          maxWidth: typeof rawLinkProbe.maxWidth === 'number' ? rawLinkProbe.maxWidth : null,
+          pcieCurrentGen: typeof rawLinkProbe.pcieCurrentGen === 'number' ? rawLinkProbe.pcieCurrentGen : null,
+          pcieMaxGen: typeof rawLinkProbe.pcieMaxGen === 'number' ? rawLinkProbe.pcieMaxGen : null,
+          sataCurrentGen: typeof rawLinkProbe.sataCurrentGen === 'number' ? rawLinkProbe.sataCurrentGen : null,
+          sataMaxGen: typeof rawLinkProbe.sataMaxGen === 'number' ? rawLinkProbe.sataMaxGen : null,
+          nvmeSpecVersion:
+            typeof rawLinkProbe.nvmeSpecVersion === 'string' && rawLinkProbe.nvmeSpecVersion.trim()
+              ? rawLinkProbe.nvmeSpecVersion.trim()
+              : null,
+          effectiveBandwidthGbps:
+            typeof rawLinkProbe.effectiveBandwidthGbps === 'number' && rawLinkProbe.effectiveBandwidthGbps > 0
+              ? Number(rawLinkProbe.effectiveBandwidthGbps.toFixed(2))
+              : null,
+          isLinkDowngraded:
+            typeof rawLinkProbe.isLinkDowngraded === 'boolean' ? rawLinkProbe.isLinkDowngraded : null,
+          pciVendorIdHex:
+            typeof rawLinkProbe.pciVendorIdHex === 'string' ? rawLinkProbe.pciVendorIdHex : null,
+          pciDeviceIdHex:
+            typeof rawLinkProbe.pciDeviceIdHex === 'string' ? rawLinkProbe.pciDeviceIdHex : null,
+          controllerName:
+            typeof rawLinkProbe.controllerName === 'string' && rawLinkProbe.controllerName.trim()
+              ? rawLinkProbe.controllerName.trim()
+              : null,
+          probeSource:
+            rawLinkProbe.probeSource === 'win32_cfgmgr32_pci' ||
+            rawLinkProbe.probeSource === 'ata_identify' ||
+            rawLinkProbe.probeSource === 'nvme_identify'
+              ? rawLinkProbe.probeSource
+              : 'unavailable'
+        }
+      : null;
+
+  const resolvedBusInterfaceSpeed = parsedUsbTopology
+    ? `${parsedUsbTopology.generationLabel} (${parsedUsbTopology.transport})`
+    : parsedLinkProbe?.currentSpeedLabel
+    ? parsedLinkProbe.isLinkDowngraded && parsedLinkProbe.maxSpeedLabel
+      ? `${parsedLinkProbe.currentSpeedLabel} (Max ${parsedLinkProbe.maxSpeedLabel} - 링크 저하)`
+      : parsedLinkProbe.nvmeSpecVersion
+      ? `${parsedLinkProbe.currentSpeedLabel} · ${parsedLinkProbe.nvmeSpecVersion}`
+      : parsedLinkProbe.currentSpeedLabel
+    : isNvme
+    ? parsedLinkProbe?.nvmeSpecVersion
+      ? `PCIe ${parsedLinkProbe.nvmeSpecVersion} (레인 폭 미제공)`
+      : 'PCIe NVMe (커널 링크 속도 미제공)'
+    : isUsb
+    ? 'USB Mass Storage (Win32 PnP 속도 미수신)'
+    : `${mappedBusType} (커널 링크 속도 미제공)`;
+
+  const resolvedControllerVendor =
+    parsedUsbTopology?.bridgeChipset ||
+    parsedLinkProbe?.controllerName ||
+    'N/A (커널 컨트롤러 미제공)';
 
   const hwSpecs: DiskHardwareSpecs = {
     devicePhysicalPath: path,
@@ -308,7 +427,7 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
     serialNumber: serial,
     firmwareRevision: (rd.firmware || '').trim() || 'N/A',
     busType: mappedBusType,
-    busInterfaceSpeed: futureClass.busGeneration || (isNvme ? 'NVMe PCIe Bus (Win32 IOCTL)' : isUsb ? 'USB Mass Storage Bus' : `${bus} Bus`),
+    busInterfaceSpeed: resolvedBusInterfaceSpeed,
     formFactor: isSdOrMmc
       ? 'SD / eMMC Removable Card'
       : isNvme
@@ -322,42 +441,57 @@ function mapRawPhysicalDriveDtoToDiskDrive(rd: any, idx: number): DiskDrive {
       : rd.isSsd
       ? 'Solid State Drive'
       : 'Mechanical HDD',
-    controllerVendor: futureClass.estimatedControllerTier,
+    controllerVendor: resolvedControllerVendor,
+    linkProbe: parsedLinkProbe,
     totalCapacityBytes: capBytes,
     totalCapacityGb: capGb,
     totalLbaSectors: totalLba > 0 ? totalLba : null,
     logicalSectorSize: secSize,
     physicalSectorSize: physSecSize,
-    isAdvancedFormat: physSecSize > secSize,
-    partitionStyle: 'GPT (GUID Partition Table)',
-    alignmentStatus: physSecSize >= secSize ? 'Aligned (4K sector boundary)' : 'N/A',
+    isAdvancedFormat: physSecSize !== null && secSize !== null ? physSecSize > secSize : null,
+    partitionStyle: resolvedPartitionStyle,
+    alignmentStatus: resolvedAlignmentStatus,
     mediaType: isNvme || rd.isSsd || isUfs || isScm
       ? 'SSD (Non-Volatile NAND Flash)'
       : isSdOrMmc
       ? 'Flash Memory Card / USB BOT'
       : 'Mechanical HDD (Magnetic Platter)',
-    rotationalSpeedRpm: isNvme || rd.isSsd || isSdOrMmc || isUfs || isScm ? 0 : null,
+    rotationalSpeedRpm:
+      typeof rd.rotationalSpeedRpm === 'number'
+        ? rd.rotationalSpeedRpm
+        : isNvme || rd.isSsd || isSdOrMmc || isUfs || isScm
+        ? 0
+        : null,
     trimSupported: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
     trimActive: typeof rd.isTrimSupported === 'boolean' ? rd.isTrimSupported : null,
     smartSupported: smartAttributes.length > 0 || !!nvme,
     smartActive: smartAttributes.length > 0 || !!nvme,
-    ncqSupported: isNvme || rd.isSsd ? true : null,
-    queueDepth: isNvme ? 64 : null,
-    volatileWriteCache: null,
-    writeCacheFlushSupported: null,
-    readLookAheadSupported: null,
-    apmAamSupported: !rd.isSsd && !isNvme && !isSdOrMmc,
+    ncqSupported: typeof rd.ncqSupported === 'boolean' ? rd.ncqSupported : null,
+    queueDepth: typeof rd.queueDepth === 'number' && rd.queueDepth > 0 ? rd.queueDepth : null,
+    volatileWriteCache:
+      typeof rd.volatileWriteCache === 'boolean'
+        ? rd.volatileWriteCache
+        : typeof rd.isWriteCacheEnabled === 'boolean'
+        ? rd.isWriteCacheEnabled
+        : null,
+    writeCacheFlushSupported: typeof rd.writeCacheFlushSupported === 'boolean' ? rd.writeCacheFlushSupported : null,
+    readLookAheadSupported: typeof rd.readLookAheadSupported === 'boolean' ? rd.readLookAheadSupported : null,
+    apmAamSupported: typeof rd.apmAamSupported === 'boolean' ? rd.apmAamSupported : null,
     hostReadsTb: nvme && typeof nvme.dataUnitsReadTb === 'number' ? Number(nvme.dataUnitsReadTb.toFixed(2)) : null,
     hostWritesTb: nvme && typeof nvme.dataUnitsWrittenTb === 'number' ? Number(nvme.dataUnitsWrittenTb.toFixed(2)) : null,
     percentageUsed: nvme && typeof nvme.percentageUsed === 'number' ? nvme.percentageUsed : null,
     availableSparePercent: nvme && typeof nvme.availableSpare === 'number' ? nvme.availableSpare : null,
+    availableSpareThreshold: nvme && typeof nvme.availableSpareThreshold === 'number' ? nvme.availableSpareThreshold : null,
     powerOnHours: poh,
     powerCycles: nvme && nvme.powerCycles !== undefined ? Number(nvme.powerCycles) : null,
     unsafeShutdowns: nvme && nvme.unsafeShutdowns !== undefined ? Number(nvme.unsafeShutdowns) : null,
     mediaErrors: nvme && nvme.mediaErrors !== undefined ? Number(nvme.mediaErrors) : null,
     currentTempC: temp,
     maxTempRecordedC: null,
-    warningTempThresholdC: null,
+    warningTempThresholdC:
+      typeof rd.warningTempThresholdC === 'number' && rd.warningTempThresholdC > 0
+        ? rd.warningTempThresholdC
+        : null,
     nvmeLogAvailable: !!nvme,
     measuredKernelLatencyUs: null,
     measuredSequentialReadMbSec: null,
@@ -484,7 +618,31 @@ export async function probeDetailedDriveHardware(drive: DiskDrive): Promise<Disk
     const refreshed = await queryTauriPhysicalDrives();
     const match = refreshed.find(d => d.id === drive.id);
     if (match?.hardwareSpecs) {
-      return match.hardwareSpecs;
+      let specs = match.hardwareSpecs;
+      if (specs.partitionStyle === 'Unknown') {
+        const rawSec = await queryTauriRawSectorBytes(match, 0, 34).catch(() => null);
+        if (rawSec && rawSec.supported && rawSec.bytes.length >= 512) {
+          const parsed = parsePartitionTableFromRawBytes(Array.from(rawSec.bytes), rawSec.sectorSize || 512);
+          const derivedStyle: DiskHardwareSpecs['partitionStyle'] =
+            parsed.scheme === 'GPT'
+              ? 'GPT (GUID Partition Table)'
+              : parsed.scheme === 'MBR'
+              ? 'MBR (Master Boot Record)'
+              : 'Unknown';
+          const derivedAlign: DiskHardwareSpecs['alignmentStatus'] =
+            parsed.entries.length === 0
+              ? 'N/A'
+              : parsed.entries.every(e => e.is4kAligned)
+              ? 'Aligned (4K sector boundary)'
+              : 'Misaligned';
+          specs = {
+            ...specs,
+            partitionStyle: derivedStyle,
+            alignmentStatus: derivedAlign
+          };
+        }
+      }
+      return specs;
     }
   }
 
@@ -497,7 +655,7 @@ export async function probeDetailedDriveHardware(drive: DiskDrive): Promise<Disk
   }
 
   return {
-    devicePhysicalPath: drive.mountPoint || `\\\\.\\PhysicalDrive0`,
+    devicePhysicalPath: drive.mountPoint || undefined,
     vendorName: drive.model.split(' ')[0] || 'Storage Device',
     modelNumber: drive.model,
     serialNumber: drive.serialNumber,
@@ -505,13 +663,13 @@ export async function probeDetailedDriveHardware(drive: DiskDrive): Promise<Disk
     busType: drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'Unknown',
     busInterfaceSpeed: drive.interface,
     formFactor: drive.isExternal ? 'External Storage' : 'Internal Storage',
-    controllerVendor: drive.bridgeChipset || 'Host Storage Controller',
+    controllerVendor: drive.bridgeChipset || undefined,
     totalCapacityBytes: drive.capacityGb !== null ? Math.round(drive.capacityGb * 1024 * 1024 * 1024) : null,
     totalCapacityGb: drive.capacityGb,
     totalLbaSectors: drive.totalSectors > 0 ? drive.totalSectors : null,
-    logicalSectorSize: 512,
-    physicalSectorSize: 4096,
-    isAdvancedFormat: true,
+    logicalSectorSize: null,
+    physicalSectorSize: null,
+    isAdvancedFormat: null,
     partitionStyle: 'Unknown',
     alignmentStatus: 'N/A',
     mediaType: drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD'
@@ -697,9 +855,13 @@ export async function executeRealZeroFillRepairBlock(
     const sectorCount = Math.max(1, Math.min(128, remainingSectors));
     const bytesWrittenTotal = sectorCount * secBytes;
     const t0 = performance.now();
-    const success = await queryTauriRepairSector(driveIndex, lba, sectorCount);
+    const repairRes = await queryTauriRepairSectorDetailed(driveIndex, lba, sectorCount);
     const t1 = performance.now();
-    const latencyMs = Math.max(0.01, Number((t1 - t0).toFixed(3)));
+    const success = repairRes.success;
+    const latencyMs =
+      typeof repairRes.latencyMs === 'number' && repairRes.latencyMs > 0
+        ? repairRes.latencyMs
+        : Math.max(0.01, Number((t1 - t0).toFixed(3)));
     const throughputMbSec = success
       ? Number(((bytesWrittenTotal / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1))
       : 0;
@@ -791,16 +953,56 @@ export async function queryTauriParallelScan(targets: any[]): Promise<any[] | nu
 }
 
 /**
- * Real Sector Repair via Tauri Core IPC
+ * Real Sector Repair via Tauri Core IPC (with measured Win32 repair latencyMs)
  */
-export async function queryTauriRepairSector(driveIndex: number, lba: number, count: number): Promise<boolean> {
-  if (!isTauriDesktopRuntime()) return false;
+export async function queryTauriRepairSectorDetailed(
+  driveIndex: number,
+  lba: number,
+  count: number
+): Promise<{ success: boolean; latencyMs: number | null }> {
+  if (!isTauriDesktopRuntime()) return { success: false, latencyMs: null };
   try {
     const res = await (window as any).__TAURI__.core.invoke('attempt_sector_repair', { driveIndex, lba, count });
-    return !!res?.success;
+    return {
+      success: !!res?.success,
+      latencyMs: typeof res?.latencyMs === 'number' && Number.isFinite(res.latencyMs) ? res.latencyMs : null
+    };
   } catch (err) {
     console.warn('Tauri sector repair failed:', err);
-    return false;
+    return { success: false, latencyMs: null };
+  }
+}
+
+export async function queryTauriRepairSector(driveIndex: number, lba: number, count: number): Promise<boolean> {
+  const res = await queryTauriRepairSectorDetailed(driveIndex, lba, count);
+  return res.success;
+}
+
+/**
+ * Real Windows Hardware Safe Eject (FSCTL_LOCK_VOLUME + FSCTL_DISMOUNT_VOLUME + IOCTL_STORAGE_EJECT_MEDIA + CM_Request_Device_EjectW)
+ */
+export async function invokeTauriEjectPhysicalDrive(
+  drive: DiskDrive
+): Promise<{ success: boolean; message: string; win32ErrorCode?: number }> {
+  const driveIndex = getDriveIndexFromId(drive);
+  if (!isTauriDesktopRuntime() || driveIndex === null) {
+    return {
+      success: false,
+      message: '하드웨어 안전 제거는 Tauri Windows 데스크톱 네이티브 IPC 환경에서만 실행할 수 있습니다.'
+    };
+  }
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('eject_physical_drive', { driveIndex });
+    return {
+      success: Boolean(res?.success),
+      message: String(res?.message || (res?.success ? '장치 안전 제거 완료' : '하드웨어 안전 제거 실패')),
+      win32ErrorCode: typeof res?.win32ErrorCode === 'number' ? res.win32ErrorCode : undefined
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `하드웨어 안전 제거 IPC 오류: ${err?.message || String(err) || 'Unknown Error'}`
+    };
   }
 }
 
@@ -1039,8 +1241,12 @@ export async function executeHddScanBlockProbe(
     const sectorCount = Math.max(1, Math.min(128, drive.totalSectors - startLbaNum));
     const secBytes = drive.hardwareSpecs?.logicalSectorSize || 512;
     const t0 = performance.now();
-    const ok = await queryTauriRepairSector(driveIndex, startLbaNum, sectorCount);
-    const latencyMs = Math.max(0.05, Number((performance.now() - t0).toFixed(3)));
+    const repairRes = await queryTauriRepairSectorDetailed(driveIndex, startLbaNum, sectorCount);
+    const ok = repairRes.success;
+    const latencyMs =
+      typeof repairRes.latencyMs === 'number' && repairRes.latencyMs > 0
+        ? repairRes.latencyMs
+        : Math.max(0.05, Number((performance.now() - t0).toFixed(3)));
     const throughputMbSec = ok
       ? Number((((sectorCount * secBytes) / (1024 * 1024)) / (latencyMs / 1000)).toFixed(1))
       : 0;
@@ -1154,7 +1360,8 @@ export async function executeHddScanBlockBatch(
   methodId: SpecializedScanMethodId,
   blockIndices: number[],
   totalBlocks: number,
-  testType: SurfaceTestType
+  testType: SurfaceTestType,
+  usbPolicy?: UsbSurfaceScanPolicy
 ): Promise<HddScanBlockProbeResult[]> {
   if (blockIndices.length === 0) return [];
 
@@ -1178,6 +1385,8 @@ export async function executeHddScanBlockBatch(
     }
     return results;
   }
+
+  const effectivePolicy = usbPolicy ?? resolveUsbSurfaceScanPolicy(drive, methodId);
 
   if (drive.id.startsWith('drive-tauri-physical-') && isTauriDesktopRuntime()) {
     if (drive.totalSectors <= 0) {
@@ -1205,11 +1414,14 @@ export async function executeHddScanBlockBatch(
     const secBytes = drive.hardwareSpecs?.logicalSectorSize || 512;
     const safeTotalBlocks = Math.max(1, totalBlocks);
     const verifyMode = testType === 'verify';
+    const targetChunkSectors = effectivePolicy
+      ? Math.max(1, Math.min(4096, effectivePolicy.chunkSectors))
+      : 128;
 
     const items = blockIndices.slice(0, 128).map(blockIndex => {
       const startLba = (BigInt(blockIndex) * BigInt(drive.totalSectors)) / BigInt(safeTotalBlocks);
       const startLbaNum = Math.min(drive.totalSectors - 1, Number(startLba));
-      const sectorCount = Math.max(1, Math.min(128, drive.totalSectors - startLbaNum));
+      const sectorCount = Math.max(1, Math.min(targetChunkSectors, drive.totalSectors - startLbaNum));
       return {
         blockId: blockIndex,
         lba: startLbaNum,
@@ -1217,11 +1429,23 @@ export async function executeHddScanBlockBatch(
       };
     });
 
+    const nativePolicyArg = effectivePolicy
+      ? {
+          slowThresholdMs: effectivePolicy.slowThresholdMs,
+          criticalThresholdMs: effectivePolicy.criticalThresholdMs,
+          maxRetries: effectivePolicy.maxRetries,
+          retryDelayMs: effectivePolicy.retryDelayMs,
+          cooldownEveryNBlocks: effectivePolicy.cooldownEveryNBlocks,
+          cooldownMs: effectivePolicy.cooldownMs
+        }
+      : null;
+
     try {
       const batchRes = await (window as any).__TAURI__.core.invoke('scan_lba_batch', {
         driveIndex,
         items,
-        verifyMode
+        verifyMode,
+        policy: nativePolicyArg
       });
 
       if (Array.isArray(batchRes) && batchRes.length > 0) {
@@ -1232,12 +1456,12 @@ export async function executeHddScanBlockBatch(
               ? itemsById.get(res.blockId) ?? items[i]
               : items[i];
           const blockIndex = typeof res?.blockId === 'number' ? res.blockId : (fallbackItem?.blockId ?? i);
-          const sectorCount = typeof res?.sectorCount === 'number' ? res.sectorCount : (fallbackItem?.sectorCount ?? 128);
+          const sectorCount = typeof res?.sectorCount === 'number' ? res.sectorCount : (fallbackItem?.sectorCount ?? targetChunkSectors);
           const latencyMs = Number(res?.latencyMs ?? 0);
           const statusCode = Number(res?.statusCode ?? 4);
           const win32ErrorCode = Number(res?.win32ErrorCode ?? 0);
           const status: 'good' | 'normal' | 'slow' | 'critical' | 'bad' =
-            statusCode === 0 ? (latencyMs < 10 ? 'good' : 'normal') :
+            statusCode === 0 ? (effectivePolicy || latencyMs < 10 ? 'good' : 'normal') :
             statusCode === 1 ? 'normal' :
             statusCode === 2 ? 'slow' :
             statusCode === 3 ? 'critical' : 'bad';
@@ -2536,3 +2760,119 @@ export async function queryNativeForensicsEntropy(
     return null;
   }
 }
+
+/**
+ * Probes Win32 USB Host/Hub descriptor topology across all 32 physical slots.
+ */
+export async function queryTauriUsbTopologyAll(): Promise<any[]> {
+  if (!isTauriDesktopRuntime()) return [];
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('probe_usb_topology_all');
+    return Array.isArray(res) ? res : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Probes physical disk LBA extents (Win32 FSCTL_GET_RETRIEVAL_POINTERS + IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS)
+ * and computes streaming FIPS 180-4 SHA-256 hashes for critical folder/file integrity monitoring.
+ * Returns null when running outside Tauri Desktop IPC.
+ */
+export async function queryTauriProbePathsIntegrity(
+  paths: string[],
+  maxFiles = 200,
+  maxFileBytes = 512 * 1024 * 1024
+): Promise<IntegrityProbeResult[] | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('probe_paths_lba_integrity', {
+      paths,
+      maxFiles,
+      maxFileBytes
+    });
+    if (!Array.isArray(res)) return [];
+    return res.map((item: any) => ({
+      filePath: String(item?.filePath || ''),
+      status:
+        item?.status === 'ok' ||
+        item?.status === 'missing' ||
+        item?.status === 'skipped_too_large' ||
+        item?.status === 'unreadable'
+          ? item.status
+          : 'unreadable',
+      sizeBytes: typeof item?.sizeBytes === 'number' ? item.sizeBytes : 0,
+      modifiedMs: typeof item?.modifiedMs === 'number' ? item.modifiedMs : null,
+      sha256: typeof item?.sha256 === 'string' ? item.sha256 : null,
+      driveIndex: typeof item?.driveIndex === 'number' ? item.driveIndex : null,
+      extents: Array.isArray(item?.extents)
+        ? item.extents.map((e: any) => ({
+            startLba: Number(e?.startLba || 0),
+            endLba: Number(e?.endLba || 0),
+            sectorCount: Number(e?.sectorCount || 0)
+          }))
+        : [],
+      note: typeof item?.note === 'string' ? item.note : undefined
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opens native Win32 folder or multi-file picker dialog for selecting integrity watch targets.
+ * Returns null when running outside Tauri Desktop IPC.
+ */
+export async function queryTauriPickIntegrityPaths(pickFolder: boolean): Promise<string[] | null> {
+  if (!isTauriDesktopRuntime()) return null;
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('pick_integrity_paths', {
+      pickFolder
+    });
+    return Array.isArray(res) ? res.map(String).filter(Boolean) : [];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Updates Tauri System Tray tooltip and minimize-on-close daemon behavior.
+ */
+export async function invokeTauriSyncTrayState(
+  tooltip: string,
+  minimizeOnClose: boolean
+): Promise<boolean> {
+  if (!isTauriDesktopRuntime()) return false;
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('sync_tray_guardian_state', {
+      tooltip,
+      minimizeOnClose
+    });
+    return Boolean(res);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sends a native Windows OS Balloon/Toast notification via Tauri Win32 backend.
+ */
+export async function invokeTauriNativeNotification(
+  title: string,
+  body: string,
+  severity: 'info' | 'warning' | 'critical' = 'info'
+): Promise<boolean> {
+  if (!isTauriDesktopRuntime()) return false;
+  try {
+    const res = await (window as any).__TAURI__.core.invoke('send_native_os_notification', {
+      title,
+      body,
+      severity
+    });
+    return Boolean(res);
+  } catch {
+    return false;
+  }
+}
+
+

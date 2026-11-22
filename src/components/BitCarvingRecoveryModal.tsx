@@ -13,6 +13,10 @@ import {
   DS_ExecuteBitCarvingRecovery,
   DSCarvedSectorResult
 } from '../utils/nativeDllBridge';
+import {
+  RecoveryCarveInspectionReport,
+  runRecoveryCarveInspection
+} from '../utils/recoveryDllBridge';
 import { isNativeHardwareRuntime, queryTauriRawSector } from '../utils/nativeDriveEngine';
 import { DiskDrive } from '../types';
 
@@ -35,6 +39,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   const [clusterSpan, setClusterSpan] = useState<number>(8);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [result, setResult] = useState<DSCarvedSectorResult | null>(null);
+  const [carveReport, setCarveReport] = useState<RecoveryCarveInspectionReport | null>(null);
 
   const isMountedRef = useRef<boolean>(true);
   const isOpenRef = useRef<boolean>(isOpen);
@@ -57,6 +62,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     if (isOpen) {
       setTargetLba(initialLba);
       setResult(null);
+      setCarveReport(null);
     }
   }, [isOpen, initialLba, drive?.id]);
 
@@ -70,6 +76,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     const reqDriveId = drive?.id;
     setIsProcessing(true);
     setResult(null);
+    setCarveReport(null);
 
     try {
       const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, drive);
@@ -82,6 +89,32 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
         return;
       }
       setResult(carved);
+
+      if (carved.isSalvaged) {
+        let rawBytes: Uint8Array | null = null;
+        if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
+          const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
+          if (Number.isFinite(driveIndex) && driveIndex >= 0) {
+            const readLen = Math.min(64 * secSize, Math.max(secSize, carved.carvedSizeBytes));
+            rawBytes = await queryTauriRawSector(driveIndex, targetLba, readLen);
+          }
+        }
+        if (!rawBytes && carved.hexPreview) {
+          const hexTokens = carved.hexPreview.trim().split(/\s+/).filter(Boolean);
+          rawBytes = new Uint8Array(hexTokens.map(h => parseInt(h, 16) || 0));
+        }
+        if (rawBytes && rawBytes.length > 0) {
+          const inspected = await runRecoveryCarveInspection(rawBytes);
+          if (
+            isMountedRef.current &&
+            isOpenRef.current &&
+            activeDriveIdRef.current === reqDriveId &&
+            carveReqIdRef.current === reqId
+          ) {
+            setCarveReport(inspected);
+          }
+        }
+      }
     } finally {
       if (
         isMountedRef.current &&
@@ -120,11 +153,19 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const ext = result.signatureType === 1 ? 'jpg' :
-                result.signatureType === 2 ? 'png' :
-                result.signatureType === 3 ? 'pdf' :
-                result.signatureType === 4 ? 'zip' :
-                result.signatureType === 5 ? 'mp4' : 'bin';
+    const ext =
+      carveReport?.fileExtension ||
+      (result.signatureType === 1
+        ? 'jpg'
+        : result.signatureType === 2
+        ? 'png'
+        : result.signatureType === 3
+        ? 'pdf'
+        : result.signatureType === 4
+        ? 'zip'
+        : result.signatureType === 5
+        ? 'mp4'
+        : 'bin');
     a.download = `DiskSentinel-Carved-LBA${targetLba}.${ext}`;
     document.body.appendChild(a);
     a.click();
@@ -259,12 +300,65 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
 
                     <button
                       onClick={handleExportCarvedData}
-                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shrink-0 shadow-sm transition-colors cursor-pointer"
+                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shrink-0 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      복구 바이너리 저장
+                      복구 바이너리 저장 (.{carveReport?.fileExtension || 'bin'})
                     </button>
                   </div>
+
+                  {carveReport && (
+                    <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/50 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <span className="font-bold text-slate-800 dark:text-slate-200">
+                          Deep 16-Signature Carve Telemetry ({carveReport.signatureName})
+                        </span>
+                        <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                          {carveReport.engineSource === 'native-cpp-dll'
+                            ? 'DiskSentinelRecovery.dll'
+                            : carveReport.engineSource === 'rust-parity-fallback'
+                            ? 'Recovery Rust Parity'
+                            : 'TS Mathematical Parity'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono tabular-nums text-[11px]">
+                        <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+                          <div className="text-[10px] font-sans text-slate-500">신뢰도 / 확장자</div>
+                          <div className="font-bold text-emerald-600 dark:text-emerald-400">
+                            {carveReport.confidenceScore}% · .{carveReport.fileExtension}
+                          </div>
+                        </div>
+                        <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+                          <div className="text-[10px] font-sans text-slate-500">트레일러 / 완결성</div>
+                          <div className="font-bold text-slate-800 dark:text-slate-200 truncate">
+                            {carveReport.footerDetected
+                              ? carveReport.footerMarker || 'EOF Verified'
+                              : carveReport.isTruncated
+                              ? 'Truncated (EOF 미검출)'
+                              : carveReport.isZeroFilled
+                              ? 'All-Zero Sector'
+                              : `${carveReport.estimatedPayloadBytes.toLocaleString()} B`}
+                          </div>
+                        </div>
+                        <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+                          <div className="text-[10px] font-sans text-slate-500">Shannon Entropy</div>
+                          <div className="font-bold text-indigo-600 dark:text-indigo-400">
+                            {carveReport.shannonEntropy.toFixed(3)} bits/B
+                          </div>
+                        </div>
+                        <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+                          <div className="text-[10px] font-sans text-slate-500">
+                            {carveReport.nearMatchBitFlips > 0 ? 'Hamming 비트 반전' : 'IEEE CRC32'}
+                          </div>
+                          <div className="font-bold text-slate-800 dark:text-slate-200">
+                            {carveReport.nearMatchBitFlips > 0
+                              ? `${carveReport.nearMatchBitFlips} bit flip · 0x${carveReport.crc32.toString(16).toUpperCase().padStart(8, '0')}`
+                              : `0x${carveReport.crc32.toString(16).toUpperCase().padStart(8, '0')}`}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {result.hexPreview && (
                     <div className="p-3 rounded-lg border bg-slate-900 border-slate-800 text-slate-100 font-mono text-[11px] space-y-1.5 overflow-hidden">

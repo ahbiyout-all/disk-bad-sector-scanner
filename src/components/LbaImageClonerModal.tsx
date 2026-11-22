@@ -40,6 +40,10 @@ import {
   queryTauriDdrescueBackupStatus,
   queryTauriRawSectorRange
 } from '../utils/nativeDriveEngine';
+import {
+  RecoveryDdrescuePlanResult,
+  runRecoveryDdrescuePlan
+} from '../utils/recoveryDllBridge';
 import { parsePartitionTableFromRawBytes } from '../utils/partitionParser';
 
 interface LbaImageClonerModalProps {
@@ -72,11 +76,15 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   const [isZeroFilling, setIsZeroFilling] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [recoveryPlan, setRecoveryPlan] = useState<RecoveryDdrescuePlanResult | null>(null);
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMountedRef = useRef<boolean>(true);
   const isOpenRef = useRef<boolean>(isOpen);
   isOpenRef.current = isOpen;
+  const activeDriveIdRef = useRef<string>(drive.id);
+  activeDriveIdRef.current = drive.id;
+  const planReqIdRef = useRef<number>(0);
   const tauriActive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
 
   useEffect(() => {
@@ -131,6 +139,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
     setMapPath(defaults.mapPath);
     setSession(null);
     setBackendStatus(null);
+    setRecoveryPlan(null);
     setStatusMessage(null);
     setErrorMessage(null);
 
@@ -211,6 +220,26 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
     };
   }, [isRunning, isOpen, tauriActive]);
 
+  useEffect(() => {
+    const reqId = ++planReqIdRef.current;
+    const reqDriveId = drive.id;
+    if (!isOpen || !session || session.intervals.length === 0) {
+      setRecoveryPlan(null);
+      return;
+    }
+    void runRecoveryDdrescuePlan(session.intervals, chunkSectors).then(plan => {
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== reqDriveId ||
+        planReqIdRef.current !== reqId
+      ) {
+        return;
+      }
+      setRecoveryPlan(plan);
+    });
+  }, [isOpen, drive.id, session, chunkSectors]);
+
   const pathValidation = useMemo(
     () => validateCloneOutputPath(drive, outputPath),
     [drive, outputPath]
@@ -288,14 +317,22 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
       setErrorMessage('유효한 ddrescue 복제 맵 JSON 형식이 아닙니다.');
       return;
     }
+    const plan = await runRecoveryDdrescuePlan(loaded.intervals, loaded.chunkSectors || chunkSectors);
     setStartLbaInput(String(loaded.rangeStartLba));
     setEndLbaInput(String(loaded.rangeEndLba));
     setOutputPath(loaded.outputPath);
     setMapPath(loaded.mapPath);
     setChunkSectors(loaded.chunkSectors);
     setBackendStatus(null);
-    setSession({ ...loaded, phase: 'paused' });
-    setStatusMessage(`복제 맵 로드 완료 — 도메인 구간 ${loaded.intervals.length}개 복원됨`);
+    setRecoveryPlan(plan);
+    setSession({
+      ...loaded,
+      phase: plan.completed ? 'completed' : 'paused',
+      intervals: plan.intervals.length > 0 ? plan.intervals : loaded.intervals
+    });
+    setStatusMessage(
+      `복제 맵 로드 완료 — 구간 ${loaded.intervals.length}개 → ${plan.coalescedIntervalCount}개 병합 복원 (${plan.suggestedPhase})`
+    );
   };
 
   const handleSaveMap = async () => {
@@ -792,6 +829,24 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-xs bg-orange-500" />Scraping 대기</span>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-xs bg-red-500" />영구 불량 (BAD)</span>
               </div>
+              {recoveryPlan && (
+                <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                  <span>
+                    {recoveryPlan.engineSource === 'native-cpp-dll'
+                      ? 'DiskSentinelRecovery.dll'
+                      : recoveryPlan.engineSource === 'rust-parity-fallback'
+                      ? 'Recovery Rust Parity'
+                      : 'TS Parity'}{' '}
+                    · 병합 구간 {recoveryPlan.coalescedIntervalCount.toLocaleString()}개
+                  </span>
+                  <span>
+                    권고 다음 패스: <strong className="text-indigo-600 dark:text-indigo-400 uppercase">{recoveryPlan.suggestedPhase}</strong>
+                    {recoveryPlan.hasNextWork
+                      ? ` (LBA #${recoveryPlan.nextWorkStartLba.toLocaleString()} · ${recoveryPlan.nextWorkSectorCount} sec)`
+                      : ' (전 구간 처리 완료)'}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* 6-Card Telemetry Strip with Retry Counts */}

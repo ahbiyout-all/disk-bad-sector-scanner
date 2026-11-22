@@ -155,20 +155,31 @@ export function DS_EvaluateDriveReliability(entries: DSSmartEntry[]): DSDriveHea
 
   score = Math.max(0, Math.min(100, Math.round(score * 10) / 10));
 
-  let estimatedRemainingDays = 1825;
-  let overallGrade: DSDriveHealthReport['overallGrade'] = 'EXCELLENT';
+  const normScore = score / 100.0;
+  const baseDays = 10.0 + 1815.0 * Math.pow(normScore, 2.2);
+  const thermalFactor = temperatureCelsius !== null && temperatureCelsius > 55
+    ? Math.max(0.35, 1.0 - (temperatureCelsius - 55) * 0.03)
+    : 1.0;
+  const pohAgingFactor = totalPowerOnHours > 35000
+    ? Math.max(0.55, 1.0 - (totalPowerOnHours - 35000) / 120000.0)
+    : 1.0;
+  const activeFaultFactor = (pendingSectors > 0 || uncorrectableErrors > 0)
+    ? Math.max(0.15, 1.0 / (1.0 + (pendingSectors + uncorrectableErrors) * 0.35))
+    : 1.0;
 
+  const estimatedRemainingDays = Math.min(
+    3650,
+    Math.max(1, Math.round(baseDays * thermalFactor * pohAgingFactor * activeFaultFactor))
+  );
+
+  let overallGrade: DSDriveHealthReport['overallGrade'] = 'EXCELLENT';
   if (score >= 90.0) {
-    estimatedRemainingDays = 1825;
     overallGrade = 'EXCELLENT';
   } else if (score >= 75.0) {
-    estimatedRemainingDays = 730;
     overallGrade = 'GOOD';
   } else if (score >= 45.0) {
-    estimatedRemainingDays = 120;
     overallGrade = 'WARNING';
   } else {
-    estimatedRemainingDays = 14;
     overallGrade = 'CRITICAL';
   }
 
@@ -239,7 +250,7 @@ export function DS_GetNvmeDeepTelemetry(drive?: DiskDrive): DSNvmeHealthLog | nu
     criticalWarning: 0,
     temperatureCelsius: specs.currentTempC ?? drive.temperatureC ?? null,
     availableSpare: specs.availableSparePercent ?? null,
-    availableSpareThreshold: 10,
+    availableSpareThreshold: specs.availableSpareThreshold ?? null,
     percentageUsed: specs.percentageUsed ?? null,
     dataUnitsReadTb: specs.hostReadsTb ?? null,
     dataUnitsWrittenTb: specs.hostWritesTb ?? null,
@@ -263,30 +274,11 @@ export function DS_CalculateAvx2ChecksumAndZeroCheck(buffer: Uint8Array): {
   let avxParity = 0n;
 
   const len = buffer.length;
-  const chunk32Count = Math.floor(len / 32);
-
-  for (let c = 0; c < chunk32Count; c++) {
-    const base = c * 32;
-    for (let i = 0; i < 32; i++) {
-      const b = buffer[base + i];
-      if (b !== 0) isAllZeros = false;
-      crc ^= b;
-      for (let k = 0; k < 8; k++) {
-        crc = (crc >>> 1) ^ ((crc & 1) ? 0xEDB88320 : 0);
-      }
-      const shift = BigInt((i % 8) * 8);
-      avxParity ^= (BigInt(b) << shift);
-    }
-  }
-
-  for (let i = chunk32Count * 32; i < len; i++) {
+  for (let i = 0; i < len; i++) {
     const b = buffer[i];
     if (b !== 0) isAllZeros = false;
-    crc ^= b;
-    for (let k = 0; k < 8; k++) {
-      crc = (crc >>> 1) ^ ((crc & 1) ? 0xEDB88320 : 0);
-    }
-    const shift = BigInt((i % 8) * 8);
+    crc = DS_CRC32_LUT[(crc ^ b) & 0xFF] ^ (crc >>> 8);
+    const shift = BigInt((i & 7) * 8);
     avxParity ^= (BigInt(b) << shift);
   }
 
@@ -683,8 +675,8 @@ export interface DSPhysicalDriveDetail {
   firmwareRev: string;
   busType: string;
   totalCapacityBytes: bigint | null;
-  sectorSize: number;
-  physicalSectorSize: number;
+  sectorSize: number | null;
+  physicalSectorSize: number | null;
   isSsd: boolean;
   isTrimSupported: boolean | null;
   isWriteCacheEnabled: boolean | null;
@@ -709,8 +701,8 @@ export function DS_EnumeratePhysicalDrives(activeDrive?: DiskDrive | DiskDrive[]
       firmwareRev: drive.firmware,
       busType: drive.hardwareSpecs?.busType || (drive.type === 'NVMe' ? 'NVMe' : drive.isExternal ? 'USB' : 'Unknown'),
       totalCapacityBytes: capBytes,
-      sectorSize: drive.hardwareSpecs?.logicalSectorSize || 512,
-      physicalSectorSize: drive.hardwareSpecs?.physicalSectorSize || 4096,
+      sectorSize: drive.hardwareSpecs?.logicalSectorSize ?? null,
+      physicalSectorSize: drive.hardwareSpecs?.physicalSectorSize ?? null,
       isSsd: drive.type !== 'HDD' && drive.type !== 'EXTERNAL_HDD',
       isTrimSupported: drive.hardwareSpecs?.trimSupported ?? null,
       isWriteCacheEnabled: drive.hardwareSpecs?.volatileWriteCache ?? null,

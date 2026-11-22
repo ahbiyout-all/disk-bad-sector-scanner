@@ -895,8 +895,8 @@ namespace DiskSentinel
                 string firmware = "N/A";
                 string bus = "Standard Storage";
                 ulong capBytes = 0;
-                uint secSize = 512;
-                uint physSecSize = 4096;
+                uint secSize = 0;
+                uint physSecSize = 0;
                 bool isSsd = false;
                 bool isTrim = false;
                 int tempC = 0;
@@ -909,12 +909,12 @@ namespace DiskSentinel
                 {
                     try
                     {
-                        uint outSec = 512;
+                        uint outSec = 0;
                         IntPtr hDrive = DS_OpenDriveDirect(i, out outSec);
                         if (hDrive != IntPtr.Zero)
                         {
                             found = true;
-                            secSize = outSec > 0 ? outSec : 512;
+                            if (outSec > 0) secSize = outSec;
                             DSPhysicalDriveDetail detail;
                             if (DS_GetDriveDetails(hDrive, out detail))
                             {
@@ -1078,8 +1078,8 @@ namespace DiskSentinel
                     partSb.ToString(),
                     capBytes,
                     capBytes / (1024UL * 1024UL * 1024UL),
-                    secSize,
-                    physSecSize,
+                    secSize > 0 ? secSize.ToString(CultureInfo.InvariantCulture) : "null",
+                    physSecSize > 0 ? physSecSize.ToString(CultureInfo.InvariantCulture) : "null",
                     tempC > 0 ? tempC.ToString(CultureInfo.InvariantCulture) : "null",
                     reliabilityScore.HasValue ? reliabilityScore.Value.ToString("F1", CultureInfo.InvariantCulture) : "null",
                     powerOnHours.HasValue ? powerOnHours.Value.ToString(CultureInfo.InvariantCulture) : "null",

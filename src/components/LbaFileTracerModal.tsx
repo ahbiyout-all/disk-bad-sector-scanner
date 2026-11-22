@@ -48,6 +48,10 @@ import {
   HeatmapSeverity,
   LbaHeatmapCell
 } from '../utils/fileLbaHeatmap';
+import {
+  ForensicsExtentHeatmapReport,
+  runForensicsExtentHeatmap
+} from '../utils/forensicsDllBridge';
 
 interface LbaFileTracerModalProps {
   isOpen: boolean;
@@ -59,7 +63,7 @@ interface LbaFileTracerModalProps {
   badLbaHistory?: number[];
   onOpenHexInspector?: (lba: number) => void;
   onOpenLbaCloner?: (range: { startLba: number; endLba: number }) => void;
-  onRepairSectors?: (driveId: string, repairedBlockIds: number[]) => void;
+  onRepairSectors?: (driveId: string, repairedBlockIds: number[], latencyByBlockId?: Record<number, number>) => void;
 }
 
 interface DirTreeNode {
@@ -221,12 +225,16 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
   const isMountedRef = useRef<boolean>(true);
   const isOpenRef = useRef<boolean>(isOpen);
   isOpenRef.current = isOpen;
+  const activeDriveIdRef = useRef<string>(drive.id);
+  activeDriveIdRef.current = drive.id;
+  const heatmapReqIdRef = useRef<number>(0);
 
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       repairCancelledRef.current = true;
+      heatmapReqIdRef.current += 1;
       abortControllerRef.current?.abort();
     };
   }, []);
@@ -245,10 +253,26 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
 
 
 
+  const [nativeExtentHeatmap, setNativeExtentHeatmap] = useState<ForensicsExtentHeatmapReport | null>(null);
+
   const heatmapSearchIndex = useMemo(
     () => buildHeatmapSearchIndex({ sectorBlocks, errorLogs, badLbaHistory }),
     [sectorBlocks, errorLogs, badLbaHistory]
   );
+
+  const allKnownBadLbas = useMemo(() => {
+    const set = new Set<number>();
+    for (const blk of sectorBlocks) {
+      if (blk.status === 'bad' || blk.status === 'critical') set.add(blk.lba);
+    }
+    for (const log of errorLogs) {
+      if (log.status === 'bad' || log.status === 'critical') set.add(log.lba);
+    }
+    for (const h of badLbaHistory) {
+      set.add(h);
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  }, [sectorBlocks, errorLogs, badLbaHistory]);
 
   // Precompute LBA range grouping & bad-sector density heatmap for every matched file
   const fileHeatmapsByKey = useMemo(() => {
@@ -430,6 +454,45 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
     const heatmap = fileHeatmapsByKey.get(key) || null;
     return { file, idx, key, heatmap };
   }, [traceResult, selectedFileKey, fileHeatmapsByKey]);
+
+  useEffect(() => {
+    const reqId = ++heatmapReqIdRef.current;
+    const reqDriveId = drive.id;
+    setNativeExtentHeatmap(null);
+
+    if (
+      !isOpen ||
+      !tauriActive ||
+      !selectedFileEntry ||
+      selectedFileEntry.file.extents.length === 0
+    ) {
+      return;
+    }
+
+    const extents = selectedFileEntry.file.extents.map(ext => ({
+      startLba: ext.startLba,
+      sectorCount: Math.max(1, ext.endLba - ext.startLba + 1)
+    }));
+
+    void runForensicsExtentHeatmap(extents, allKnownBadLbas, 48).then(res => {
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== reqDriveId ||
+        heatmapReqIdRef.current !== reqId ||
+        !res
+      ) {
+        return;
+      }
+      setNativeExtentHeatmap(res);
+    });
+  }, [
+    isOpen,
+    tauriActive,
+    drive.id,
+    selectedFileEntry,
+    allKnownBadLbas
+  ]);
 
   const selectedBulkEntries = useMemo(() => {
     if (!traceResult || traceResult.affectedFiles.length === 0) return [];
@@ -673,6 +736,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
     setRepairProgress({ current: 0, total: targets.length });
 
     const succeededBlockIds: number[] = [];
+    const succeededLatencyMap: Record<number, number> = {};
     let succeededCount = 0;
     let failedCount = 0;
     let lastFailureReason = '';
@@ -692,6 +756,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
           succeededCount++;
           if (target.blockId >= 0) {
             succeededBlockIds.push(target.blockId);
+            succeededLatencyMap[target.blockId] = res.latencyMs;
           }
         } else {
           failedCount++;
@@ -705,7 +770,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
       }
 
       if (succeededBlockIds.length > 0 && onRepairSectors) {
-        onRepairSectors(targetDrive.id, Array.from(new Set(succeededBlockIds)));
+        onRepairSectors(targetDrive.id, Array.from(new Set(succeededBlockIds)), succeededLatencyMap);
       }
 
       if (!isMountedRef.current || !isOpenRef.current) return;
@@ -839,6 +904,21 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
             </div>
           </div>
         </div>
+
+        {nativeExtentHeatmap && (
+          <div className="px-3 py-1.5 rounded border border-indigo-200/80 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-slate-700 dark:text-slate-300">
+            <span className="font-sans font-semibold text-indigo-700 dark:text-indigo-300">
+              {nativeExtentHeatmap.engineSource === 'native-cpp-dll'
+                ? 'DiskSentinelForensics.dll O(N log M) 익스텐트 검증'
+                : 'Forensics Rust Parity 익스텐트 검증'}
+            </span>
+            <span>
+              영향 익스텐트 {nativeExtentHeatmap.impactedExtentCount}/{nativeExtentHeatmap.totalExtents}개 · 최고 셀 밀도{' '}
+              {nativeExtentHeatmap.peakCellDensityPct.toFixed(1)}% · 단편화 확산{' '}
+              {(nativeExtentHeatmap.fragmentationSpreadScore * 100).toFixed(0)}%
+            </span>
+          </div>
+        )}
 
         {/* Grouped LBA Zone Summary Strip */}
         <div className="space-y-1.5">

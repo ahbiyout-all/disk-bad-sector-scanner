@@ -103,6 +103,60 @@ static uint32_t dsf_lower_bound_u64(const uint64_t* arr, uint32_t n, uint64_t ta
     return lo;
 }
 
+static int dsf_cmp_sample_by_block_id(const void* a, const void* b) {
+    const DSFTelemetrySample* sa = (const DSFTelemetrySample*)a;
+    const DSFTelemetrySample* sb = (const DSFTelemetrySample*)b;
+    if (sa->blockId < sb->blockId) return -1;
+    if (sa->blockId > sb->blockId) return 1;
+    if (sa->lba < sb->lba) return -1;
+    if (sa->lba > sb->lba) return 1;
+    return 0;
+}
+
+static size_t dsf_utf16le_to_utf8(const uint8_t* utf16Bytes, size_t maxCodeUnits, char* outUtf8, size_t outCapacity) {
+    if (!utf16Bytes || !outUtf8 || outCapacity == 0) return 0;
+    size_t outPos = 0;
+    for (size_t idx = 0; idx < maxCodeUnits; ++idx) {
+        uint16_t u16 = dsf_read_u16_le(utf16Bytes + (idx * 2));
+        if (u16 == 0) break;
+
+        uint32_t cp = u16;
+        if (u16 >= 0xD800U && u16 <= 0xDBFFU && (idx + 1) < maxCodeUnits) {
+            uint16_t low = dsf_read_u16_le(utf16Bytes + ((idx + 1) * 2));
+            if (low >= 0xDC00U && low <= 0xDFFFU) {
+                cp = 0x10000U + (((uint32_t)(u16 - 0xD800U) << 10) | (uint32_t)(low - 0xDC00U));
+                idx++;
+            } else {
+                cp = 0xFFFDU;
+            }
+        } else if (u16 >= 0xDC00U && u16 <= 0xDFFFU) {
+            cp = 0xFFFDU;
+        }
+
+        if (cp <= 0x7FU) {
+            if (outPos + 1 >= outCapacity) break;
+            outUtf8[outPos++] = (char)cp;
+        } else if (cp <= 0x7FFU) {
+            if (outPos + 2 >= outCapacity) break;
+            outUtf8[outPos++] = (char)(0xC0U | ((cp >> 6) & 0x1FU));
+            outUtf8[outPos++] = (char)(0x80U | (cp & 0x3FU));
+        } else if (cp <= 0xFFFFU) {
+            if (outPos + 3 >= outCapacity) break;
+            outUtf8[outPos++] = (char)(0xE0U | ((cp >> 12) & 0x0FU));
+            outUtf8[outPos++] = (char)(0x80U | ((cp >> 6) & 0x3FU));
+            outUtf8[outPos++] = (char)(0x80U | (cp & 0x3FU));
+        } else {
+            if (outPos + 4 >= outCapacity) break;
+            outUtf8[outPos++] = (char)(0xF0U | ((cp >> 18) & 0x07U));
+            outUtf8[outPos++] = (char)(0x80U | ((cp >> 12) & 0x3FU));
+            outUtf8[outPos++] = (char)(0x80U | ((cp >> 6) & 0x3FU));
+            outUtf8[outPos++] = (char)(0x80U | (cp & 0x3FU));
+        }
+    }
+    outUtf8[outPos] = '\0';
+    return outPos;
+}
+
 // ---------------------------------------------------------------------------
 // Export 1: Engine Metadata & CRC32 Self-Test
 // ---------------------------------------------------------------------------
@@ -155,30 +209,51 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(
     if (maxBlockIdGap == 0) maxBlockIdGap = 1;
     const double safeBaseline = (baselineExpectedMs > 0.1) ? baselineExpectedMs : 1.0;
 
-    // Pass 1: Welford Numerically Stable Mean & M2 Recurrence
+    // Pass 1: Finite-Guarded Welford Numerically Stable Mean & M2 Recurrence + Monotonic Order Check
     double mean = 0.0;
     double m2 = 0.0;
     double maxLat = 0.0;
+    uint32_t validLatCount = 0;
     uint32_t slowBadCount = 0;
+    bool needsSort = false;
 
     for (uint32_t i = 0; i < sampleCount; ++i) {
-        double x = samples[i].latencyMs;
-        if (x < 0.0) x = 0.0;
+        if (i > 0 && samples[i].blockId < samples[i - 1].blockId) {
+            needsSort = true;
+        }
+        if (samples[i].statusCode >= 2U) {
+            slowBadCount++;
+        }
 
+        double x = samples[i].latencyMs;
+        if (!isfinite(x) || x < 0.0) {
+            continue;
+        }
+
+        validLatCount++;
         double delta = x - mean;
-        mean += delta / (double)(i + 1);
+        mean += delta / (double)validLatCount;
         double delta2 = x - mean;
         m2 += delta * delta2;
 
         if (x > maxLat) maxLat = x;
-        if (samples[i].statusCode >= 2U) {
-            slowBadCount++;
-        }
     }
 
-    double variance = (sampleCount > 1) ? (m2 / (double)sampleCount) : 0.0;
+    // Align sample standard deviation denominator (N - 1) with frontend d3.deviation()
+    double variance = (validLatCount > 1) ? (m2 / (double)(validLatCount - 1U)) : 0.0;
     double stdDev = sqrt(variance > 0.0 ? variance : 0.0);
     double effectiveStdDev = (stdDev < 0.05) ? 0.05 : stdDev;
+
+    const DSFTelemetrySample* orderedSamples = samples;
+    DSFTelemetrySample* sortedCopy = NULL;
+    if (needsSort && sampleCount > 1U) {
+        sortedCopy = (DSFTelemetrySample*)malloc(sizeof(DSFTelemetrySample) * sampleCount);
+        if (sortedCopy) {
+            memcpy(sortedCopy, samples, sizeof(DSFTelemetrySample) * sampleCount);
+            qsort(sortedCopy, sampleCount, sizeof(DSFTelemetrySample), dsf_cmp_sample_by_block_id);
+            orderedSamples = sortedCopy;
+        }
+    }
 
     // Pass 2: Z-Score Banding & Contiguous Physical Cluster Aggregation
     uint32_t w1 = 0, s12 = 0, s23 = 0, s3p = 0;
@@ -207,18 +282,22 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(
     };
 
     for (uint32_t i = 0; i < sampleCount; ++i) {
-        const DSFTelemetrySample& s = samples[i];
-        double lat = (s.latencyMs > 0.0) ? s.latencyMs : 0.0;
-        double z = (lat - mean) / effectiveStdDev;
+        const DSFTelemetrySample& s = orderedSamples[i];
+        bool isBadStatus = (s.statusCode >= 4U);
+        double lat = (isfinite(s.latencyMs) && s.latencyMs >= 0.0) ? s.latencyMs : 0.0;
+        double z = (validLatCount > 0 && isfinite(s.latencyMs) && s.latencyMs >= 0.0)
+            ? ((lat - mean) / effectiveStdDev)
+            : 0.0;
 
-        if (z <= 1.0)      w1++;
-        else if (z <= 2.0) s12++;
-        else if (z <= 3.0) s23++;
-        else               s3p++;
+        if (validLatCount > 0 && isfinite(s.latencyMs) && s.latencyMs >= 0.0) {
+            if (z <= 1.0)      w1++;
+            else if (z <= 2.0) s12++;
+            else if (z <= 3.0) s23++;
+            else               s3p++;
+        }
 
         bool isAnomalous = (s.statusCode >= 2U) || (z >= 2.5 && lat >= safeBaseline * 2.0);
         if (isAnomalous) {
-            bool isBad = (s.statusCode >= 4U);
             if (!inRun) {
                 inRun = true;
                 curZone.startLba = s.lba;
@@ -226,10 +305,10 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(
                 curZone.startBlockId = s.blockId;
                 curZone.endBlockId = s.blockId;
                 curZone.blockCount = 1;
-                curZone.badCount = isBad ? 1U : 0U;
+                curZone.badCount = isBadStatus ? 1U : 0U;
                 curZone.peakLatencyMs = lat;
                 curZone.peakZScore = z;
-                curZone.severity = isBad ? 2U : 1U;
+                curZone.severity = isBadStatus ? 2U : 1U;
                 curLatencySum = lat;
             } else {
                 uint32_t gap = (s.blockId >= curZone.endBlockId)
@@ -239,7 +318,7 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(
                     curZone.endLba = s.lba;
                     curZone.endBlockId = s.blockId;
                     curZone.blockCount++;
-                    if (isBad) {
+                    if (isBadStatus) {
                         curZone.badCount++;
                         curZone.severity = 2U;
                     }
@@ -254,10 +333,10 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(
                     curZone.startBlockId = s.blockId;
                     curZone.endBlockId = s.blockId;
                     curZone.blockCount = 1;
-                    curZone.badCount = isBad ? 1U : 0U;
+                    curZone.badCount = isBadStatus ? 1U : 0U;
                     curZone.peakLatencyMs = lat;
                     curZone.peakZScore = z;
-                    curZone.severity = isBad ? 2U : 1U;
+                    curZone.severity = isBadStatus ? 2U : 1U;
                     curLatencySum = lat;
                 }
             }
@@ -266,6 +345,7 @@ DSF_API bool DSF_CALL DSF_AnalyzeSectorTelemetryZScore(
         }
     }
     flushZone();
+    if (sortedCopy) free(sortedCopy);
 
     // Composite Degradation Risk Index (0.0 .. 100.0)
     double slowPct = (double)slowBadCount * 100.0 / (double)sampleCount;
@@ -330,7 +410,11 @@ DSF_API bool DSF_CALL DSF_ComputeExtentBadDensityHeatmap(
 
     uint64_t totalSectors = 0ULL;
     for (uint32_t i = 0; i < extentCount; ++i) {
-        totalSectors += extents[i].sectorCount;
+        if (extents[i].sectorCount > UINT64_MAX - totalSectors) {
+            totalSectors = UINT64_MAX;
+        } else {
+            totalSectors += extents[i].sectorCount;
+        }
     }
 
     outSummary->totalExtents = extentCount;
@@ -339,13 +423,16 @@ DSF_API bool DSF_CALL DSF_ComputeExtentBadDensityHeatmap(
 
     const uint64_t* sortedPtr = badLbas;
     uint64_t* ownedSorted = NULL;
-    if (!badLbasAlreadySorted) {
+    if (!badLbasAlreadySorted && badLbaCount > 1U) {
         ownedSorted = (uint64_t*)malloc(sizeof(uint64_t) * badLbaCount);
         if (!ownedSorted) return false;
         memcpy(ownedSorted, badLbas, sizeof(uint64_t) * badLbaCount);
         qsort(ownedSorted, badLbaCount, sizeof(uint64_t), dsf_cmp_u64);
         sortedPtr = ownedSorted;
     }
+
+    const uint64_t minBadLba = sortedPtr[0];
+    const uint64_t maxBadLba = sortedPtr[badLbaCount - 1U];
 
     uint32_t impactedExtents = 0;
     uint32_t totalHits = 0;
@@ -355,23 +442,27 @@ DSF_API bool DSF_CALL DSF_ComputeExtentBadDensityHeatmap(
         uint64_t extStart = extents[e].startLba;
         uint64_t extLen = extents[e].sectorCount;
         if (extLen == 0ULL) continue;
-        uint64_t extEndExcl = extStart + extLen;
-        if (extEndExcl < extStart) extEndExcl = UINT64_MAX;
+        uint64_t extEndExcl = (extLen > UINT64_MAX - extStart) ? UINT64_MAX : (extStart + extLen);
 
-        uint32_t loIdx = dsf_lower_bound_u64(sortedPtr, badLbaCount, extStart);
-        uint32_t hiIdx = dsf_lower_bound_u64(sortedPtr, badLbaCount, extEndExcl);
+        if (maxBadLba >= extStart && minBadLba < extEndExcl) {
+            uint32_t loIdx = dsf_lower_bound_u64(sortedPtr, badLbaCount, extStart);
+            uint32_t hiIdx = dsf_lower_bound_u64(sortedPtr, badLbaCount, extEndExcl);
 
-        if (hiIdx > loIdx) {
-            impactedExtents++;
-            for (uint32_t k = loIdx; k < hiIdx; ++k) {
-                uint64_t relSector = (sortedPtr[k] - extStart) + cumulativeOffset;
-                uint32_t cellIdx = (uint32_t)((double)relSector * (double)cellCount / (double)totalSectors);
-                if (cellIdx >= cellCount) cellIdx = cellCount - 1U;
-                if (outCellBadCounts) outCellBadCounts[cellIdx]++;
-                totalHits++;
+            if (hiIdx > loIdx) {
+                impactedExtents++;
+                for (uint32_t k = loIdx; k < hiIdx; ++k) {
+                    uint64_t relOffsetInExt = sortedPtr[k] - extStart;
+                    uint64_t relSector = (relOffsetInExt > UINT64_MAX - cumulativeOffset)
+                        ? UINT64_MAX
+                        : (relOffsetInExt + cumulativeOffset);
+                    uint32_t cellIdx = (uint32_t)(((double)relSector / (double)totalSectors) * (double)cellCount);
+                    if (cellIdx >= cellCount) cellIdx = cellCount - 1U;
+                    if (outCellBadCounts) outCellBadCounts[cellIdx]++;
+                    totalHits++;
+                }
             }
         }
-        cumulativeOffset += extLen;
+        cumulativeOffset = (extLen > UINT64_MAX - cumulativeOffset) ? UINT64_MAX : (cumulativeOffset + extLen);
     }
 
     if (ownedSorted) free(ownedSorted);
@@ -588,7 +679,8 @@ DSF_API bool DSF_CALL DSF_InspectBootAndPartitionTable(
 
         dsf_safe_strncpy(outReport->schemeName, "GPT", sizeof(outReport->schemeName));
 
-        if (entrySize >= 128U && entrySize <= 512U && numEntries > 0U && numEntries <= 1024U) {
+        if (entrySize >= 128U && entrySize <= 512U && numEntries > 0U && numEntries <= 1024U &&
+            partEntriesLba <= (UINT64_MAX / (uint64_t)secBytes)) {
             uint64_t arrayByteOffset = partEntriesLba * (uint64_t)secBytes;
             uint64_t arrayTotalBytes = (uint64_t)numEntries * (uint64_t)entrySize;
             if (arrayByteOffset <= (uint64_t)bufferLength &&
@@ -618,19 +710,15 @@ DSF_API bool DSF_CALL DSF_InspectBootAndPartitionTable(
                         rec->startLba = sLba;
                         rec->endLba = eLba;
                         rec->sectorCount = (eLba - sLba) + 1ULL;
-                        rec->sizeBytes = rec->sectorCount * (uint64_t)secBytes;
-                        rec->sectorAligned4K = (((sLba * (uint64_t)secBytes) % 4096ULL) == 0ULL) ? 1U : 0U;
+                        rec->sizeBytes = (rec->sectorCount <= (UINT64_MAX / (uint64_t)secBytes))
+                            ? (rec->sectorCount * (uint64_t)secBytes)
+                            : UINT64_MAX;
+                        rec->sectorAligned4K = (sLba <= (UINT64_MAX / (uint64_t)secBytes) && (((sLba * (uint64_t)secBytes) % 4096ULL) == 0ULL)) ? 1U : 0U;
                         rec->isGpt = 1;
                         dsf_classify_gpt_guid(ent, rec->typeLabel, sizeof(rec->typeLabel));
 
-                        // Decode UTF-16LE partition name (bytes 56..127 -> basic ASCII/UTF-8 safe truncation)
-                        size_t outPos = 0;
-                        for (int chIdx = 0; chIdx < 36 && outPos + 1 < sizeof(rec->nameUtf8); ++chIdx) {
-                            uint16_t u16 = dsf_read_u16_le(ent + 56 + (chIdx * 2));
-                            if (u16 == 0) break;
-                            rec->nameUtf8[outPos++] = (u16 >= 32 && u16 <= 126) ? (char)u16 : '?';
-                        }
-                        rec->nameUtf8[outPos] = '\0';
+                        // Full UTF-16LE -> UTF-8 decode (preserves multi-byte Unicode / Korean labels + surrogate pairs)
+                        dsf_utf16le_to_utf8(ent + 56, 36U, rec->nameUtf8, sizeof(rec->nameUtf8));
                     }
                     found++;
                 }
@@ -699,44 +787,64 @@ DSF_API bool DSF_CALL DSF_InspectVbrBootSector(
     outInfo->oemId[8] = '\0';
 
     if (memcmp(vbrSectorBuffer + 3, "NTFS    ", 8) == 0) {
-        outInfo->fsType = DSF_FS_NTFS;
-        outInfo->bytesPerSector = dsf_read_u16_le(vbrSectorBuffer + 11);
-        outInfo->sectorsPerCluster = vbrSectorBuffer[13];
-        outInfo->clusterSizeBytes = outInfo->bytesPerSector * outInfo->sectorsPerCluster;
-        outInfo->reservedSectors = dsf_read_u16_le(vbrSectorBuffer + 14);
-        outInfo->totalSectors = dsf_read_u64_le(vbrSectorBuffer + 40);
-        outInfo->mftStartLcn  = dsf_read_u64_le(vbrSectorBuffer + 48);
-        return true;
+        uint16_t bps = dsf_read_u16_le(vbrSectorBuffer + 11);
+        uint8_t spc = vbrSectorBuffer[13];
+        if (bps >= 512U && bps <= 4096U && (bps & (bps - 1U)) == 0U &&
+            spc > 0U && (spc & (spc - 1U)) == 0U) {
+            outInfo->fsType = DSF_FS_NTFS;
+            outInfo->bytesPerSector = bps;
+            outInfo->sectorsPerCluster = spc;
+            outInfo->clusterSizeBytes = (uint32_t)bps * (uint32_t)spc;
+            outInfo->reservedSectors = dsf_read_u16_le(vbrSectorBuffer + 14);
+            outInfo->totalSectors = dsf_read_u64_le(vbrSectorBuffer + 40);
+            outInfo->mftStartLcn  = dsf_read_u64_le(vbrSectorBuffer + 48);
+            return true;
+        }
+        return false;
     }
 
     if (memcmp(vbrSectorBuffer + 3, "EXFAT   ", 8) == 0) {
-        outInfo->fsType = DSF_FS_EXFAT;
         uint8_t secShift = vbrSectorBuffer[108];
         uint8_t clusShift = vbrSectorBuffer[109];
-        if (secShift >= 9 && secShift <= 12)  outInfo->bytesPerSector = (1U << secShift);
-        if (clusShift <= 25)                  outInfo->sectorsPerCluster = (1U << clusShift);
-        outInfo->clusterSizeBytes = outInfo->bytesPerSector * outInfo->sectorsPerCluster;
+        if (secShift < 9 || secShift > 12 || clusShift > 25) {
+            return false;
+        }
+        uint32_t bps = 1U << secShift;
+        uint32_t spc = 1U << clusShift;
+        if ((uint64_t)bps * (uint64_t)spc > 33554432ULL) {
+            return false;
+        }
+        outInfo->fsType = DSF_FS_EXFAT;
+        outInfo->bytesPerSector = bps;
+        outInfo->sectorsPerCluster = spc;
+        outInfo->clusterSizeBytes = bps * spc;
         outInfo->totalSectors = dsf_read_u64_le(vbrSectorBuffer + 72);
         outInfo->rootCluster  = dsf_read_u32_le(vbrSectorBuffer + 96);
         return true;
     }
 
-    if (memcmp(vbrSectorBuffer + 82, "FAT32", 5) == 0 || dsf_read_u32_le(vbrSectorBuffer + 36) > 0) {
+    bool hasFat32FsType = (memcmp(vbrSectorBuffer + 82, "FAT32", 5) == 0);
+    uint32_t fatSize32 = dsf_read_u32_le(vbrSectorBuffer + 36);
+    uint16_t resSecs = dsf_read_u16_le(vbrSectorBuffer + 14);
+    uint8_t numFats = vbrSectorBuffer[16];
+    if (hasFat32FsType || (outInfo->hasBootSignature && fatSize32 > 0U && resSecs > 0U && numFats >= 1U && numFats <= 4U)) {
         uint16_t bps = dsf_read_u16_le(vbrSectorBuffer + 11);
         uint8_t spc  = vbrSectorBuffer[13];
-        if (bps >= 512 && (bps & (bps - 1)) == 0 && spc > 0 && (spc & (spc - 1)) == 0) {
+        if (bps >= 512U && bps <= 4096U && (bps & (bps - 1U)) == 0U &&
+            spc > 0U && (spc & (spc - 1U)) == 0U) {
             outInfo->fsType = DSF_FS_FAT32;
             outInfo->bytesPerSector = bps;
             outInfo->sectorsPerCluster = spc;
             outInfo->clusterSizeBytes = (uint32_t)bps * (uint32_t)spc;
-            outInfo->reservedSectors = dsf_read_u16_le(vbrSectorBuffer + 14);
+            outInfo->reservedSectors = resSecs;
             uint32_t tot16 = dsf_read_u16_le(vbrSectorBuffer + 19);
             uint32_t tot32 = dsf_read_u32_le(vbrSectorBuffer + 32);
             outInfo->totalSectors = (tot16 != 0) ? (uint64_t)tot16 : (uint64_t)tot32;
             outInfo->rootCluster = dsf_read_u32_le(vbrSectorBuffer + 44);
             return true;
         }
+        return false;
     }
 
-    return true;
+    return false;
 }

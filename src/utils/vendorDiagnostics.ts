@@ -230,51 +230,51 @@ export function classifyFutureDriveStandards(drive: DiskDrive): FutureDriveClass
       : 'SKU Prefix Heuristic';
   }
 
-  const isGen5Hint =
-    /gen\s*5|pcie\s*5|5\.0|9100\s*pro|t70[05]|sn8100|mp700|z540|e26|sm2508|mars\s*980|pc511|p51\b/i.test(rawModel);
-  const isGen4Hint =
-    /gen\s*4|pcie\s*4|4\.0|990\s*pro|980\s*pro|sn850|p41|p44|kc3000|nm790|gm7000|s70|rocket\s*4/i.test(rawModel);
-  const isUsb4Hint = /usb4|thunderbolt|40gbps|asm2464/i.test(rawModel);
-
   let protocolStandard = 'Universal Storage Standard (ATA-8 / SCSI / NVMe)';
-  let busGeneration = drive.hardwareSpecs?.busInterfaceSpeed || drive.interface;
-  let estimatedControllerTier = profile.controllerFamily;
+  let busGeneration = drive.hardwareSpecs?.busInterfaceSpeed || drive.interface || 'Unknown Bus';
+  const estimatedControllerTier =
+    drive.usbTopology?.bridgeChipset ||
+    drive.bridgeChipset ||
+    drive.hardwareSpecs?.controllerVendor ||
+    'N/A (커널 컨트롤러 미제공)';
 
   if (bus.includes('NVME') || drive.type === 'NVMe') {
-    if (isGen5Hint) {
-      protocolStandard = 'NVMe 2.0 PCIe Gen5 x4 Standard';
-      busGeneration = 'PCIe 5.0 x4 (~14,000 MB/s Peak)';
-      estimatedControllerTier = vendorKey === 'generic' ? 'Next-Gen PCIe 5.0 Controller (Phison E26 / SMI SM2508 Class)' : profile.controllerFamily;
-    } else if (isGen4Hint) {
-      protocolStandard = 'NVMe 1.4 / 2.0 PCIe Gen4 x4 Standard';
-      busGeneration = 'PCIe 4.0 x4 (~7,400 MB/s Peak)';
-    } else {
-      protocolStandard = 'NVMe 1.4 / 2.0 Standard Command Set';
-      busGeneration = 'PCIe NVMe Direct DMA Queue';
-    }
+    protocolStandard = 'NVMe Standard Command Set (PCIe DMA)';
+    busGeneration =
+      drive.hardwareSpecs?.busInterfaceSpeed ||
+      'PCIe NVMe (커널 링크 속도 미측정)';
   } else if (bus === 'USB' || drive.isExternal) {
-    if (isUsb4Hint) {
-      protocolStandard = 'USB4 / Thunderbolt NVMe Tunneling (UASP 40Gbps)';
-      busGeneration = 'USB4 / TB4 40 Gbps (~3,800 MB/s)';
-    } else if (drive.usbProtocol?.includes('UASP') || bus.includes('USB')) {
-      protocolStandard = 'USB Attached SCSI Protocol (UASP / BOT)';
-      busGeneration = drive.isUsb2 ? 'USB 2.0 480 Mbps' : 'USB 3.2 Gen1/Gen2 (5~20 Gbps)';
+    if (drive.usbTopology) {
+      protocolStandard =
+        drive.usbTopology.transport === 'PCIe_Tunnel'
+          ? 'USB4 / Thunderbolt PCIe Tunneling'
+          : drive.usbTopology.transport === 'UASP'
+          ? 'USB Attached SCSI Protocol (UASP)'
+          : drive.usbTopology.transport === 'SDIO'
+          ? 'SDIO / MMC Card Reader'
+          : 'USB Mass Storage Bulk-Only Transport (BOT)';
+      busGeneration = `${drive.usbTopology.generationLabel} · ${drive.usbTopology.transport}`;
+    } else {
+      protocolStandard = 'USB Mass Storage (BOT / UASP)';
+      busGeneration = 'USB Storage (Win32 PnP 링크 속도 미수신)';
     }
   } else if (bus === 'SATA' || bus === 'ATA') {
     protocolStandard = 'ATA-8 / AHCI NCQ Serial ATA Standard';
-    busGeneration = 'SATA III 6.0 Gbps (600 MB/s)';
+    busGeneration =
+      drive.hardwareSpecs?.busInterfaceSpeed ||
+      'SATA / AHCI (커널 링크 속도 미측정)';
   } else if (bus === 'SD' || bus === 'MMC' || drive.type === 'SD_CARD') {
-    protocolStandard = 'SDXC UHS-I/II / eMMC 5.1 Card Standard';
-    busGeneration = 'SDIO / eMMC Bus';
+    protocolStandard = 'SDXC / eMMC Card Standard';
+    busGeneration = drive.hardwareSpecs?.busInterfaceSpeed || 'SDIO / eMMC Bus';
   } else if (bus === 'UFS') {
-    protocolStandard = 'JEDEC UFS 3.1 / 4.0 Flash Standard';
-    busGeneration = 'UFS M-PHY Dual-Lane';
+    protocolStandard = 'JEDEC UFS Flash Standard';
+    busGeneration = drive.hardwareSpecs?.busInterfaceSpeed || 'UFS Host Bus';
   } else if (bus === 'RAID' || bus === 'STORAGE SPACES') {
     protocolStandard = 'Hardware/OS RAID Virtual Block Array';
-    busGeneration = 'Multi-Disk Striped/Mirrored Controller';
+    busGeneration = drive.hardwareSpecs?.busInterfaceSpeed || 'Multi-Disk Striped/Mirrored Array';
   } else if (bus.includes('SCSI') || bus.includes('SAS')) {
     protocolStandard = 'SCSI / SAS Enterprise Command Set';
-    busGeneration = 'SAS 12G / 24G Enterprise Bus';
+    busGeneration = drive.hardwareSpecs?.busInterfaceSpeed || 'SCSI / SAS Bus';
   }
 
   const isPlatter = drive.type === 'HDD' || drive.type === 'EXTERNAL_HDD' || drive.hardwareSpecs?.rotationalSpeedRpm === 5400 || drive.hardwareSpecs?.rotationalSpeedRpm === 7200;
@@ -622,12 +622,19 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
 export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
   const busUpper = (drive.hardwareSpecs?.busType || '').toUpperCase();
   const classification = classifyFutureDriveStandards(drive);
+  const trimActual = drive.hardwareSpecs?.trimSupported;
+  const trimText =
+    trimActual === true
+      ? 'OS TRIM / UNMAP 지원 감지됨'
+      : trimActual === false
+      ? 'TRIM / UNMAP 미지원 (컨트롤러 자체 GC)'
+      : 'N/A (커널 TRIM 지원 여부 미제공)';
 
   if (drive.isExternal || busUpper === 'SD' || busUpper === 'MMC' || drive.type === 'SD_CARD') {
-    const isSd = busUpper === 'SD' || busUpper === 'MMC' || drive.type === 'SD_CARD';
-    const isUsb2 = drive.isUsb2 || drive.usbProtocol?.includes('USB 2.0');
-    const isUsb4 = /usb4|thunderbolt|40gbps/i.test(`${drive.model} ${drive.interface}`);
-    const isUasp = drive.usbProtocol?.includes('UASP') || drive.usbProtocol?.includes('NVMe over USB');
+    const topo = drive.usbTopology;
+    const isSd = busUpper === 'SD' || busUpper === 'MMC' || drive.type === 'SD_CARD' || topo?.transport === 'SDIO';
+    const isUsb2 = topo ? (topo.generation === 'usb_2_0' || topo.generation === 'usb_1_1') : Boolean(drive.isUsb2);
+    const isUsb4 = topo ? topo.generation === 'usb4_tb' : drive.connectionType === 'thunderbolt';
 
     return {
       connectionCategory: isSd ? 'sd_card' : drive.type === 'EXTERNAL_SSD' ? 'external_ssd' : 'external_hdd',
@@ -637,20 +644,20 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
         ? isUsb4
           ? '외장 USB4 / Thunderbolt 포터블 SSD'
           : '외장 포터블 SSD (USB UASP/NVMe)'
-        : '외장 하드디스크 (2.5"/3.5" USB HDD)',
-      busBandwidth: isSd
-        ? 'SD UHS-I / UHS-II (104 ~ 312 MB/s)'
-        : isUsb4
-        ? 'USB4 / Thunderbolt 4 (40Gbps / ~3,800MB/s)'
-        : isUsb2
-        ? 'USB 2.0 (실효 ~35MB/s 대역폭 병목)'
-        : isUasp
-        ? 'USB 3.2 Gen 2 UASP (10Gbps / ~1,050MB/s)'
-        : 'USB 3.0 BOT (5Gbps / ~450MB/s)',
-      powerDelivery: isUsb2 ? 'USB 2.0 (5V 500mA / 2.5W - 전력 강하 위험 높음)' : 'USB 3.x / USB-C PD (900mA~15W+ - 정상)',
-      trimSupportStatus: isUasp || isUsb4 ? 'UASP 패킷을 통한 TRIM / UNMAP 파스스루 지원' : 'BOT / SD 버스 제한으로 OS TRIM 미지원 (컨트롤러 자체 GC)',
+        : '외장 하드디스크 (USB HDD)',
+      busBandwidth: topo
+        ? `${topo.generationLabel} · ${topo.transport} (실측 링크 상한 ~${topo.maxPracticalMbSec} MB/s)`
+        : isSd
+        ? 'SD / eMMC 버스 (커널 링크 속도 미측정)'
+        : 'USB 외장 버스 (Win32 PnP 링크 속도 미수신)',
+      powerDelivery: topo
+        ? isUsb2
+          ? 'USB 2.0 이하 (5V 500mA 제한 — 전력 강하 주의)'
+          : 'USB 3.x / USB-C 프로브 감지'
+        : 'USB / 외부 버스 전원 (세부 전력 프로브 N/A)',
+      trimSupportStatus: trimText,
       thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 48 ? 'High' : drive.temperatureC !== null && drive.temperatureC > 40 ? 'Medium' : 'Low',
-      smrCacheBehavior: drive.type === 'EXTERNAL_HDD' ? '외장 SMR 구조: 대용량 쓰기 시 300ms+ 헤드 지연 가능성' : 'USB/SD SLC 캐시 소진 시 직결 TLC/QLC 쓰기 감속',
+      smrCacheBehavior: drive.type === 'EXTERNAL_HDD' ? '외장 HDD 구조: SMR 모델일 경우 대용량 쓰기 시 지연 가능성' : '외장 플래시 SLC 캐시 소진 시 TLC/QLC 직결 쓰기 감속 가능',
       cableCrcVulnerability: 'USB 케이블 단자 오염, 리더기 접촉 불량 시 S.M.A.R.T. ID #199 / 패킷 재전송 오류 위험'
     };
   }
@@ -661,7 +668,12 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
       connectionCategoryKo: '하드웨어/OS RAID 및 스토리지 풀 볼륨',
       busBandwidth: classification.busGeneration,
       powerDelivery: '멀티 드라이브 백플레인 / 호스트 전원 직접 인가',
-      trimSupportStatus: drive.hardwareSpecs?.trimSupported ? 'RAID 컨트롤러 UNMAP / TRIM 파스스루 활성' : '컨트롤러 정책에 따름',
+      trimSupportStatus:
+        trimActual === true
+          ? 'RAID 컨트롤러 UNMAP / TRIM 파스스루 활성'
+          : trimActual === false
+          ? '컨트롤러 TRIM / UNMAP 미지원'
+          : 'N/A (커널 TRIM 여부 미제공)',
       thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 55 ? 'High' : 'Low',
       smrCacheBehavior: 'RAID 어레이 스트라이핑(Striping) 및 컨트롤러 Write-Back 캐시 동작',
       cableCrcVulnerability: '백플레인 커넥터 및 개별 멤버 디스크 SMART 상태를 RAID BIOS/관리자에서 교차 검증 권장'
@@ -672,25 +684,36 @@ export function getDriveMediaAnalysis(drive: DiskDrive): DriveMediaComparison {
   if (drive.type === 'NVMe' || busUpper === 'NVME' || busUpper === 'UFS' || busUpper === 'SCM') {
     return {
       connectionCategory: 'internal_nvme',
-      connectionCategoryKo: busUpper === 'UFS' ? '내장 UFS 3.1/4.0 플래시 스토리지' : '내장 NVMe M.2 PCIe SSD',
+      connectionCategoryKo: busUpper === 'UFS' ? '내장 UFS 플래시 스토리지' : '내장 NVMe M.2 PCIe SSD',
       busBandwidth: classification.busGeneration,
-      powerDelivery: '메인보드 3.3V Direct 레일 (최대 10W+ 서지 케이파빌리티)',
-      trimSupportStatus: 'OS 네이티브 NVMe Dataset Management (TRIM) 100% 지원',
+      powerDelivery: '메인보드 PCIe / 3.3V Direct 레일',
+      trimSupportStatus:
+        trimActual === true
+          ? 'OS 네이티브 NVMe Dataset Management (TRIM) 지원 감지됨'
+          : trimActual === false
+          ? 'TRIM 미지원'
+          : 'N/A (커널 TRIM 여부 미제공)',
       thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 65 ? 'Critical' : drive.temperatureC !== null && drive.temperatureC > 50 ? 'Medium' : 'Low',
-      smrCacheBehavior: 'SLC TurboWrite/nCache 동적 버퍼링 (소진 시 본래 TLC 속도 유지)',
-      cableCrcVulnerability: 'PCIe M.2 골드핑거 직접 체결로 케이블 CRC 에러 원천 차단'
+      smrCacheBehavior: 'SLC 동적 버퍼링 (소진 시 본래 낸드 속도 유지)',
+      cableCrcVulnerability: 'PCIe M.2 슬롯 직접 체결로 케이블 CRC 에러 위험 낮음'
     };
   }
 
   // Internal SATA (HDD / SSD)
+  const rpm = drive.hardwareSpecs?.rotationalSpeedRpm;
   return {
     connectionCategory: drive.type === 'HDD' ? 'internal_hdd' : 'internal_sata_ssd',
-    connectionCategoryKo: drive.type === 'HDD' ? '내장 SATA III 기계식 하드디스크 (7200/5400 RPM)' : '내장 SATA III 2.5인치 SSD',
-    busBandwidth: 'SATA III 6.0Gbps (실효 ~550MB/s)',
-    powerDelivery: '파워서플라이 12V (스핀들 모터) + 5V (로직) 직결',
-    trimSupportStatus: drive.type === 'HDD' ? 'N/A (기계식 플래터)' : 'SATA AHCI TRIM (Deterministic Read ZEROs)',
+    connectionCategoryKo:
+      drive.type === 'HDD'
+        ? rpm && rpm > 0
+          ? `내장 SATA 기계식 하드디스크 (${rpm.toLocaleString()} RPM)`
+          : '내장 SATA 기계식 하드디스크 (RPM 미제공)'
+        : '내장 SATA 2.5인치 / M.2 SSD',
+    busBandwidth: drive.hardwareSpecs?.busInterfaceSpeed || 'SATA / AHCI (커널 링크 속도 미측정)',
+    powerDelivery: '파워서플라이 SATA 전원(12V / 5V) 직결',
+    trimSupportStatus: drive.type === 'HDD' ? 'N/A (기계식 플래터)' : trimText,
     thermalThrottlingRisk: drive.temperatureC !== null && drive.temperatureC > 45 ? 'Medium' : 'Low',
-    smrCacheBehavior: drive.type === 'HDD' ? '플래터 ZBR 외주/내주 속도 차이 (외주 220MB/s -> 내주 100MB/s)' : 'SATA DRAM 캐시 유무에 따른 4K 랜덤 지연',
+    smrCacheBehavior: drive.type === 'HDD' ? '플래터 ZBR 외주/내주 속도 차이' : 'SATA DRAM 캐시 유무에 따른 4K 랜덤 지연',
     cableCrcVulnerability: 'SATA 데이터 케이블 접촉 불량 시 S.M.A.R.T. ID #199 에러 증가'
   };
 }

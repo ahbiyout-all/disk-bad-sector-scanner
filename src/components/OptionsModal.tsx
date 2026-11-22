@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
 import {
+  AppLocale,
   CustomSmartThresholdRule,
   DriveSmartAttribute,
   SavedScanRecord,
@@ -79,6 +80,13 @@ export interface OptionsModalProps {
     bundle: DiskSentinelMigrationBundle,
     strategy: 'merge' | 'replace'
   ) => void;
+  locale?: AppLocale;
+  onChangeLocale?: (locale: AppLocale) => void;
+  minimizeToTray?: boolean;
+  onToggleMinimizeToTray?: () => void;
+  nativeOsNotificationsEnabled?: boolean;
+  onToggleNativeOsNotifications?: () => void;
+  onTestNativeOsNotification?: () => void;
 }
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
@@ -101,7 +109,14 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   onUpdateCustomSmartThresholds,
   activeDriveSmartAttributes = [],
   scanRecords,
-  onImportMigration
+  onImportMigration,
+  locale = 'ko',
+  onChangeLocale,
+  minimizeToTray = false,
+  onToggleMinimizeToTray,
+  nativeOsNotificationsEnabled = true,
+  onToggleNativeOsNotifications,
+  onTestNativeOsNotification
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<OptionsModalSubTab>(initialSubTab);
   const [volume, setVolume] = useState<number>(() => Math.round(soundManager.getVolume() * 100));
@@ -694,6 +709,46 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 </div>
               </div>
 
+              {/* Language Selector */}
+              {onChangeLocale && (
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                        인터페이스 언어 (Language)
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        한국어와 영문(English) 진단 UI 전환을 즉시 적용합니다.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => onChangeLocale('ko')}
+                        className={`px-3 py-1 rounded text-xs font-bold transition-colors cursor-pointer ${
+                          locale === 'ko'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        한국어 (KO)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onChangeLocale('en')}
+                        className={`px-3 py-1 rounded text-xs font-bold transition-colors cursor-pointer ${
+                          locale === 'en'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        English (EN)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Scan Speed Default Multiplier */}
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -874,6 +929,71 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* Native OS Notification & Tauri System Tray Integration */}
+              {(onToggleNativeOsNotifications || onToggleMinimizeToTray) && (
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
+                  {onToggleNativeOsNotifications && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                          <Bell className="w-4 h-4 text-indigo-500" />
+                          <span>OS 네이티브 데스크톱 알림 (Tauri / Windows Toast)</span>
+                        </h3>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          데스크톱 앱 실행 시 배드섹터/온도 임계치/비트 부패 감지를 OS 알림 센터로 즉시 전송합니다.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {onTestNativeOsNotification && (
+                          <button
+                            type="button"
+                            onClick={onTestNativeOsNotification}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold text-[11px] cursor-pointer"
+                          >
+                            OS 테스트
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={onToggleNativeOsNotifications}
+                          className={`px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                            nativeOsNotificationsEnabled
+                              ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                              : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                          }`}
+                        >
+                          {nativeOsNotificationsEnabled ? '활성 (ON)' : '꺼짐 (OFF)'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {onToggleMinimizeToTray && (
+                    <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between gap-3">
+                      <div>
+                        <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                          창 닫기 시 시스템 트레이 백그라운드 감시 유지
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          우측 상단 닫기(X) 클릭 시 종료 대신 시스템 트레이(Watchdog)로 숨겨 실시간 감시를 지속합니다.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={onToggleMinimizeToTray}
+                        className={`px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer shrink-0 ${
+                          minimizeToTray
+                            ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                            : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        {minimizeToTray ? '트레이 유지 (ON)' : '일반 종료 (OFF)'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

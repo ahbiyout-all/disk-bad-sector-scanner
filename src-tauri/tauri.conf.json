@@ -38,6 +38,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../bin/native/DiskSentinelNativeCore.dll": "DiskSentinelNativeCore.dll",
+      "../bin/native/DiskSentinelForensics.dll": "DiskSentinelForensics.dll",
+      "../bin/native/DiskSentinelPredictive.dll": "DiskSentinelPredictive.dll",
+      "../bin/native/DiskSentinelRecovery.dll": "DiskSentinelRecovery.dll"
+    }
   }
 }

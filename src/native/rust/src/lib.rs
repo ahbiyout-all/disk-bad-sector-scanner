@@ -177,9 +177,29 @@ pub struct DSMappedSectorWindow {
     pub reserved: [u8; 6],
 }
 
-// Compile-time 256-entry IEEE 802.3 CRC32 lookup table (0xEDB88320)
-const fn generate_crc32_table() -> [u32; 256] {
-    let mut table = [0u32; 256];
+// Real Win32 USB Host/Hub Topology & Transport Descriptor Metadata (naturally aligned, exact match with C #pragma pack(8))
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DSUsbTopologyInfo {
+    pub drive_index: u32,
+    pub usb_generation_code: u32,
+    pub negotiated_speed_mbps: u32,
+    pub transport_code: u32,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub bcd_usb: u16,
+    pub port_number: u8,
+    pub probe_succeeded: u8,
+    pub usb_version_label: [u8; 32],
+    pub transport_label: [u8; 32],
+    pub driver_service: [u8; 32],
+    pub bridge_chipset: [u8; 64],
+    pub pnp_device_id: [u8; 160],
+}
+
+// Compile-time Slicing-by-8 IEEE 802.3 CRC32 lookup tables (0xEDB88320)
+const fn generate_crc32_slice8_table() -> [[u32; 256]; 8] {
+    let mut tables = [[0u32; 256]; 8];
     let mut i = 0u32;
     while i < 256 {
         let mut c = i;
@@ -192,13 +212,55 @@ const fn generate_crc32_table() -> [u32; 256] {
             };
             k += 1;
         }
-        table[i as usize] = c;
+        tables[0][i as usize] = c;
         i += 1;
     }
-    table
+    let mut t = 1usize;
+    while t < 8 {
+        let mut j = 0usize;
+        while j < 256 {
+            let prev = tables[t - 1][j];
+            tables[t][j] = (prev >> 8) ^ tables[0][(prev & 0xFF) as usize];
+            j += 1;
+        }
+        t += 1;
+    }
+    tables
 }
 
-static DS_CRC32_TABLE: [u32; 256] = generate_crc32_table();
+static DS_CRC32_SLICE8: [[u32; 256]; 8] = generate_crc32_slice8_table();
+
+#[inline(always)]
+fn crc32_slice8_step8(crc: u32, chunk: &[u8]) -> u32 {
+    let lo = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ crc;
+    let hi = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+    DS_CRC32_SLICE8[7][(lo & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[6][((lo >> 8) & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[5][((lo >> 16) & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[4][((lo >> 24) & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[3][(hi & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[2][((hi >> 8) & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[1][((hi >> 16) & 0xFF) as usize]
+        ^ DS_CRC32_SLICE8[0][((hi >> 24) & 0xFF) as usize]
+}
+
+#[inline(always)]
+fn crc32_slice8_update(mut crc: u32, data: &[u8]) -> u32 {
+    let chunks = data.chunks_exact(8);
+    let rem = chunks.remainder();
+    for c in chunks {
+        crc = crc32_slice8_step8(crc, c);
+    }
+    for &byte in rem {
+        crc = DS_CRC32_SLICE8[0][((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc
+}
+
+#[inline]
+fn is_fatal_handle_error(code: u32) -> bool {
+    matches!(code, 5 | 6 | 21 | 55 | 433 | 1167)
+}
 
 // Internal drive handle representation
 pub struct DriveContext {
@@ -346,8 +408,8 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
     let ctx = &*(drive_handle as *const DriveContext);
     
     detail.drive_index = ctx.drive_index;
-    detail.sector_size = ctx.sector_size;
-    detail.physical_sector_size = 4096;
+    detail.sector_size = ctx.sector_size.max(512);
+    detail.physical_sector_size = detail.sector_size;
     copy_str_to_fixed_bytes(&format!("\\\\.\\PhysicalDrive{}", ctx.drive_index), &mut detail.device_path);
     copy_str_to_fixed_bytes("Physical Storage Drive", &mut detail.model);
     copy_str_to_fixed_bytes("", &mut detail.serial_number);
@@ -371,7 +433,7 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
             return false;
         }
 
-        // 1. Query Geometry for capacity
+        // 1. Query Geometry for capacity (with IOCTL_DISK_GET_LENGTH_INFO fallback)
         let mut geom: DISK_GEOMETRY_EX = std::mem::zeroed();
         let mut bytes_returned: u32 = 0;
         let ok = DeviceIoControl(
@@ -385,10 +447,79 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
             std::ptr::null_mut(),
         );
         if ok != 0 {
-            detail.total_capacity_bytes = geom.DiskSize as u64;
+            if geom.DiskSize > 0 {
+                detail.total_capacity_bytes = geom.DiskSize as u64;
+            }
             if geom.Geometry.BytesPerSector > 0 {
                 detail.sector_size = geom.Geometry.BytesPerSector;
+                detail.physical_sector_size = geom.Geometry.BytesPerSector;
             }
+        }
+        if detail.total_capacity_bytes == 0 {
+            const IOCTL_DISK_GET_LENGTH_INFO_RAW: u32 = 0x0007_405C;
+            let mut disk_len_bytes: i64 = 0;
+            let mut len_ret: u32 = 0;
+            if DeviceIoControl(
+                h_device as _,
+                IOCTL_DISK_GET_LENGTH_INFO_RAW,
+                std::ptr::null(),
+                0,
+                &mut disk_len_bytes as *mut _ as _,
+                std::mem::size_of::<i64>() as u32,
+                &mut len_ret,
+                std::ptr::null_mut(),
+            ) != 0 && disk_len_bytes > 0
+            {
+                detail.total_capacity_bytes = disk_len_bytes as u64;
+            }
+        }
+
+        // 1.1. Query StorageAccessAlignmentProperty (PropertyId = 6) for real physical sector size (4Kn/512e)
+        let mut align_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        align_query.PropertyId = 6;
+        align_query.QueryType = PropertyStandardQuery;
+        let mut align_buf = [0u8; 32];
+        let mut align_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &align_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            align_buf.as_mut_ptr() as _,
+            align_buf.len() as u32,
+            &mut align_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && align_bytes >= 24
+        {
+            let log_sec = u32::from_le_bytes([align_buf[16], align_buf[17], align_buf[18], align_buf[19]]);
+            let phys_sec = u32::from_le_bytes([align_buf[20], align_buf[21], align_buf[22], align_buf[23]]);
+            if log_sec >= 512 && log_sec.is_power_of_two() {
+                detail.sector_size = log_sec;
+            }
+            if phys_sec >= 512 && phys_sec.is_power_of_two() {
+                detail.physical_sector_size = phys_sec;
+            }
+        }
+
+        // 1.2. Query StorageDeviceWriteCacheProperty (PropertyId = 4)
+        let mut wc_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        wc_query.PropertyId = 4;
+        wc_query.QueryType = PropertyStandardQuery;
+        let mut wc_buf = [0u8; 32];
+        let mut wc_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &wc_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            wc_buf.as_mut_ptr() as _,
+            wc_buf.len() as u32,
+            &mut wc_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && wc_bytes >= 16
+        {
+            let wc_enabled = u32::from_le_bytes([wc_buf[12], wc_buf[13], wc_buf[14], wc_buf[15]]);
+            detail.is_write_cache_enabled = wc_enabled == 2;
         }
 
         // 2. Query Device Descriptor for Model/Serial/Bus
@@ -651,21 +782,17 @@ pub unsafe extern "system" fn DS_OpenDriveDirect(
             }
         }
 
-        let prealloc_scratch = AlignedSectorBuffer::new_unzeroed(
-            optimal_burst_bytes as usize,
-            detected_sector_size.max(4096) as usize,
-        );
-
         if !out_sector_size.is_null() {
             *out_sector_size = detected_sector_size;
         }
 
+        // Lazy DMA scratch allocation on first DS_ScanLbaBlock (avoids wasting 2-4MB on metadata/SMART-only handles)
         let ctx = Box::new(DriveContext {
             drive_index,
             sector_size: detected_sector_size,
             max_transfer_bytes: optimal_burst_bytes,
             raw_handle: handle as *mut c_void,
-            dma_scratch: std::sync::Mutex::new(prealloc_scratch),
+            dma_scratch: std::sync::Mutex::new(None),
             last_byte_offset: std::sync::atomic::AtomicU64::new(0),
             offset_valid: std::sync::atomic::AtomicBool::new(false),
         });
@@ -834,6 +961,205 @@ pub unsafe extern "system" fn DS_ScanLbaBlock(
 }
 
 // ---------------------------------------------------------------------------
+// 2.0b. DS_ScanLbaBlockWithPolicy (Policy-Tuned Thresholds & USB Retry Backoff)
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub unsafe extern "system" fn DS_ScanLbaBlockWithPolicy(
+    drive_handle: *mut c_void,
+    lba: u64,
+    count: u32,
+    slow_threshold_ms: u32,
+    critical_threshold_ms: u32,
+    max_retries: u32,
+    retry_delay_ms: u32,
+    out_result: *mut DSBlockResult,
+) -> bool {
+    if drive_handle.is_null() || out_result.is_null() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::Ordering;
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Storage::FileSystem::{SetFilePointerEx, ReadFile, FILE_BEGIN};
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        let sec_size = ctx.sector_size.max(512);
+        let safe_count = count.max(1);
+        let byte_offset_u64 = match lba.checked_mul(sec_size as u64) {
+            Some(off) if i64::try_from(off).is_ok() => off,
+            _ => {
+                let res = &mut *out_result;
+                res.start_lba = lba;
+                res.sector_count = safe_count as u64;
+                res.latency_ms = 0.0;
+                res.win32_error_code = 87;
+                copy_str_to_fixed_bytes("ERROR_INVALID_PARAMETER", &mut res.error_mnemonic);
+                res.status_code = DSSectorStatus::Bad as u32;
+                return false;
+            }
+        };
+
+        let total_bytes = (safe_count as u64).saturating_mul(sec_size as u64);
+        let max_chunk = (ctx.max_transfer_bytes.max(sec_size) as usize).min(total_bytes as usize);
+        let align = sec_size.max(4096) as usize;
+
+        let mut scratch_guard = ctx.dma_scratch.lock().ok();
+        let mut fallback_buf: Option<AlignedSectorBuffer> = None;
+        let dma_buf_ptr: *mut u8 = if let Some(ref mut guard) = scratch_guard {
+            let needs_alloc = match guard.as_ref() {
+                Some(b) => b.len < max_chunk,
+                None => true,
+            };
+            if needs_alloc {
+                **guard = AlignedSectorBuffer::new_unzeroed(max_chunk.max(ctx.max_transfer_bytes as usize), align);
+            }
+            match guard.as_mut() {
+                Some(b) => b.as_mut_ptr(),
+                None => return false,
+            }
+        } else {
+            fallback_buf = AlignedSectorBuffer::new_unzeroed(max_chunk, align);
+            match fallback_buf.as_mut() {
+                Some(b) => b.as_mut_ptr(),
+                None => return false,
+            }
+        };
+
+        let safe_retries = max_retries.min(5);
+        let safe_delay_ms = retry_delay_ms.min(2000) as u64;
+        let slow_limit = if slow_threshold_ms > 0 { slow_threshold_ms as f64 } else { 50.0 };
+        let crit_limit = if critical_threshold_ms > slow_threshold_ms {
+            critical_threshold_ms as f64
+        } else {
+            slow_limit * 3.0
+        };
+
+        let start = Instant::now();
+        let mut read_ok = false;
+        let mut last_err: u32 = 0;
+
+        for attempt in 0..=safe_retries {
+            if attempt > 0 {
+                ctx.offset_valid.store(false, Ordering::Relaxed);
+                if safe_delay_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(safe_delay_ms));
+                }
+            }
+
+            let is_sequential = ctx.offset_valid.load(Ordering::Relaxed)
+                && ctx.last_byte_offset.load(Ordering::Relaxed) == byte_offset_u64;
+            let seek_ok = if is_sequential {
+                1
+            } else {
+                SetFilePointerEx(
+                    ctx.raw_handle as _,
+                    byte_offset_u64 as i64,
+                    std::ptr::null_mut(),
+                    FILE_BEGIN,
+                )
+            };
+
+            if seek_ok == 0 {
+                ctx.offset_valid.store(false, Ordering::Relaxed);
+                last_err = GetLastError();
+                read_ok = false;
+            } else {
+                let mut remaining = total_bytes;
+                let mut cursor = byte_offset_u64;
+                read_ok = true;
+                last_err = 0;
+
+                while remaining > 0 {
+                    let chunk_bytes = remaining.min(ctx.max_transfer_bytes.max(sec_size) as u64) as u32;
+                    let mut bytes_read: u32 = 0;
+                    let ok = ReadFile(
+                        ctx.raw_handle as _,
+                        dma_buf_ptr,
+                        chunk_bytes,
+                        &mut bytes_read,
+                        std::ptr::null_mut(),
+                    );
+                    if ok == 0 || bytes_read != chunk_bytes {
+                        read_ok = false;
+                        last_err = if ok == 0 { GetLastError() } else { 38 };
+                        ctx.offset_valid.store(false, Ordering::Relaxed);
+                        break;
+                    }
+                    cursor = cursor.saturating_add(chunk_bytes as u64);
+                    remaining -= chunk_bytes as u64;
+                }
+
+                if read_ok {
+                    ctx.last_byte_offset.store(cursor, Ordering::Relaxed);
+                    ctx.offset_valid.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+
+            let is_transient_usb = matches!(last_err, 21 | 31 | 121 | 170 | 433 | 1117 | 1167);
+            if !is_transient_usb {
+                break;
+            }
+        }
+
+        drop(fallback_buf);
+        drop(scratch_guard);
+
+        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let res = &mut *out_result;
+        res.start_lba = lba;
+        res.sector_count = safe_count as u64;
+        res.latency_ms = latency_ms;
+
+        if read_ok {
+            res.win32_error_code = 0;
+            res.status_code = if latency_ms < slow_limit * 0.35 {
+                copy_str_to_fixed_bytes("OK", &mut res.error_mnemonic);
+                DSSectorStatus::Good as u32
+            } else if latency_ms < slow_limit {
+                copy_str_to_fixed_bytes("OK", &mut res.error_mnemonic);
+                DSSectorStatus::Normal as u32
+            } else if latency_ms < crit_limit {
+                copy_str_to_fixed_bytes("SLOW", &mut res.error_mnemonic);
+                DSSectorStatus::Slow as u32
+            } else {
+                copy_str_to_fixed_bytes("CRITICAL_LATENCY", &mut res.error_mnemonic);
+                DSSectorStatus::Critical as u32
+            };
+            true
+        } else {
+            res.win32_error_code = last_err;
+            let mnemonic = match last_err {
+                23 => "CRC (Data Error)",
+                27 => "IDNF (Sector Not Found)",
+                121 => "USB_TIMEOUT",
+                5 => "ACCESS_DENIED",
+                _ => "UNC (Uncorrectable Error)",
+            };
+            copy_str_to_fixed_bytes(mnemonic, &mut res.error_mnemonic);
+            res.status_code = DSSectorStatus::Bad as u32;
+            false
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (
+            lba,
+            count,
+            slow_threshold_ms,
+            critical_threshold_ms,
+            max_retries,
+            retry_delay_ms,
+            out_result,
+        );
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 2.1. DS_ReadRawSector (Direct Zero-Copy fast path when caller buffer is sector-aligned)
 // ---------------------------------------------------------------------------
 #[no_mangle]
@@ -952,6 +1278,14 @@ pub unsafe extern "system" fn DS_AdaptiveScanChunk(
         let sectors_to_read = ((end_lba - current_lba) as u32).min(step);
         let ok = DS_ScanLbaBlock(drive_handle, current_lba, sectors_to_read, &mut temp_result);
 
+        if !ok && is_fatal_handle_error(temp_result.win32_error_code) {
+            if !out_bad_results.is_null() && detected < max_bad_results {
+                *out_bad_results.add(detected as usize) = temp_result;
+            }
+            *out_detected_bad_count = detected.saturating_add(1);
+            return false;
+        }
+
         if ok && temp_result.status_code < (DSSectorStatus::Critical as u32) {
             current_lba += sectors_to_read as u64;
             continue;
@@ -978,6 +1312,13 @@ pub unsafe extern "system" fn DS_AdaptiveScanChunk(
                 for k in 0..sub_count {
                     let mut sub_result = temp_result;
                     let sub_ok = DS_ScanLbaBlock(drive_handle, sub_start + k as u64, 1, &mut sub_result);
+                    if !sub_ok && is_fatal_handle_error(sub_result.win32_error_code) {
+                        if !out_bad_results.is_null() && detected < max_bad_results {
+                            *out_bad_results.add(detected as usize) = sub_result;
+                        }
+                        *out_detected_bad_count = detected.saturating_add(1);
+                        return false;
+                    }
                     if !sub_ok || sub_result.status_code >= (DSSectorStatus::Critical as u32) {
                         if !out_bad_results.is_null() && detected < max_bad_results {
                             *out_bad_results.add(detected as usize) = sub_result;
@@ -988,6 +1329,13 @@ pub unsafe extern "system" fn DS_AdaptiveScanChunk(
             } else {
                 let mut sub_res = temp_result;
                 let sub_ok = DS_ScanLbaBlock(drive_handle, sub_start, sub_count, &mut sub_res);
+                if !sub_ok && is_fatal_handle_error(sub_res.win32_error_code) {
+                    if !out_bad_results.is_null() && detected < max_bad_results {
+                        *out_bad_results.add(detected as usize) = sub_res;
+                    }
+                    *out_detected_bad_count = detected.saturating_add(1);
+                    return false;
+                }
                 if sub_ok && sub_res.status_code < (DSSectorStatus::Critical as u32) {
                     continue; // Healthy half skipped in 1 syscall
                 }
@@ -1001,6 +1349,13 @@ pub unsafe extern "system" fn DS_AdaptiveScanChunk(
                     for k in 0..sub_count {
                         let mut sub_result = temp_result;
                         let s_ok = DS_ScanLbaBlock(drive_handle, sub_start + k as u64, 1, &mut sub_result);
+                        if !s_ok && is_fatal_handle_error(sub_result.win32_error_code) {
+                            if !out_bad_results.is_null() && detected < max_bad_results {
+                                *out_bad_results.add(detected as usize) = sub_result;
+                            }
+                            *out_detected_bad_count = detected.saturating_add(1);
+                            return false;
+                        }
                         if !s_ok || sub_result.status_code >= (DSSectorStatus::Critical as u32) {
                             if !out_bad_results.is_null() && detected < max_bad_results {
                                 *out_bad_results.add(detected as usize) = sub_result;
@@ -1297,13 +1652,26 @@ pub unsafe extern "system" fn DS_EvaluateDriveReliability(
     };
     copy_str_to_fixed_bytes(grade, &mut report.overall_grade);
 
-    report.estimated_remaining_days = if report.reliability_score < 20.0 {
-        14
-    } else if report.reliability_score < 50.0 {
-        60
+    let norm_score = report.reliability_score / 100.0;
+    let base_days = 10.0 + (1815.0 * norm_score.powf(2.2));
+    let thermal_factor = if report.temperature_celsius > 55 {
+        (1.0 - ((report.temperature_celsius - 55) as f64) * 0.03).max(0.35)
     } else {
-        ((report.reliability_score / 100.0) * 1825.0) as u32 // Up to 5 years
+        1.0
     };
+    let poh_aging_factor = if report.total_power_on_hours > 35_000 {
+        (1.0 - ((report.total_power_on_hours - 35_000) as f64) / 120_000.0).max(0.55)
+    } else {
+        1.0
+    };
+    let active_fault_factor = if report.pending_sectors > 0 || report.uncorrectable_errors > 0 {
+        let active_faults = (report.pending_sectors + report.uncorrectable_errors) as f64;
+        (1.0 / (1.0 + active_faults * 0.35)).max(0.15)
+    } else {
+        1.0
+    };
+    let computed_days = (base_days * thermal_factor * poh_aging_factor * active_fault_factor).round() as i32;
+    report.estimated_remaining_days = computed_days.clamp(1, 3650) as u32;
 
     true
 }
@@ -1332,23 +1700,14 @@ pub unsafe extern "system" fn DS_CalculateParityChecksum(
     for chunk in chunks {
         let val = u64::from_le_bytes(chunk.try_into().unwrap());
         parity ^= val;
-        crc = DS_CRC32_TABLE[((crc ^ chunk[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = crc32_slice8_step8(crc, chunk);
     }
 
     if !remainder.is_empty() {
         let mut rem_buf = [0u8; 8];
         rem_buf[..remainder.len()].copy_from_slice(remainder);
         parity ^= u64::from_le_bytes(rem_buf);
-        for &byte in remainder {
-            crc = DS_CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
-        }
+        crc = crc32_slice8_update(crc, remainder);
     }
 
     *out_crc32 = !crc;
@@ -1378,61 +1737,105 @@ pub unsafe extern "system" fn DS_AttemptSoftSectorRepair(
         ctx.offset_valid.store(false, Ordering::Relaxed);
         let sec_size = ctx.sector_size.max(512);
         let safe_count = count.max(1);
-        let byte_offset = match bad_lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
+        let start_offset = match bad_lba.checked_mul(sec_size as u64).and_then(|v| i64::try_from(v).ok()) {
             Some(off) => off,
             None => {
                 *out_recovered_status = 0;
                 return false;
             }
         };
-        let total_bytes = safe_count.saturating_mul(sec_size);
-        let mut aligned_buf = match AlignedSectorBuffer::new(total_bytes as usize, sec_size.max(4096) as usize) {
+        let total_bytes_u64 = match (safe_count as u64).checked_mul(sec_size as u64) {
+            Some(b) if (start_offset as u64).checked_add(b).and_then(|end| i64::try_from(end).ok()).is_some() => b,
+            _ => {
+                *out_recovered_status = 0;
+                return false;
+            }
+        };
+
+        let max_batch_bytes = ctx.max_transfer_bytes.max(sec_size).min(4 * 1024 * 1024);
+        let buf_alloc_size = total_bytes_u64.min(max_batch_bytes as u64) as usize;
+        let mut aligned_buf = match AlignedSectorBuffer::new(buf_alloc_size, sec_size.max(4096) as usize) {
             Some(b) => b,
             None => {
                 *out_recovered_status = 0;
                 return false;
             }
         };
-        let mut bytes_written: u32 = 0;
 
-        let seek_ok = SetFilePointerEx(
-            ctx.raw_handle as _,
-            byte_offset,
-            std::ptr::null_mut(),
-            FILE_BEGIN,
-        );
+        let mut remaining = total_bytes_u64;
+        let mut cur_offset = start_offset;
+        let mut all_ok = true;
 
-        if seek_ok != 0 {
+        while remaining > 0 {
+            let batch_bytes = remaining.min(buf_alloc_size as u64) as u32;
+            // Zero DMA buffer prior to WriteFile
+            std::ptr::write_bytes(aligned_buf.as_mut_ptr(), 0x00, batch_bytes as usize);
+
+            let seek_ok = SetFilePointerEx(
+                ctx.raw_handle as _,
+                cur_offset,
+                std::ptr::null_mut(),
+                FILE_BEGIN,
+            );
+            if seek_ok == 0 {
+                all_ok = false;
+                break;
+            }
+
+            let mut bytes_written: u32 = 0;
             let write_ok = WriteFile(
                 ctx.raw_handle as _,
                 aligned_buf.as_ptr(),
-                total_bytes,
+                batch_bytes,
                 &mut bytes_written,
                 std::ptr::null_mut(),
             );
-            if write_ok != 0 && bytes_written == total_bytes {
-                // Verify zeros via read-back check
-                let reseek_ok = SetFilePointerEx(
-                    ctx.raw_handle as _,
-                    byte_offset,
-                    std::ptr::null_mut(),
-                    FILE_BEGIN,
-                );
-                if reseek_ok != 0 {
-                    let mut bytes_read: u32 = 0;
-                    let read_ok = ReadFile(
-                        ctx.raw_handle as _,
-                        aligned_buf.as_mut_ptr(),
-                        total_bytes,
-                        &mut bytes_read,
-                        std::ptr::null_mut(),
-                    );
-                    if read_ok != 0 && bytes_read == total_bytes && aligned_buf.as_slice().iter().all(|&b| b == 0) {
-                        *out_recovered_status = 1; // 1 = Zero-fill & read-back verification succeeded
-                        return true;
-                    }
-                }
+            if write_ok == 0 || bytes_written != batch_bytes {
+                all_ok = false;
+                break;
             }
+
+            // Poison buffer with 0xA5 sentinel before ReadFile so cached zeros never give false pass
+            std::ptr::write_bytes(aligned_buf.as_mut_ptr(), 0xA5, batch_bytes as usize);
+
+            let reseek_ok = SetFilePointerEx(
+                ctx.raw_handle as _,
+                cur_offset,
+                std::ptr::null_mut(),
+                FILE_BEGIN,
+            );
+            if reseek_ok == 0 {
+                all_ok = false;
+                break;
+            }
+
+            let mut bytes_read: u32 = 0;
+            let read_ok = ReadFile(
+                ctx.raw_handle as _,
+                aligned_buf.as_mut_ptr(),
+                batch_bytes,
+                &mut bytes_read,
+                std::ptr::null_mut(),
+            );
+            let read_slice = &aligned_buf.as_slice()[..batch_bytes as usize];
+            if read_ok == 0 || bytes_read != batch_bytes || !read_slice.iter().all(|&b| b == 0) {
+                all_ok = false;
+                break;
+            }
+
+            cur_offset = match cur_offset.checked_add(batch_bytes as i64) {
+                Some(next) => next,
+                None => {
+                    all_ok = false;
+                    break;
+                }
+            };
+            remaining -= batch_bytes as u64;
+        }
+
+        if all_ok {
+            *out_recovered_status = 1; // 1 = Zero-fill & read-back verification succeeded
+            return true;
         }
 
         *out_recovered_status = 0; // Failed (Hard physical damage or read-only protection)
@@ -1628,14 +2031,7 @@ pub unsafe extern "system" fn DS_CalculateAvx2ChecksumAndZeroCheck(
         let val = u64::from_le_bytes(chunk.try_into().unwrap());
         zero_acc |= val;
         parity ^= val;
-        crc = DS_CRC32_TABLE[((crc ^ chunk[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ chunk[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
+        crc = crc32_slice8_step8(crc, chunk);
     }
 
     if !remainder.is_empty() {
@@ -1644,9 +2040,7 @@ pub unsafe extern "system" fn DS_CalculateAvx2ChecksumAndZeroCheck(
         let val = u64::from_le_bytes(rem_buf);
         zero_acc |= val;
         parity ^= val;
-        for &byte in remainder {
-            crc = DS_CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
-        }
+        crc = crc32_slice8_update(crc, remainder);
     }
 
     *out_is_all_zeros = zero_acc == 0;
@@ -1697,23 +2091,8 @@ unsafe fn avx2_compute_inner(slice: &[u8]) -> (bool, u64, u32) {
         parity ^= u64::from_le_bytes(t);
     }
 
-    // 8-byte unrolled IEEE 802.3 CRC32 LUT
-    let mut crc: u32 = 0xFFFFFFFF;
-    let crc_chunks = slice.chunks_exact(8);
-    let crc_rem = crc_chunks.remainder();
-    for c in crc_chunks {
-        crc = DS_CRC32_TABLE[((crc ^ c[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
-        crc = DS_CRC32_TABLE[((crc ^ c[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
-    }
-    for &byte in crc_rem {
-        crc = DS_CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
-    }
+    // Slicing-by-8 IEEE 802.3 CRC32 LUT
+    let crc = crc32_slice8_update(0xFFFFFFFF, slice);
 
     (is_zero_32 && rem_is_zero, parity, !crc)
 }
@@ -4250,19 +4629,12 @@ pub unsafe extern "system" fn DS_ScanMappedLbaRange(
                 let w = u64::from_le_bytes(c.try_into().unwrap());
                 zero_acc |= w;
                 parity ^= w;
-                crc = DS_CRC32_TABLE[((crc ^ c[0] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[1] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[2] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[3] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[4] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[5] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[6] as u32) & 0xFF) as usize] ^ (crc >> 8);
-                crc = DS_CRC32_TABLE[((crc ^ c[7] as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = crc32_slice8_step8(crc, c);
             }
             for (idx, &b) in rem.iter().enumerate() {
                 zero_acc |= b as u64;
                 parity ^= (b as u64) << ((idx & 7) * 8);
-                crc = DS_CRC32_TABLE[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+                crc = DS_CRC32_SLICE8[0][((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
             }
             if zero_acc == 0 {
                 zero_sectors += 1;
@@ -4520,6 +4892,470 @@ pub unsafe extern "system" fn DS_CopyLbaRangeToMappedFile(
 }
 
 // ---------------------------------------------------------------------------
+// 26. DS_ProbeUsbTopology (Win32 PnP Device Tree + USB Hub Descriptor Probe)
+// ---------------------------------------------------------------------------
+#[cfg(windows)]
+fn lookup_usb_bridge_chipset(vid: u16) -> &'static str {
+    match vid {
+        0x174C => "ASMedia ASM236x / ASM1153E",
+        0x152D => "JMicron JMS583 / JMS578",
+        0x0BDA => "Realtek RTL9210B / RTS5329",
+        0x1058 => "Western Digital USB Bridge",
+        0x0BC2 => "Seagate External USB Controller",
+        0x0781 => "SanDisk USB Flash Controller",
+        0x0951 => "Kingston USB Flash Controller",
+        0x04E8 => "Samsung Portable SSD Controller",
+        0x05E3 => "Genesys Logic GL3227 Card Reader",
+        0x2109 => "VIA Labs VL716 / VL822",
+        0x8087 => "Intel Thunderbolt / USB4 Controller",
+        _ => "",
+    }
+}
+
+#[cfg(windows)]
+fn parse_vid_pid_from_pnp(id: &str) -> (u16, u16) {
+    let upper = id.to_ascii_uppercase();
+    let parse_tag = |tag: &str| -> u16 {
+        if let Some(pos) = upper.find(tag) {
+            let tail = &upper[pos + tag.len()..];
+            if tail.len() >= 4 {
+                if let Ok(v) = u16::from_str_radix(&tail[..4], 16) {
+                    return v;
+                }
+            }
+        }
+        0
+    };
+    (parse_tag("VID_"), parse_tag("PID_"))
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DS_ProbeUsbTopology(
+    drive_index: u32,
+    out_info: *mut DSUsbTopologyInfo,
+) -> bool {
+    if out_info.is_null() {
+        return false;
+    }
+    *out_info = std::mem::zeroed();
+    (*out_info).drive_index = drive_index;
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn LoadLibraryA(lp_lib_file_name: *const u8) -> *mut c_void;
+            fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+            fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
+        }
+
+        type PfnRegOpenKeyExW = unsafe extern "system" fn(*mut c_void, *const u16, u32, u32, *mut *mut c_void) -> i32;
+        type PfnRegQueryValueExW = unsafe extern "system" fn(*mut c_void, *const u16, *mut u32, *mut u32, *mut u8, *mut u32) -> i32;
+        type PfnRegCloseKey = unsafe extern "system" fn(*mut c_void) -> i32;
+
+        let h_advapi = LoadLibraryA(b"advapi32.dll\0".as_ptr());
+        if h_advapi.is_null() {
+            return false;
+        }
+        let p_reg_open = GetProcAddress(h_advapi, b"RegOpenKeyExW\0".as_ptr());
+        let p_reg_query = GetProcAddress(h_advapi, b"RegQueryValueExW\0".as_ptr());
+        let p_reg_close = GetProcAddress(h_advapi, b"RegCloseKey\0".as_ptr());
+
+        let mut pnp_w = [0u16; 260];
+        let mut got_pnp = false;
+
+        if !p_reg_open.is_null() && !p_reg_query.is_null() && !p_reg_close.is_null() {
+            let reg_open: PfnRegOpenKeyExW = std::mem::transmute(p_reg_open);
+            let reg_query: PfnRegQueryValueExW = std::mem::transmute(p_reg_query);
+            let reg_close: PfnRegCloseKey = std::mem::transmute(p_reg_close);
+
+            let subkey: Vec<u16> = "SYSTEM\\CurrentControlSet\\Services\\Disk\\Enum\0"
+                .encode_utf16()
+                .collect();
+            let mut h_enum: *mut c_void = std::ptr::null_mut();
+            let hklm = 0x8000_0002usize as *mut c_void;
+            if reg_open(hklm, subkey.as_ptr(), 0, 0x20019 /* KEY_READ */, &mut h_enum) == 0 {
+                let val_name: Vec<u16> = format!("{}\0", drive_index).encode_utf16().collect();
+                let mut val_type: u32 = 0;
+                let mut byte_len: u32 = ((pnp_w.len() - 1) * 2) as u32;
+                if reg_query(
+                    h_enum,
+                    val_name.as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut val_type,
+                    pnp_w.as_mut_ptr() as *mut u8,
+                    &mut byte_len,
+                ) == 0 && pnp_w[0] != 0
+                {
+                    got_pnp = true;
+                }
+                reg_close(h_enum);
+            }
+        }
+        FreeLibrary(h_advapi);
+
+        if !got_pnp {
+            return false;
+        }
+
+        let end_pnp = pnp_w.iter().position(|&c| c == 0).unwrap_or(pnp_w.len());
+        let pnp_str = String::from_utf16_lossy(&pnp_w[..end_pnp]);
+        copy_str_to_fixed_bytes(&pnp_str, &mut (*out_info).pnp_device_id);
+        (*out_info).probe_succeeded = 1;
+
+        type PfnCmLocateDevNodeW = unsafe extern "system" fn(*mut u32, *const u16, u32) -> u32;
+        type PfnCmGetParent = unsafe extern "system" fn(*mut u32, u32, u32) -> u32;
+        type PfnCmGetDeviceIdW = unsafe extern "system" fn(u32, *mut u16, u32, u32) -> u32;
+        type PfnCmGetDevNodeRegPropW = unsafe extern "system" fn(u32, u32, *mut u32, *mut u8, *mut u32, u32) -> u32;
+
+        let mut has_uasp = false;
+        let mut has_bot = false;
+        let mut has_usb4 = false;
+        let mut has_nvme = false;
+        let mut has_sdio = false;
+        let mut has_usb3_ancestor = false;
+
+        let h_cfg = LoadLibraryA(b"cfgmgr32.dll\0".as_ptr());
+        if !h_cfg.is_null() {
+            let p_loc = GetProcAddress(h_cfg, b"CM_Locate_DevNodeW\0".as_ptr());
+            let p_par = GetProcAddress(h_cfg, b"CM_Get_Parent\0".as_ptr());
+            let p_id = GetProcAddress(h_cfg, b"CM_Get_Device_IDW\0".as_ptr());
+            let p_prop = GetProcAddress(h_cfg, b"CM_Get_DevNode_Registry_PropertyW\0".as_ptr());
+
+            if !p_loc.is_null() && !p_par.is_null() && !p_id.is_null() {
+                let cm_locate: PfnCmLocateDevNodeW = std::mem::transmute(p_loc);
+                let cm_parent: PfnCmGetParent = std::mem::transmute(p_par);
+                let cm_devid: PfnCmGetDeviceIdW = std::mem::transmute(p_id);
+
+                let mut cur_node: u32 = 0;
+                if cm_locate(&mut cur_node, pnp_w.as_ptr(), 0) == 0 {
+                    for depth in 0..8 {
+                        let mut node_w = [0u16; 260];
+                        if cm_devid(cur_node, node_w.as_mut_ptr(), 259, 0) == 0 {
+                            let n_end = node_w.iter().position(|&c| c == 0).unwrap_or(node_w.len());
+                            let n_str = String::from_utf16_lossy(&node_w[..n_end]);
+                            let n_upper = n_str.to_ascii_uppercase();
+                            if n_upper.contains("USB4") || n_upper.contains("THUNDERBOLT") {
+                                has_usb4 = true;
+                            }
+                            if n_upper.contains("ROOT_HUB30") || n_upper.contains("XHCI") {
+                                has_usb3_ancestor = true;
+                            }
+                            if n_upper.contains("USB\\VID_") && (*out_info).vendor_id == 0 {
+                                let (vid, pid) = parse_vid_pid_from_pnp(&n_str);
+                                if vid != 0 {
+                                    (*out_info).vendor_id = vid;
+                                    (*out_info).product_id = pid;
+                                }
+                            }
+                        }
+
+                        if !p_prop.is_null() {
+                            let cm_prop: PfnCmGetDevNodeRegPropW = std::mem::transmute(p_prop);
+                            let mut svc_w = [0u16; 64];
+                            let mut p_type: u32 = 0;
+                            let mut p_len: u32 = ((svc_w.len() - 1) * 2) as u32;
+                            if cm_prop(
+                                cur_node,
+                                5, // CM_DRP_SERVICE
+                                &mut p_type,
+                                svc_w.as_mut_ptr() as *mut u8,
+                                &mut p_len,
+                                0,
+                            ) == 0 && svc_w[0] != 0
+                            {
+                                let s_end = svc_w.iter().position(|&c| c == 0).unwrap_or(svc_w.len());
+                                let svc_str = String::from_utf16_lossy(&svc_w[..s_end]);
+                                let svc_lower = svc_str.to_ascii_lowercase();
+                                if svc_lower.contains("uaspstor") {
+                                    has_uasp = true;
+                                    copy_str_to_fixed_bytes(&svc_str, &mut (*out_info).driver_service);
+                                } else if svc_lower.contains("usbstor") {
+                                    has_bot = true;
+                                    if (*out_info).driver_service[0] == 0 {
+                                        copy_str_to_fixed_bytes(&svc_str, &mut (*out_info).driver_service);
+                                    }
+                                } else if svc_lower.contains("stornvme") {
+                                    has_nvme = true;
+                                    if (*out_info).driver_service[0] == 0 {
+                                        copy_str_to_fixed_bytes(&svc_str, &mut (*out_info).driver_service);
+                                    }
+                                } else if svc_lower.contains("sdbus") || svc_lower.contains("sdstor") {
+                                    has_sdio = true;
+                                    if depth == 1 && (*out_info).driver_service[0] == 0 {
+                                        copy_str_to_fixed_bytes(&svc_str, &mut (*out_info).driver_service);
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut parent: u32 = 0;
+                        if cm_parent(&mut parent, cur_node, 0) != 0 || parent == 0 {
+                            break;
+                        }
+                        cur_node = parent;
+                    }
+                }
+            }
+            FreeLibrary(h_cfg);
+        }
+
+        if (*out_info).vendor_id != 0 {
+            let chip = lookup_usb_bridge_chipset((*out_info).vendor_id);
+            if !chip.is_empty() {
+                copy_str_to_fixed_bytes(chip, &mut (*out_info).bridge_chipset);
+            }
+        }
+
+        if has_usb4 && has_nvme {
+            (*out_info).transport_code = 3;
+            copy_str_to_fixed_bytes("PCIe Tunnel (USB4/TB)", &mut (*out_info).transport_label);
+            if (*out_info).driver_service[0] == 0 {
+                copy_str_to_fixed_bytes("stornvme", &mut (*out_info).driver_service);
+            }
+            (*out_info).usb_generation_code = 40;
+            (*out_info).negotiated_speed_mbps = 40000;
+            (*out_info).bcd_usb = 0x0400;
+            copy_str_to_fixed_bytes("USB4 / Thunderbolt 4 (40 Gbps)", &mut (*out_info).usb_version_label);
+            return true;
+        }
+
+        if has_uasp {
+            (*out_info).transport_code = 2;
+            copy_str_to_fixed_bytes("UASP (UASPStor)", &mut (*out_info).transport_label);
+        } else if has_bot {
+            (*out_info).transport_code = 1;
+            copy_str_to_fixed_bytes("BOT (USBSTOR)", &mut (*out_info).transport_label);
+        } else if has_sdio {
+            (*out_info).transport_code = 4;
+            copy_str_to_fixed_bytes("SDIO (SD/MMC)", &mut (*out_info).transport_label);
+        } else if has_nvme {
+            (*out_info).transport_code = 3;
+            copy_str_to_fixed_bytes("NVMe PCIe Direct", &mut (*out_info).transport_label);
+        }
+
+        if (*out_info).vendor_id != 0 {
+            #[repr(C)]
+            struct Guid {
+                data1: u32,
+                data2: u16,
+                data3: u16,
+                data4: [u8; 8],
+            }
+            #[repr(C)]
+            struct SpDeviceInterfaceData {
+                cb_size: u32,
+                interface_class_guid: Guid,
+                flags: u32,
+                reserved: usize,
+            }
+            type PfnSetupDiGetClassDevsW = unsafe extern "system" fn(*const Guid, *const u16, *mut c_void, u32) -> *mut c_void;
+            type PfnSetupDiEnumDeviceInterfaces = unsafe extern "system" fn(*mut c_void, *mut c_void, *const Guid, u32, *mut SpDeviceInterfaceData) -> i32;
+            type PfnSetupDiGetDeviceInterfaceDetailW = unsafe extern "system" fn(*mut c_void, *mut SpDeviceInterfaceData, *mut u8, u32, *mut u32, *mut c_void) -> i32;
+            type PfnSetupDiDestroyDeviceInfoList = unsafe extern "system" fn(*mut c_void) -> i32;
+
+            const HUB_GUID: Guid = Guid {
+                data1: 0xF18A_0E88,
+                data2: 0xC30C,
+                data3: 0x11D0,
+                data4: [0x88, 0x15, 0x00, 0xA0, 0xC9, 0x06, 0xBE, 0xD8],
+            };
+
+            let h_setup = LoadLibraryA(b"setupapi.dll\0".as_ptr());
+            if !h_setup.is_null() {
+                let p_devs = GetProcAddress(h_setup, b"SetupDiGetClassDevsW\0".as_ptr());
+                let p_enum = GetProcAddress(h_setup, b"SetupDiEnumDeviceInterfaces\0".as_ptr());
+                let p_detail = GetProcAddress(h_setup, b"SetupDiGetDeviceInterfaceDetailW\0".as_ptr());
+                let p_destroy = GetProcAddress(h_setup, b"SetupDiDestroyDeviceInfoList\0".as_ptr());
+
+                if !p_devs.is_null() && !p_enum.is_null() && !p_detail.is_null() && !p_destroy.is_null() {
+                    let get_devs: PfnSetupDiGetClassDevsW = std::mem::transmute(p_devs);
+                    let enum_if: PfnSetupDiEnumDeviceInterfaces = std::mem::transmute(p_enum);
+                    let get_detail: PfnSetupDiGetDeviceInterfaceDetailW = std::mem::transmute(p_detail);
+                    let destroy: PfnSetupDiDestroyDeviceInfoList = std::mem::transmute(p_destroy);
+
+                    let h_info = get_devs(&HUB_GUID, std::ptr::null(), std::ptr::null_mut(), 0x12);
+                    if h_info != (-1isize as *mut c_void) && !h_info.is_null() {
+                        let mut found_port = false;
+                        for hub_idx in 0..32u32 {
+                            if found_port {
+                                break;
+                            }
+                            let mut if_data: SpDeviceInterfaceData = std::mem::zeroed();
+                            if_data.cb_size = std::mem::size_of::<SpDeviceInterfaceData>() as u32;
+                            if enum_if(h_info, std::ptr::null_mut(), &HUB_GUID, hub_idx, &mut if_data) == 0 {
+                                break;
+                            }
+
+                            let mut detail_buf = [0u8; 1024];
+                            let cb_detail: u32 = if std::mem::size_of::<usize>() == 8 { 8 } else { 6 };
+                            detail_buf[..4].copy_from_slice(&cb_detail.to_le_bytes());
+                            let mut req_sz: u32 = 0;
+                            if get_detail(
+                                h_info,
+                                &mut if_data,
+                                detail_buf.as_mut_ptr(),
+                                detail_buf.len() as u32,
+                                &mut req_sz,
+                                std::ptr::null_mut(),
+                            ) == 0
+                            {
+                                continue;
+                            }
+                            let path_ptr = detail_buf.as_ptr().add(4) as *const u16;
+                            let mut h_hub = CreateFileW(
+                                path_ptr,
+                                GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                std::ptr::null(),
+                                OPEN_EXISTING,
+                                0,
+                                0,
+                            );
+                            if h_hub == INVALID_HANDLE_VALUE {
+                                h_hub = CreateFileW(
+                                    path_ptr,
+                                    0,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                    std::ptr::null(),
+                                    OPEN_EXISTING,
+                                    0,
+                                    0,
+                                );
+                            }
+                            if h_hub == INVALID_HANDLE_VALUE {
+                                continue;
+                            }
+
+                            let mut node_info = [0u8; 128];
+                            let mut node_ret: u32 = 0;
+                            let mut num_ports: u8 = 16;
+                            if DeviceIoControl(
+                                h_hub as _,
+                                0x0022_0408, // IOCTL_USB_GET_NODE_INFORMATION
+                                node_info.as_mut_ptr() as _,
+                                node_info.len() as u32,
+                                node_info.as_mut_ptr() as _,
+                                node_info.len() as u32,
+                                &mut node_ret,
+                                std::ptr::null_mut(),
+                            ) != 0 && node_ret >= 8 && node_info[6] > 0
+                            {
+                                num_ports = node_info[6].min(64);
+                            }
+
+                            for port in 1..=num_ports {
+                                let mut conn_ex = [0u8; 512];
+                                conn_ex[..4].copy_from_slice(&(port as u32).to_le_bytes());
+                                let mut ex_ret: u32 = 0;
+                                if DeviceIoControl(
+                                    h_hub as _,
+                                    0x0022_0448, // IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX
+                                    conn_ex.as_mut_ptr() as _,
+                                    conn_ex.len() as u32,
+                                    conn_ex.as_mut_ptr() as _,
+                                    conn_ex.len() as u32,
+                                    &mut ex_ret,
+                                    std::ptr::null_mut(),
+                                ) == 0 || ex_ret < 35
+                                {
+                                    continue;
+                                }
+                                let bcd_usb = u16::from_le_bytes([conn_ex[6], conn_ex[7]]);
+                                let vid = u16::from_le_bytes([conn_ex[12], conn_ex[13]]);
+                                let pid = u16::from_le_bytes([conn_ex[14], conn_ex[15]]);
+                                let speed_byte = conn_ex[23];
+                                let is_hub = conn_ex[24];
+                                let conn_status = u32::from_le_bytes([conn_ex[31], conn_ex[32], conn_ex[33], conn_ex[34]]);
+
+                                if conn_status == 1 && is_hub == 0 && vid == (*out_info).vendor_id && pid == (*out_info).product_id {
+                                    (*out_info).bcd_usb = bcd_usb;
+                                    (*out_info).port_number = port;
+
+                                    let mut v2_buf = [port as u32, 16u32, 0x0Fu32, 0u32];
+                                    let mut v2_ret: u32 = 0;
+                                    let mut v2_flags: u32 = 0;
+                                    if DeviceIoControl(
+                                        h_hub as _,
+                                        0x0022_045C, // IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2
+                                        v2_buf.as_mut_ptr() as _,
+                                        16,
+                                        v2_buf.as_mut_ptr() as _,
+                                        16,
+                                        &mut v2_ret,
+                                        std::ptr::null_mut(),
+                                    ) != 0 && v2_ret >= 16
+                                    {
+                                        v2_flags = v2_buf[3];
+                                    }
+
+                                    let (gen_code, speed_mbps, label) = if (v2_flags & 0x04) != 0 || bcd_usb >= 0x0320 {
+                                        if bcd_usb >= 0x0320 {
+                                            (32, 20000, "USB 3.2 Gen2x2 (20 Gbps)")
+                                        } else {
+                                            (31, 10000, "USB 3.2 Gen2 (10 Gbps)")
+                                        }
+                                    } else if (v2_flags & 0x01) != 0 || speed_byte >= 3 {
+                                        if bcd_usb >= 0x0310 {
+                                            (31, 10000, "USB 3.2 Gen2 (10 Gbps)")
+                                        } else {
+                                            (30, 5000, "USB 3.0 / 3.2 Gen1 (5 Gbps)")
+                                        }
+                                    } else if speed_byte == 2 {
+                                        (20, 480, "USB 2.0 High-Speed (480 Mbps)")
+                                    } else {
+                                        (11, 12, "USB 1.1 Full-Speed (12 Mbps)")
+                                    };
+                                    (*out_info).usb_generation_code = gen_code;
+                                    (*out_info).negotiated_speed_mbps = speed_mbps;
+                                    copy_str_to_fixed_bytes(label, &mut (*out_info).usb_version_label);
+                                    found_port = true;
+                                    break;
+                                }
+                            }
+                            CloseHandle(h_hub);
+                        }
+                        destroy(h_info);
+                    }
+                }
+                FreeLibrary(h_setup);
+            }
+        }
+
+        if (*out_info).usb_generation_code == 0 && (has_uasp || has_bot || (*out_info).vendor_id != 0) {
+            if has_uasp || has_usb3_ancestor {
+                (*out_info).usb_generation_code = 30;
+                (*out_info).negotiated_speed_mbps = 5000;
+                if (*out_info).bcd_usb == 0 {
+                    (*out_info).bcd_usb = 0x0300;
+                }
+                copy_str_to_fixed_bytes("USB 3.0 / 3.2 Gen1 (5 Gbps)", &mut (*out_info).usb_version_label);
+            } else {
+                (*out_info).usb_generation_code = 20;
+                (*out_info).negotiated_speed_mbps = 480;
+                if (*out_info).bcd_usb == 0 {
+                    (*out_info).bcd_usb = 0x0200;
+                }
+                copy_str_to_fixed_bytes("USB 2.0 High-Speed (480 Mbps)", &mut (*out_info).usb_version_label);
+            }
+        }
+
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helper: Copy string safely to fixed byte array
 // ---------------------------------------------------------------------------
 fn copy_str_to_fixed_bytes(src: &str, dst: &mut [u8]) {
@@ -4531,3 +5367,560 @@ fn copy_str_to_fixed_bytes(src: &str, dst: &mut [u8]) {
     let len = bytes.len().min(dst.len().saturating_sub(1));
     dst[..len].copy_from_slice(&bytes[..len]);
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct DSExtendedDriveCaps {
+    pub partition_style: String,
+    pub alignment_status: String,
+    pub misaligned_partitions: u32,
+    pub volatile_write_cache: Option<bool>,
+    pub write_cache_flush_supported: Option<bool>,
+    pub read_look_ahead_supported: Option<bool>,
+    pub ncq_supported: Option<bool>,
+    pub queue_depth: Option<u32>,
+    pub apm_aam_supported: Option<bool>,
+    pub rotational_speed_rpm: Option<u32>,
+    pub warning_temp_threshold_c: Option<u32>,
+}
+
+/// Probes real partition layout (MBR/GPT + 4K starting offset alignment),
+/// write-cache descriptor, temperature threshold, and ATA/NVMe Identify capability words.
+pub unsafe fn ds_probe_extended_drive_caps(
+    drive_handle: *mut c_void,
+    bus: &str,
+    phys_sector_size: u32,
+) -> DSExtendedDriveCaps {
+    let mut caps = DSExtendedDriveCaps {
+        partition_style: "Unknown".to_string(),
+        alignment_status: "N/A".to_string(),
+        ..Default::default()
+    };
+
+    if drive_handle.is_null() {
+        return caps;
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_PROPERTY_QUERY,
+            STORAGE_TEMPERATURE_DATA_DESCRIPTOR, StorageDeviceTemperatureProperty,
+        };
+
+        let ctx = &*(drive_handle as *const DriveContext);
+        let h_device = ctx.raw_handle;
+        let align_unit = (phys_sector_size.max(4096)) as u64;
+
+        // 1. IOCTL_DISK_GET_DRIVE_LAYOUT_EX (0x0007_0050) for true PartitionStyle and StartingOffset 4K alignment
+        const IOCTL_DISK_GET_DRIVE_LAYOUT_EX_RAW: u32 = 0x0007_0050;
+        let mut layout_buf = vec![0u8; 16384];
+        let mut layout_ret: u32 = 0;
+        let layout_ok = DeviceIoControl(
+            h_device as _,
+            IOCTL_DISK_GET_DRIVE_LAYOUT_EX_RAW,
+            std::ptr::null(),
+            0,
+            layout_buf.as_mut_ptr() as _,
+            layout_buf.len() as u32,
+            &mut layout_ret,
+            std::ptr::null_mut(),
+        );
+
+        let mut parsed_layout = false;
+        if layout_ok != 0 && layout_ret >= 48 {
+            let style = u32::from_le_bytes([layout_buf[0], layout_buf[1], layout_buf[2], layout_buf[3]]);
+            let part_count = u32::from_le_bytes([layout_buf[4], layout_buf[5], layout_buf[6], layout_buf[7]]) as usize;
+            caps.partition_style = match style {
+                0 => "MBR (Master Boot Record)".to_string(),
+                1 => "GPT (GUID Partition Table)".to_string(),
+                _ => "Unknown".to_string(),
+            };
+            parsed_layout = true;
+
+            let max_entries = ((layout_ret as usize).saturating_sub(48)) / 144;
+            let entries = part_count.min(max_entries);
+            let mut active_parts = 0u32;
+            let mut misaligned = 0u32;
+
+            for idx in 0..entries {
+                let base = 48 + idx * 144;
+                if base + 28 > layout_buf.len() {
+                    break;
+                }
+                let starting_offset = i64::from_le_bytes(layout_buf[base + 8..base + 16].try_into().unwrap_or([0; 8]));
+                let part_length = i64::from_le_bytes(layout_buf[base + 16..base + 24].try_into().unwrap_or([0; 8]));
+                let part_num = u32::from_le_bytes(layout_buf[base + 24..base + 28].try_into().unwrap_or([0; 4]));
+                if part_length > 0 && part_num > 0 && starting_offset >= 0 {
+                    active_parts += 1;
+                    if (starting_offset as u64) % align_unit != 0 {
+                        misaligned += 1;
+                    }
+                }
+            }
+
+            caps.misaligned_partitions = misaligned;
+            caps.alignment_status = if active_parts == 0 {
+                "N/A".to_string()
+            } else if misaligned > 0 {
+                "Misaligned".to_string()
+            } else {
+                "Aligned (4K sector boundary)".to_string()
+            };
+        }
+
+        // 1b. Raw LBA 0 fallback for MBR/GPT inspection when GET_DRIVE_LAYOUT_EX fails
+        if !parsed_layout {
+            let sec_bytes = ctx.sector_size.max(512);
+            let mut mbr_buf = vec![0u8; sec_bytes as usize];
+            let mut bytes_read = 0u32;
+            let mut w32_err = 0u32;
+            if DS_ReadRawSectorWithError(
+                drive_handle,
+                0,
+                mbr_buf.as_mut_ptr(),
+                sec_bytes,
+                &mut bytes_read,
+                &mut w32_err,
+            ) && bytes_read >= 512
+                && mbr_buf[510] == 0x55
+                && mbr_buf[511] == 0xAA
+            {
+                let mut is_gpt = false;
+                let mut active_parts = 0u32;
+                let mut misaligned = 0u32;
+                for p in 0..4 {
+                    let off = 446 + p * 16;
+                    let p_type = mbr_buf[off + 4];
+                    if p_type == 0xEE {
+                        is_gpt = true;
+                    }
+                    if p_type != 0 && p_type != 0xEE {
+                        let start_lba = u32::from_le_bytes([
+                            mbr_buf[off + 8],
+                            mbr_buf[off + 9],
+                            mbr_buf[off + 10],
+                            mbr_buf[off + 11],
+                        ]) as u64;
+                        let count_lba = u32::from_le_bytes([
+                            mbr_buf[off + 12],
+                            mbr_buf[off + 13],
+                            mbr_buf[off + 14],
+                            mbr_buf[off + 15],
+                        ]) as u64;
+                        if count_lba > 0 {
+                            active_parts += 1;
+                            if (start_lba.saturating_mul(sec_bytes as u64)) % align_unit != 0 {
+                                misaligned += 1;
+                            }
+                        }
+                    }
+                }
+                if is_gpt {
+                    caps.partition_style = "GPT (GUID Partition Table)".to_string();
+                } else if active_parts > 0 {
+                    caps.partition_style = "MBR (Master Boot Record)".to_string();
+                    caps.misaligned_partitions = misaligned;
+                    caps.alignment_status = if misaligned > 0 {
+                        "Misaligned".to_string()
+                    } else {
+                        "Aligned (4K sector boundary)".to_string()
+                    };
+                }
+            }
+        }
+
+        // 2. StorageDeviceWriteCacheProperty (PropertyId = 4) distinguishing supported vs unknown
+        let mut wc_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        wc_query.PropertyId = 4;
+        wc_query.QueryType = PropertyStandardQuery;
+        let mut wc_buf = [0u8; 32];
+        let mut wc_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &wc_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            wc_buf.as_mut_ptr() as _,
+            wc_buf.len() as u32,
+            &mut wc_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && wc_bytes >= 16
+        {
+            let wc_state = u32::from_le_bytes([wc_buf[12], wc_buf[13], wc_buf[14], wc_buf[15]]);
+            if wc_state == 1 {
+                caps.volatile_write_cache = Some(false);
+            } else if wc_state == 2 {
+                caps.volatile_write_cache = Some(true);
+            }
+        }
+
+        // 3. StorageDeviceTemperatureProperty OverThreshold
+        let mut temp_query: STORAGE_PROPERTY_QUERY = std::mem::zeroed();
+        temp_query.PropertyId = StorageDeviceTemperatureProperty;
+        temp_query.QueryType = PropertyStandardQuery;
+        let mut temp_desc: STORAGE_TEMPERATURE_DATA_DESCRIPTOR = std::mem::zeroed();
+        let mut temp_bytes: u32 = 0;
+        if DeviceIoControl(
+            h_device as _,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &temp_query as *const _ as _,
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            &mut temp_desc as *mut _ as _,
+            std::mem::size_of::<STORAGE_TEMPERATURE_DATA_DESCRIPTOR>() as u32,
+            &mut temp_bytes,
+            std::ptr::null_mut(),
+        ) != 0 && temp_desc.InfoCount > 0
+        {
+            let warn_t = temp_desc.TemperatureInfo[0].OverThreshold;
+            if warn_t > 20 && warn_t < 150 {
+                caps.warning_temp_threshold_c = Some(warn_t as u32);
+            }
+        }
+
+        // 4. Protocol-specific Identify capabilities (real firmware bits only)
+        if bus.eq_ignore_ascii_case("NVMe") {
+            let mut nvme_id = vec![0u8; 4096];
+            if DS_GetNvmeIdentifyController(drive_handle, nvme_id.as_mut_ptr()) {
+                let wctemp_k = u16::from_le_bytes([nvme_id[266], nvme_id[267]]);
+                if wctemp_k > 273 && wctemp_k < 423 {
+                    caps.warning_temp_threshold_c = Some((wctemp_k - 273) as u32);
+                }
+                let vwc = nvme_id[525];
+                if caps.volatile_write_cache.is_none() {
+                    caps.volatile_write_cache = Some((vwc & 0x01) != 0);
+                }
+                caps.write_cache_flush_supported = Some(true);
+            }
+        } else {
+            let mut ata_id = [0u8; 512];
+            if DS_AtaIdentifyDevice(drive_handle, ata_id.as_mut_ptr()) {
+                let w = |idx: usize| -> u16 { u16::from_le_bytes([ata_id[idx * 2], ata_id[idx * 2 + 1]]) };
+                let w75 = w(75);
+                let w76 = w(76);
+                let w82 = w(82);
+                let w83 = w(83);
+                let w85 = w(85);
+                let w217 = w(217);
+
+                let ncq = (w76 & (1 << 8)) != 0;
+                caps.ncq_supported = Some(ncq);
+                caps.queue_depth = Some(if ncq { ((w75 & 0x1F) as u32) + 1 } else { 1 });
+                caps.volatile_write_cache = Some((w85 & (1 << 5)) != 0);
+                caps.write_cache_flush_supported = Some((w83 & (1 << 12)) != 0 || (w83 & (1 << 13)) != 0);
+                caps.read_look_ahead_supported = Some((w82 & (1 << 6)) != 0);
+                caps.apm_aam_supported = Some((w83 & (1 << 3)) != 0 || (w83 & (1 << 9)) != 0);
+                if w217 == 1 {
+                    caps.rotational_speed_rpm = Some(0);
+                } else if w217 > 1024 && w217 != 0xFFFF {
+                    caps.rotational_speed_rpm = Some(w217 as u32);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (drive_handle, bus, phys_sector_size);
+    }
+
+    caps
+}
+
+/// Safely flushes, locks, dismounts volumes on `drive_index`, issues `IOCTL_STORAGE_EJECT_MEDIA`,
+/// and requests PnP safe device eject via `CM_Request_Device_EjectW`.
+pub fn ds_eject_physical_drive_win32(drive_index: u32, volume_letters: &[String]) -> (bool, String, u32) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FlushFileBuffers, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        const FSCTL_LOCK_VOLUME: u32 = 0x0009_0018;
+        const FSCTL_DISMOUNT_VOLUME: u32 = 0x0009_0020;
+        const FSCTL_UNLOCK_VOLUME: u32 = 0x0009_001C;
+        const IOCTL_STORAGE_EJECT_MEDIA: u32 = 0x002D_4808;
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn LoadLibraryA(lp_lib_file_name: *const u8) -> *mut c_void;
+            fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+            fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
+        }
+
+        let mut locked_vol_handles: Vec<(String, HANDLE)> = Vec::new();
+
+        for letter in volume_letters {
+            let trimmed = letter.trim().trim_end_matches('\\');
+            if trimmed.is_empty() {
+                continue;
+            }
+            let vol_path = format!("\\\\.\\{}\0", trimmed);
+            let wide: Vec<u16> = vol_path.encode_utf16().collect();
+            let h_vol = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    0,
+                    0,
+                )
+            };
+            if h_vol == INVALID_HANDLE_VALUE {
+                let err = unsafe { GetLastError() };
+                for (_, prev_h) in locked_vol_handles {
+                    unsafe { CloseHandle(prev_h) };
+                }
+                return (
+                    false,
+                    format!(
+                        "볼륨 {} 핸들 열기 실패 (Win32 오류 코드 {}). 관리자 권한 및 열려 있는 파일 사용 여부를 확인하세요.",
+                        trimmed, err
+                    ),
+                    err,
+                );
+            }
+
+            unsafe { FlushFileBuffers(h_vol) };
+
+            let mut locked = false;
+            let mut lock_err = 0u32;
+            for _ in 0..3 {
+                let mut ret = 0u32;
+                if unsafe {
+                    DeviceIoControl(
+                        h_vol as _,
+                        FSCTL_LOCK_VOLUME,
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut ret,
+                        std::ptr::null_mut(),
+                    )
+                } != 0
+                {
+                    locked = true;
+                    break;
+                }
+                lock_err = unsafe { GetLastError() };
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+
+            if !locked {
+                unsafe { CloseHandle(h_vol) };
+                for (_, prev_h) in locked_vol_handles {
+                    let mut ur = 0u32;
+                    unsafe {
+                        DeviceIoControl(prev_h as _, FSCTL_UNLOCK_VOLUME, std::ptr::null(), 0, std::ptr::null_mut(), 0, &mut ur, std::ptr::null_mut());
+                        CloseHandle(prev_h);
+                    }
+                }
+                return (
+                    false,
+                    format!(
+                        "볼륨 {}이(가) 다른 프로세스에서 사용 중이어서 잠글 수 없습니다 (Win32 오류 {}). 열린 창이나 파일을 닫고 다시 시도하세요.",
+                        trimmed, lock_err
+                    ),
+                    lock_err,
+                );
+            }
+
+            let mut dm_ret = 0u32;
+            unsafe {
+                DeviceIoControl(
+                    h_vol as _,
+                    FSCTL_DISMOUNT_VOLUME,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut dm_ret,
+                    std::ptr::null_mut(),
+                );
+            }
+            locked_vol_handles.push((trimmed.to_string(), h_vol));
+        }
+
+        // Release volume locks right after dismount so PnP eject does not deadlock on open handles,
+        // or try IOCTL_STORAGE_EJECT_MEDIA on the physical drive first.
+        let mut media_eject_ok = false;
+        let mut media_eject_err = 0u32;
+        let phys_path = format!("\\\\.\\PhysicalDrive{}\0", drive_index);
+        let phys_wide: Vec<u16> = phys_path.encode_utf16().collect();
+        let h_phys = unsafe {
+            CreateFileW(
+                phys_wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                0,
+            )
+        };
+        if h_phys != INVALID_HANDLE_VALUE {
+            let mut eject_ret = 0u32;
+            if unsafe {
+                DeviceIoControl(
+                    h_phys as _,
+                    IOCTL_STORAGE_EJECT_MEDIA,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut eject_ret,
+                    std::ptr::null_mut(),
+                )
+            } != 0
+            {
+                media_eject_ok = true;
+            } else {
+                media_eject_err = unsafe { GetLastError() };
+            }
+            unsafe { CloseHandle(h_phys) };
+        } else {
+            media_eject_err = unsafe { GetLastError() };
+        }
+
+        for (_, h_vol) in locked_vol_handles {
+            unsafe { CloseHandle(h_vol) };
+        }
+
+        // Attempt PnP Safe Removal via cfgmgr32 CM_Request_Device_EjectW on parent USB/removable node
+        let mut pnp_eject_ok = false;
+        let mut veto_reason = String::new();
+        unsafe {
+            type PfnRegOpenKeyExW = unsafe extern "system" fn(*mut c_void, *const u16, u32, u32, *mut *mut c_void) -> i32;
+            type PfnRegQueryValueExW = unsafe extern "system" fn(*mut c_void, *const u16, *mut u32, *mut u32, *mut u8, *mut u32) -> i32;
+            type PfnRegCloseKey = unsafe extern "system" fn(*mut c_void) -> i32;
+
+            let h_advapi = LoadLibraryA(b"advapi32.dll\0".as_ptr());
+            let mut pnp_w = [0u16; 260];
+            let mut got_pnp = false;
+
+            if !h_advapi.is_null() {
+                let p_open = GetProcAddress(h_advapi, b"RegOpenKeyExW\0".as_ptr());
+                let p_query = GetProcAddress(h_advapi, b"RegQueryValueExW\0".as_ptr());
+                let p_close = GetProcAddress(h_advapi, b"RegCloseKey\0".as_ptr());
+                if !p_open.is_null() && !p_query.is_null() && !p_close.is_null() {
+                    let reg_open: PfnRegOpenKeyExW = std::mem::transmute(p_open);
+                    let reg_query: PfnRegQueryValueExW = std::mem::transmute(p_query);
+                    let reg_close: PfnRegCloseKey = std::mem::transmute(p_close);
+                    let subkey: Vec<u16> = "SYSTEM\\CurrentControlSet\\Services\\Disk\\Enum\0".encode_utf16().collect();
+                    let mut h_enum: *mut c_void = std::ptr::null_mut();
+                    let hklm = 0x8000_0002usize as *mut c_void;
+                    if reg_open(hklm, subkey.as_ptr(), 0, 0x20019, &mut h_enum) == 0 {
+                        let val_name: Vec<u16> = format!("{}\0", drive_index).encode_utf16().collect();
+                        let mut val_type = 0u32;
+                        let mut byte_len = ((pnp_w.len() - 1) * 2) as u32;
+                        if reg_query(h_enum, val_name.as_ptr(), std::ptr::null_mut(), &mut val_type, pnp_w.as_mut_ptr() as *mut u8, &mut byte_len) == 0 && pnp_w[0] != 0 {
+                            got_pnp = true;
+                        }
+                        reg_close(h_enum);
+                    }
+                }
+                FreeLibrary(h_advapi);
+            }
+
+            if got_pnp {
+                type PfnCmLocateDevNodeW = unsafe extern "system" fn(*mut u32, *const u16, u32) -> u32;
+                type PfnCmGetParent = unsafe extern "system" fn(*mut u32, u32, u32) -> u32;
+                type PfnCmGetDevNodeStatus = unsafe extern "system" fn(*mut u32, *mut u32, u32, u32) -> u32;
+                type PfnCmRequestDeviceEjectW = unsafe extern "system" fn(u32, *mut u32, *mut u16, u32, u32) -> u32;
+
+                const CM_CAP_REMOVABLE: u32 = 0x0000_0004;
+                let h_cfg = LoadLibraryA(b"cfgmgr32.dll\0".as_ptr());
+                if !h_cfg.is_null() {
+                    let p_loc = GetProcAddress(h_cfg, b"CM_Locate_DevNodeW\0".as_ptr());
+                    let p_par = GetProcAddress(h_cfg, b"CM_Get_Parent\0".as_ptr());
+                    let p_stat = GetProcAddress(h_cfg, b"CM_Get_DevNode_Status\0".as_ptr());
+                    let p_eject = GetProcAddress(h_cfg, b"CM_Request_Device_EjectW\0".as_ptr());
+
+                    if !p_loc.is_null() && !p_par.is_null() && !p_eject.is_null() {
+                        let cm_locate: PfnCmLocateDevNodeW = std::mem::transmute(p_loc);
+                        let cm_parent: PfnCmGetParent = std::mem::transmute(p_par);
+                        let cm_eject: PfnCmRequestDeviceEjectW = std::mem::transmute(p_eject);
+
+                        let mut cur_node = 0u32;
+                        if cm_locate(&mut cur_node, pnp_w.as_ptr(), 0) == 0 {
+                            let mut target_node = cur_node;
+                            // Walk up 1..2 levels (Disk -> USBSTOR/UASPStor -> USB Device node) to find removable container node
+                            let mut probe = cur_node;
+                            for _ in 0..3 {
+                                if !p_stat.is_null() {
+                                    let cm_stat: PfnCmGetDevNodeStatus = std::mem::transmute(p_stat);
+                                    let mut status = 0u32;
+                                    let mut problem = 0u32;
+                                    if cm_stat(&mut status, &mut problem, probe, 0) == 0 {
+                                        if (status & CM_CAP_REMOVABLE) != 0 {
+                                            target_node = probe;
+                                        }
+                                    }
+                                }
+                                let mut parent = 0u32;
+                                if cm_parent(&mut parent, probe, 0) != 0 || parent == 0 {
+                                    break;
+                                }
+                                probe = parent;
+                            }
+
+                            let mut veto_type = 0u32;
+                            let mut veto_buf = [0u16; 260];
+                            let cr = cm_eject(target_node, &mut veto_type, veto_buf.as_mut_ptr(), veto_buf.len() as u32, 0);
+                            if cr == 0 && veto_type == 0 {
+                                pnp_eject_ok = true;
+                            } else {
+                                let v_end = veto_buf.iter().position(|&c| c == 0).unwrap_or(veto_buf.len());
+                                let v_str = String::from_utf16_lossy(&veto_buf[..v_end]);
+                                veto_reason = format!("Windows PnP 안전 제거 거부 (CR={}, Veto={}, '{}')", cr, veto_type, v_str);
+                            }
+                        }
+                    }
+                    FreeLibrary(h_cfg);
+                }
+            }
+        }
+
+        if pnp_eject_ok || media_eject_ok {
+            let vol_label = if volume_letters.is_empty() {
+                format!("PhysicalDrive{}", drive_index)
+            } else {
+                volume_letters.join(", ")
+            };
+            return (
+                true,
+                format!(
+                    "[{}] 하드웨어 캐시 플러시, 볼륨 잠금 해제(FSCTL_DISMOUNT_VOLUME) 및 {} 안전 제거 완료",
+                    vol_label,
+                    if pnp_eject_ok { "Windows PnP 장치 분리" } else { "스토리지 미디어 배출" }
+                ),
+                0,
+            );
+        }
+
+        let err_msg = if !veto_reason.is_empty() {
+            veto_reason
+        } else {
+            format!("하드웨어 안전 제거 실패 (Win32 오류 코드 {})", media_eject_err)
+        };
+        (false, err_msg, media_eject_err)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (drive_index, volume_letters);
+        (
+            false,
+            "하드웨어 안전 제거(FSCTL_LOCK_VOLUME / CM_Request_Device_EjectW)는 Windows 데스크톱 환경에서만 지원됩니다.".to_string(),
+            50,
+        )
+    }
+}
+

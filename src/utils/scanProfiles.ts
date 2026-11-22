@@ -7,6 +7,7 @@
  */
 
 import { DiskDrive, ScanMethodDefinition, SpecializedScanMethodId, StorageCategory } from '../types';
+import { resolveDriveUsbTopology } from './usbScanMatrix';
 
 export const SCAN_METHOD_DEFINITIONS: Record<SpecializedScanMethodId, ScanMethodDefinition> = {
   // ==========================================
@@ -232,6 +233,44 @@ export const SCAN_METHOD_DEFINITIONS: Record<SpecializedScanMethodId, ScanMethod
       '전력 부족에 의한 허위 불량과 물리적 배드섹터 구분'
     ],
     recommendedFor: '전력 부족으로 연결이 툭툭 끊기는 외장 하드 및 무전원 허브'
+  },
+  usb_usb4_pcie_direct: {
+    id: 'usb_usb4_pcie_direct',
+    name: 'USB4 / Thunderbolt 4 Direct PCIe NVMe Tunnel Scan',
+    nameKo: 'USB4 / 썬더볼트 4 PCIe 직결 터널링 초고속 검사',
+    category: 'USB_STORAGE',
+    targetMedia: 'USB4 / Thunderbolt 3/4 외장 NVMe 인클로저 (40Gbps stornvme)',
+    typicalBlockLatency: '0.08ms ~ 1.5ms (PCIe 터널 직결)',
+    slowThresholdMs: 12,
+    criticalThresholdMs: 45,
+    blockSizeKb: 2048,
+    badgeColor: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
+    description: 'USB4 / Thunderbolt 호스트의 PCIe 직결 터널(stornvme)을 통해 USB 브릿지 변환 오버헤드 없이 2MB 대용량 DMA 버스트로 외장 NVMe 셀을 전수 진단합니다.',
+    features: [
+      '40Gbps PCIe 터널링 2MB 블록 버스트 + 12ms/45ms 서브밀리초 판정',
+      '브릿지 및 인클로저 고열 방지를 위한 32블록당 12ms 마이크로 쿨다운',
+      'S.M.A.R.T. 및 NVMe Log Page 02h 직접 통과 패스스루 연계'
+    ],
+    recommendedFor: 'USB4 / Thunderbolt 4 초고속 외장 NVMe SSD'
+  },
+  usb_fake_capacity_guard: {
+    id: 'usb_fake_capacity_guard',
+    name: 'Fake-Capacity Flash Guard (H2testw LBA Boundary Verifier)',
+    nameKo: '용량 뻥튀기 위조 USB/SD 판별 LBA 경계 가드',
+    category: 'USB_STORAGE',
+    targetMedia: '초저가/온라인 구매 USB 메모리, microSD, 대용량 외장 드라이브',
+    typicalBlockLatency: '12ms ~ 40ms',
+    slowThresholdMs: 160,
+    criticalThresholdMs: 500,
+    blockSizeKb: 64,
+    badgeColor: 'bg-rose-500/10 text-rose-500 border-rose-500/20',
+    description: '512MB~1TB 2의 거듭제곱 경계 LBA에서 비침습 읽기 에일리어싱(CRC32 중복)과 비파괴 PRNG 왕복 검증으로 컨트롤러 용량 변조(Wraparound)를 즉시 탐지합니다.',
+    features: [
+      '2의 거듭제곱 경계(512MB~1TB + 99.5% Tail) LBA CRC32 충돌 즉시 탐지',
+      'OS 시스템 디스크(PhysicalDrive0 / C:) 영구 보호 및 비파괴 복원 프로토콜',
+      '위조 플래시 컨트롤러 순환 덮어쓰기(Alias) 정확 경계점 산출'
+    ],
+    recommendedFor: '실제 용량 진위 검증이 필요한 USB 플래시 / SD 카드'
   }
 };
 
@@ -281,24 +320,35 @@ export function getAvailableMethodsForDrive(drive: DiskDrive): ScanMethodDefinit
     return list;
   }
 
-  // USB & External storage
-  if (drive.type === 'EXTERNAL_SSD' || drive.usbProtocol?.includes('UASP')) {
+  // USB & External storage (Topology-Aware)
+  const topo = resolveDriveUsbTopology(drive);
+  if (topo?.generation === 'usb4_tb' || drive.connectionType === 'thunderbolt') {
+    return [
+      SCAN_METHOD_DEFINITIONS.usb_usb4_pcie_direct,
+      SCAN_METHOD_DEFINITIONS.usb_uasp_streaming,
+      SCAN_METHOD_DEFINITIONS.usb_fake_capacity_guard
+    ];
+  }
+
+  if (drive.type === 'EXTERNAL_SSD' || topo?.transport === 'UASP' || drive.usbProtocol?.includes('UASP')) {
     return [
       SCAN_METHOD_DEFINITIONS.usb_uasp_streaming,
       SCAN_METHOD_DEFINITIONS.usb_fat_meta_priority,
+      SCAN_METHOD_DEFINITIONS.usb_fake_capacity_guard,
       SCAN_METHOD_DEFINITIONS.usb_bot_jitter_filter
     ];
   }
 
-  if (drive.isUsb2 || drive.usbProtocol?.includes('USB 2.0')) {
+  if (topo?.generation === 'usb_1_1' || topo?.generation === 'usb_2_0' || drive.isUsb2 || drive.usbProtocol?.includes('USB 2.0')) {
     return [
       SCAN_METHOD_DEFINITIONS.usb_bot_jitter_filter,
       SCAN_METHOD_DEFINITIONS.usb_fat_meta_priority,
-      SCAN_METHOD_DEFINITIONS.usb_power_glitch_recovery
+      SCAN_METHOD_DEFINITIONS.usb_power_glitch_recovery,
+      SCAN_METHOD_DEFINITIONS.usb_fake_capacity_guard
     ];
   }
 
-  if (drive.type === 'EXTERNAL_HDD') {
+  if (drive.type === 'EXTERNAL_HDD' || topo?.deviceClass === 'external_hdd') {
     return [
       SCAN_METHOD_DEFINITIONS.usb_power_glitch_recovery,
       SCAN_METHOD_DEFINITIONS.usb_bot_jitter_filter,
@@ -309,6 +359,7 @@ export function getAvailableMethodsForDrive(drive: DiskDrive): ScanMethodDefinit
   // General USB thumb drive / SD card
   return [
     SCAN_METHOD_DEFINITIONS.usb_fat_meta_priority,
+    SCAN_METHOD_DEFINITIONS.usb_fake_capacity_guard,
     SCAN_METHOD_DEFINITIONS.usb_bot_jitter_filter,
     SCAN_METHOD_DEFINITIONS.sata_block_aligned
   ];
@@ -324,13 +375,17 @@ export function getDefaultMethodForDrive(drive: DiskDrive): SpecializedScanMetho
     if (drive.healthScore !== null && drive.healthScore < 60) return 'hdd_smart_targeted';
     return 'hdd_sequential_zone';
   }
-  if (drive.type === 'EXTERNAL_SSD' || drive.usbProtocol?.includes('UASP')) {
+  const topo = resolveDriveUsbTopology(drive);
+  if (topo?.generation === 'usb4_tb' || drive.connectionType === 'thunderbolt') {
+    return 'usb_usb4_pcie_direct';
+  }
+  if (drive.type === 'EXTERNAL_SSD' || topo?.transport === 'UASP' || drive.usbProtocol?.includes('UASP')) {
     return 'usb_uasp_streaming';
   }
-  if (drive.isUsb2 || drive.usbProtocol?.includes('USB 2.0')) {
+  if (topo?.generation === 'usb_1_1' || topo?.generation === 'usb_2_0' || drive.isUsb2 || drive.usbProtocol?.includes('USB 2.0')) {
     return 'usb_bot_jitter_filter';
   }
-  if (drive.type === 'EXTERNAL_HDD') {
+  if (drive.type === 'EXTERNAL_HDD' || topo?.deviceClass === 'external_hdd') {
     return 'usb_power_glitch_recovery';
   }
   return 'usb_fat_meta_priority';

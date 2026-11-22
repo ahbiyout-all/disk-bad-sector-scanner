@@ -22,6 +22,16 @@ import { LatencyHistogramDashboard } from './LatencyHistogramDashboard';
 import { SmartAttributeTrendChart } from './SmartAttributeTrendChart';
 import { SmartExtendedLogsPanel } from './SmartExtendedLogsPanel';
 import {
+  computeWeibullRul,
+  evaluateThermalWearStress,
+  extractThermalWearInputFromDrive,
+  extractWeibullInputFromDrive,
+  runPredictiveWeibullRul,
+  runThermalWearEvaluation,
+  ThermalWearReport,
+  WeibullRulReport
+} from '../utils/predictiveAnalyticsBridge';
+import {
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
@@ -102,6 +112,51 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
   const mediaAnalysis = getDriveMediaAnalysis(drive);
   const tailoredActions = getTailoredActionMethods(drive, telemetry);
   const vitals = calculateHardwareVitals(drive, telemetry, 1);
+
+  // Pure Creative DiskSentinelPredictive.dll Prognostics (Weibull RUL & Arrhenius Thermal Wear)
+  const weibullInput = React.useMemo(() => extractWeibullInputFromDrive(drive), [drive]);
+  const thermalInput = React.useMemo(() => extractThermalWearInputFromDrive(drive), [drive]);
+
+  const syncWeibullReport = React.useMemo<WeibullRulReport | null>(
+    () => (weibullInput ? computeWeibullRul(weibullInput) : null),
+    [weibullInput]
+  );
+  const syncThermalReport = React.useMemo<ThermalWearReport | null>(
+    () => (thermalInput ? evaluateThermalWearStress(thermalInput) : null),
+    [thermalInput]
+  );
+
+  const [nativeWeibullReport, setNativeWeibullReport] = React.useState<WeibullRulReport | null>(null);
+  const [nativeThermalReport, setNativeThermalReport] = React.useState<ThermalWearReport | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!isTauriRuntime) {
+      setNativeWeibullReport(null);
+      setNativeThermalReport(null);
+      return;
+    }
+    if (weibullInput) {
+      runPredictiveWeibullRul(weibullInput).then(res => {
+        if (!cancelled) setNativeWeibullReport(res);
+      });
+    } else {
+      setNativeWeibullReport(null);
+    }
+    if (thermalInput) {
+      runThermalWearEvaluation(thermalInput).then(res => {
+        if (!cancelled) setNativeThermalReport(res);
+      });
+    } else {
+      setNativeThermalReport(null);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isTauriRuntime, weibullInput, thermalInput]);
+
+  const weibullReport = nativeWeibullReport ?? syncWeibullReport;
+  const thermalWearReport = nativeThermalReport ?? syncThermalReport;
 
   // Latency breakdown data
   const totalScanned = telemetry.goodCount + telemetry.normalCount + telemetry.slowCount + telemetry.criticalCount + telemetry.badCount;
@@ -451,6 +506,159 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               )}
             </div>
           </div>
+
+          {/* Pure Creative Predictive Prognostics: Weibull RUL & Arrhenius Thermal Wear */}
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-indigo-500 shrink-0" />
+                <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                  Weibull 잔여 수명(RUL) · Arrhenius 열화 스트레스 예측
+                </h3>
+              </div>
+              <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                <span>
+                  {weibullReport?.engineSource === 'native-cpp-dll'
+                    ? 'DiskSentinelPredictive.dll (Native)'
+                    : weibullReport?.engineSource === 'rust-parity-fallback'
+                    ? 'Predictive Rust Parity'
+                    : 'Predictive TS Engine'}
+                </span>
+                {weibullReport && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      className={
+                        weibullReport.riskGradeCode >= 4
+                          ? 'text-red-600 dark:text-red-400 font-semibold'
+                          : weibullReport.riskGradeCode >= 2
+                          ? 'text-amber-600 dark:text-amber-400 font-semibold'
+                          : 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                      }
+                    >
+                      {weibullReport.riskGradeCode === 4
+                        ? '치명적 위험'
+                        : weibullReport.riskGradeCode === 3
+                        ? '높은 위험'
+                        : weibullReport.riskGradeCode === 2
+                        ? '주의 관찰'
+                        : weibullReport.riskGradeCode === 1
+                        ? '양호'
+                        : '최적'}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {!weibullReport && !thermalWearReport ? (
+              <div className="py-4 text-center text-xs text-slate-500 dark:text-slate-400 font-mono">
+                커널 S.M.A.R.T. 및 가동시간 텔레메트리 대기 (N/A — 실측 센서 연결 시 자동 산출)
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-3 text-xs">
+                {/* Weibull RUL Summary */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      Weibull 조건부 고장 확률 &amp; 잔여 수명
+                    </span>
+                    {weibullReport && (
+                      <span className="font-mono tabular-nums">
+                        β={weibullReport.weibullShapeBeta.toFixed(2)} / η={Math.round(weibullReport.weibullScaleEtaHours).toLocaleString()}h
+                      </span>
+                    )}
+                  </div>
+                  {weibullReport ? (
+                    <div className="grid grid-cols-4 gap-2 font-mono tabular-nums pt-1">
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">예상 RUL</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+                          {weibullReport.estimatedRulDays.toLocaleString()}일
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">30일 고장률</div>
+                        <div className={`text-sm font-bold mt-0.5 ${weibullReport.failureProb30dPct >= 15 ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-slate-100'}`}>
+                          {weibullReport.failureProb30dPct.toFixed(2)}%
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">90일 고장률</div>
+                        <div className={`text-sm font-bold mt-0.5 ${weibullReport.failureProb90dPct >= 20 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-slate-100'}`}>
+                          {weibullReport.failureProb90dPct.toFixed(2)}%
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">신뢰성 지수</div>
+                        <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                          {weibullReport.reliabilityIndexPct.toFixed(1)}%
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] font-mono text-slate-400">RUL 데이터 없음 (N/A)</div>
+                  )}
+                  {weibullReport && (
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                      주요 위험 인자: <span className="font-mono text-slate-700 dark:text-slate-300">{weibullReport.primaryRiskFactor}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Arrhenius Thermal Stress & TBW */}
+                <div className="space-y-2 lg:border-l lg:border-slate-200 lg:dark:border-slate-800 lg:pl-4">
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      Arrhenius 열가속 마모 &amp; TBW 소진율
+                    </span>
+                    {thermalWearReport && (
+                      <span className="font-mono tabular-nums">
+                        스트레스 {thermalWearReport.thermalStressScore.toFixed(1)}/100
+                      </span>
+                    )}
+                  </div>
+                  {thermalWearReport ? (
+                    <div className="grid grid-cols-4 gap-2 font-mono tabular-nums pt-1">
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">열가속 계수</div>
+                        <div className={`text-sm font-bold mt-0.5 ${thermalWearReport.arrheniusAccelerationFactor >= 2.0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-slate-100'}`}>
+                          {thermalWearReport.arrheniusAccelerationFactor.toFixed(2)}x
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">열가중 시간</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+                          {Math.round(thermalWearReport.effectiveAgedHours).toLocaleString()}h
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">일일 쓰기율</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+                          {thermalWearReport.dailyTbwRateGb > 0 ? `${thermalWearReport.dailyTbwRateGb.toFixed(1)}GB` : 'N/A'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">TBW 잔여</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+                          {thermalWearReport.estimatedTbwRemainingYears >= 0
+                            ? `${thermalWearReport.estimatedTbwRemainingYears.toFixed(1)}년`
+                            : 'N/A'}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] font-mono text-slate-400">온도 데이터 없음 (N/A)</div>
+                  )}
+                  {thermalWearReport && (
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                      열화 소견: <span className="font-mono text-slate-700 dark:text-slate-300">{thermalWearReport.thermalSummary}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
 
           {/* Real-time 10-Minute Disk Temperature Trend Line Chart */}
           <TemperatureLineChart

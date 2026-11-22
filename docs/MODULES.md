@@ -11,7 +11,7 @@
 
 ## 1. 개요 (Overview)
 
-DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로, 웹 프론트엔드 UI 계층과 저수준 하드웨어 다이렉트 I/O를 제어하는 **순수 독자 창작 C++ 네이티브 엔진(`DiskSentinelNativeCore.dll`)**, 그리고 OS 핸들 의존 없이 고속 통계·엔트로피·파티션 무결성을 연산하는 **순수 창작 포렌식 엔진(`DiskSentinelForensics.dll`)**으로 구성되어 있습니다.
+DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로, 웹 프론트엔드 UI 계층과 저수준 하드웨어 다이렉트 I/O를 제어하는 **순수 독자 창작 C++ 네이티브 엔진(`DiskSentinelNativeCore.dll`)**, OS 핸들 의존 없이 고속 통계·엔트로피·파티션 무결성을 연산하는 **순수 창작 포렌식 엔진(`DiskSentinelForensics.dll`)**, Weibull RUL·음향 탐색 RMSSD 지터·Arrhenius 열가속·S.M.A.R.T. OLS 추세 회귀를 연산하는 **순수 창작 예지 진단 엔진(`DiskSentinelPredictive.dll`)**, 그리고 16-시그니처 파일 카빙·NTFS `$MFT` USA/Runlist 디코더·NIST SP 800-88 `Xoshiro256**` 소거 검증·ddrescue 도메인 구간 플래너를 제공하는 **순수 창작 데이터 복구 엔진(`DiskSentinelRecovery.dll`)**의 **4-DLL(Quad-DLL) 순수 창작 아키텍처**로 구성되어 있습니다.
 
 본 문서는 프로젝트 내 모든 핵심 모듈의 역할, 아키텍처, 기존 네이티브 코드 감사 결과(버그 및 개선 사항), 그리고 **순수 창작 DLL들의 동작 원리와 세부 인터페이스**를 상세히 기록합니다.
 
@@ -36,6 +36,8 @@ DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로,
 | **6. 종합 신뢰도 산출기 부재** | 개별 SMART 값만 존재하고 종합 수명 예측 지표 산출 불가 | `DS_EvaluateDriveReliability` (5대 핵심 결함 속성 가중치 기반 수명 및 신뢰도 산출) 및 NULL 포인터 방어 적용 |
 | **7. 누락된 `DS_GetDriveDetails` 익스포트 & NVMe 경계 검사 (v4.6.0)** | 런처 P/Invoke에서 호출하는 `DS_GetDriveDetails` 미구현으로 진입점 오류 가능, NVMe 오프셋 포인터 사전 경계 검증 및 4Kn/쓰기 캐시 실측 누락 | `DS_GetDriveDetails` 정식 익스포트 구현, `StorageAccessAlignmentProperty`/`StorageDeviceWriteCacheProperty` 실측, NVMe 오프셋 사전 경계 검증 및 `DS_VerifyLbaBlock` 64MB 분할 처리 |
 | **8. Memory-Mapped Zero-Copy & Direct DMA 대용량 I/O 최적화 (v4.6.1)** | 매 I/O마다 버퍼 재할당/제로초기화·중복 시크 시스템 콜 발생, 결함 시 선형 섹터 탐색($O(K)$), 이미지 스캔/복제 시 커널-유저 이중 복사 발생 | `VirtualAlloc` 64KB 페이지 정렬 DMA 재사용 버퍼 + `StorageAdapterProperty`(`MaximumTransferLength`) 동적 스케일링 + 순차 오프셋 추적으로 `SetFilePointerEx` 생략 + $O(\log K)$ 반복 이진 분할 + `CreateFileMappingW`/`MapViewOfFile`(`mmap`) 영속 매핑 및 Direct DMA 직접 기록 API(#20~#25) C++/Rust 동시 적용 |
+| **9. v4.6.2 전수 안전성·메모리·Slicing-by-8 가속·포렌식 UTF-8·Rust 패리티 감사 수정 (v4.6.2)** | C++ 코어 및 Rust 미러(`src/native/rust/src/lib.rs`)의 미사용 `VirtualAlloc` 선할당 낭비, LBA/수복 `checked_mul` 경계, `physical_sector_size=4096` 고정 및 쓰기 캐시·길이 IOCTL 누락, 치명 Win32 오류 시 불필요한 이진 분할, 소프트 수복 `0xA5` 센티넬 포이즈닝 부재, 1바이트 CRC32 병목, Forensics VBR exFAT/FAT32 시프트 오탐 및 UTF-16LE 서로게이트 손실 | C++/Rust 동시 지연 DMA 할당, `checked_mul`/`INT64_MAX` 가드, `StorageAccessAlignmentProperty(6)`·`StorageDeviceWriteCacheProperty(4)`·`GET_LENGTH_INFO` 실측, 치명 핸들 오류(`5,6,21,55,433,1167`) 즉시 중단, `0xA5` 센티넬 포이즈닝+청크 수복, **Slicing-by-8 CRC32**, Forensics VBR 엄격 시프트/BPB 차단 및 완전 UTF-16LE→UTF-8 디코더 적용 |
+| **10. Quad-DLL 감사 패치 & Tauri 번들 리소스 통합 (v4.6.0)** | `DS_AdaptiveScanChunk`에서 `DS_ScanLbaBlock`이 `DS_STATUS_BAD`에도 `true`를 반환해 치명 핸들 중단(`isFatalHandleError`)이 도달 불가 데드코드였던 결함, `DS_VerifyLbaBlock`/`DS_CopyLbaRangeToMappedFile` 핸들 읽기 권한 및 QPF 주파수 미검증, `DSP_ComputeWeibullRul`의 `availableSparePct == 0` 누락, TypeScript 브리지 1바이트 비트 CRC32, MFT/PE 헤더 32비트 정수 래핑 가능성, `tauri.conf.json`/`tauri-desktop.yml` DLL 번들 누락 | `DS_AdaptiveScanChunk` 반환값/win32Err 직결 검사 수정, 핸들·`QueryPerformanceFrequency` 가드 추가, NVMe 예비 블록 완전 고갈(`availableSparePct == 0`) 감점 수정, `DS_CRC32_LUT` 테이블 가속 통일, Recovery MFT/PE 64비트 감산·오버플로 경계 하드닝, `tauri.conf.json` `bundle.resources` 및 GitHub Actions 선행 DLL 스테이징 통합 |
 
 ### 2.3 3대 순수 창작 알고리즘 및 Zero-Copy I/O 동작 원리
 
@@ -65,8 +67,31 @@ DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로,
   2. `DSF_AnalyzeSectorTelemetryZScore`: **Welford 단일 패스 분산** 기반 Z-Score 밴딩 및 `maxBlockIdGap`을 반영한 물리적 연속 열화 클러스터 탐지.
   3. `DSF_ComputeExtentBadDensityHeatmap`: **$O(N \log M)$ 이진 탐색** 기반 단편화 파일 익스텐트 배드섹터 밀도 히트맵 매핑.
   4. `DSF_ComputeSectorEntropyAndPattern`: **256-bin 섀넌 엔트로피($H = -\sum p \log_2 p$)**, All-0x00/0xFF 소거 NAND, 32비트 반복 패턴 및 IEEE CRC32 분석.
-  5. `DSF_InspectBootAndPartitionTable`: MBR/보호 MBR 및 GPT `"EFI PART"` 헤더(92B)·파티션 배열 IEEE 802.3 CRC32 실검증 및 4K 정렬 점검.
-  6. `DSF_InspectVbrBootSector`: NTFS(`$MFT` LCN), FAT32, exFAT 볼륨 부트 레코드(VBR) 클러스터 기하 구조 디코딩.
+  5. `DSF_InspectBootAndPartitionTable`: MBR/보호 MBR 및 GPT `"EFI PART"` 헤더(92B)·파티션 배열 IEEE 802.3 CRC32 실검증 및 UTF-16LE→UTF-8 라벨·4K 정렬 점검.
+  6. `DSF_InspectVbrBootSector`: NTFS(`$MFT` LCN), FAT32, exFAT 볼륨 부트 레코드(VBR) 2의 거듭제곱 BPB/시프트 검증 및 기하 구조 디코딩.
+- **Tauri 통합**: `src-tauri/src/main.rs`가 Windows에서 `LoadLibraryW`로 `DiskSentinelForensics.dll`을 동적 로드(비Windows·미배치 시 Rust 패리티 자동 폴백)하고, `src/utils/forensicsDllBridge.ts`를 통해 `SectorHexPartitionModal`(섀넌 엔트로피·CRC32·VBR·GPT 헤더/배열 무결성)과 `LatencyHistogramDashboard`(Z-Score 열화 밴드)에 실시간 연동합니다.
+
+### 2.5 신규 순수 창작 장애 예측·음향 진동 DLL (`DiskSentinelPredictive.dll`)
+- **개발 목적**: 커널 핸들 비의존 환경에서 S.M.A.R.T.·NVMe 마모·온도·연속 LBA 지연 샘플을 결합해 미래 고장 확률, 잔여 수명(RUL), 음향 탐색 진동 및 열화 추세를 정량 예측하는 독립 C ABI 라이브러리 (`docs/DiskSentinel_Predictive_DLL_Specification.md` 참조).
+- **탑재 5대 익스포트 API & Tauri IPC 연동**:
+  1. `DSP_GetPredictiveEngineInfo`: 엔진 버전(`4.6.0`), 기능 마스크(`0x0F`) 및 Weibull($1 - e^{-1}$)·OLS($R^2 = 1.0$) 결정적 수학 자가 테스트 검증.
+  2. `DSP_ComputeWeibullRul`: 매체별(HDD/SATA SSD/NVMe/USB) Weibull 형상($\beta$)·척도($\eta$) 동적 보정 및 30/90/365일 조건부 고장 확률·중앙값 RUL(일) 산출.
+  3. `DSP_AnalyzeAcousticSeekProfile`: 연속 탐색 지연 **RMSSD 지터**, 순차 vs 스트라이드 지터 분리, FTL GC/헤드 재시도 마이크로 스톨 버스트 및 공진비 연산.
+  4. `DSP_EvaluateThermalWearStress`: Arrhenius 열가속 방정식($E_a=0.7\text{eV}, T_{\text{ref}}=35^\circ\text{C}$) 기반 등가 노화 시간, 일일 TBW 쓰기율 및 잔여 연수 평가.
+  5. `DSP_ProjectSmartDegradationTrend`: 중심화 2-Pass OLS 선형 회귀로 일 변화율, $R^2$, 30일 전망치 및 주의/위험 임계치 도달 예상 일수 산출.
+- **Tauri 통합**: `src-tauri/src/main.rs`가 Windows에서 `LoadLibraryW`로 `DiskSentinelPredictive.dll`을 동적 로드하고, Rust/TypeScript 동일 수리 패리티 fallback과 함께 `LatencyHistogramDashboard`, `HealthSummaryDashboard`, `SmartAttributeTrendChart`에 실시간 반영합니다.
+
+### 2.6 신규 순수 창작 데이터 복구·MFT·보안 소거 검증 DLL (`DiskSentinelRecovery.dll`)
+- **개발 목적**: 커널 디바이스 핸들 없이 순수 원시 섹터/MFT 버퍼와 ddrescue 도메인 구간을 고속 복구·해독·검증하는 독립 C ABI 라이브러리 (`docs/DiskSentinel_Recovery_DLL_Specification.md` 참조).
+- **탑재 7대 익스포트 API & Tauri IPC 연동**:
+  1. `DSR_GetRecoveryEngineInfo`: 엔진 버전(`4.6.0`), 기능 마스크(`0x0F`), 16-시그니처 규칙 수 및 CRC32(`0xCBF43926`)·`Xoshiro256**` 결정적 자가 테스트 검증.
+  2. `DSR_InspectRecoveryCarveBuffer`: JPEG/PNG/PDF/ZIP/MP4/RIFF/GIF/BMP/7z/RAR/GZIP/SQLite3/ELF/PE/NTFS `$Boot`/Text 16+ 포맷 헤더·푸터 EOF 판별 및 **Hamming Distance(1~2bit 반전)** 손상 헤더 복원.
+  3. `DSR_ParseNtfsMftRecord`: 512B 섹터 말미 **USA Fixup** 인플레이스 복원, `$STANDARD_INFORMATION`/`$FILE_NAME`(Win32>POSIX>DOS 우선 UTF-16LE→UTF-8)·비거주 `$DATA` 가변 VarInt Runlist 디코딩.
+  4. `DSR_ScanMftBufferForCluster`: 대용량 `$MFT` 배치 버퍼에서 특정 `targetLcn` 클러스터 및 `$MFT` 상주 `targetLba` 영향 파일 일괄 고속 스캔.
+  5. `DSR_GenerateWipePatternBuffer`: NIST SP 800-88 / DoD 5220.22-M 호환 `0x00`/`0xFF`/상수/LBA-바인딩 SplitMix64+`Xoshiro256**` 소거 버퍼 및 IEEE CRC32 생성.
+  6. `DSR_VerifyWipedBuffer`: Read-Back 섹터에서 기대 소거 패턴 대비 잔존 바이트 수(`residualNonMatchingBytes`) 및 최초 불일치 오프셋(`firstMismatchOffset`) 무결성 감사.
+  7. `DSR_CoalesceAndPlanDdrescueIntervals`: ddrescue 도메인 구간 병합(Coalescing) 및 다음 Pass(`copying` / `trimming` / `retrying` / `completed`) LBA 작업 단위 스케줄링.
+- **Tauri & UI 통합**: `src-tauri/src/main.rs`가 `LoadLibraryW`로 `DiskSentinelRecovery.dll`을 로드해 6대 IPC 커맨드를 제공하며, `src/utils/recoveryDllBridge.ts`를 통해 `BitCarvingRecoveryModal`, `lbaFileTracer.ts`, `SanitizeTrimModal`, `LbaImageClonerModal`에 실시간 연동됩니다.
 
 ---
 
@@ -94,12 +119,20 @@ DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로,
 - 제조사 임계치(Threshold) 초과·위험 근접 속성 감지 시 행 하이라이트, 경고 배지 및 상세 진단 툴팁 제공.
 - `TemperatureLineChart` 및 `LatencyHistogramDashboard` 통합 렌더링.
 
+### 3.7 USB 버전·장치별 적응형 표면검사 매트릭스 & 위조 용량 가드 (`src/utils/usbScanMatrix.ts`)
+- **네이티브 USB 토폴로지 & 동적 정책 API (`#26 DS_ProbeUsbTopology`, `#27 DS_ScanLbaBlockWithPolicy`)**:
+  - Windows 레지스트리·PnP 트리(`cfgmgr32.dll`)·USB Hub IOCTL(`setupapi.dll`)을 통해 `bcdUSB`, 포트 Negotiated Speed(USB 1.1~USB4), 전송 드라이버(`USBSTOR` BOT / `UASPStor` UASP / `stornvme` PCIe 터널), 브릿지 칩셋 VID/PID를 실측해 C++·Rust·TypeScript 전 계층에 반영.
+  - USB 버전(1.1 / 2.0 / 3.0 / 3.2 Gen2 / Gen2x2 / USB4) × 장치 클래스(Flash / SD UHS / External HDD / External SATA·NVMe SSD) 매트릭스에 따라 `chunkSectors`, `slowThresholdMs`, `criticalThresholdMs`, `maxRetries`, `cooldownEveryNBlocks`를 실시간 동적 튜닝하여 오탐(False Positive) 제거 및 과열/전압강하 방지.
+- **2단계 위조 용량 가드 (`probe_fake_capacity_checkpoints`, `runFakeCapacityGuardScan`)**:
+  - Tier 1 읽기 전용 2의 거듭제곱 LBA CRC32 앨리어싱 점검 + `PhysicalDrive0`/`C:` 영구 차단 보호가 적용된 선택적 Tier 2 `Xoshiro256**` 왕복 검증·원본 복원 지원 ([상세 명세서](USB_Surface_Scan_Matrix_Specification.md)).
+
 ---
 
 ## 4. 빌드 및 배포 자동화 파이프라인
 
-- **`build-dll.bat`**: MSVC (`cl.exe`) 및 MinGW (`g++.exe`)를 자동 감지하여 `DiskSentinelNativeCore.dll`과 `DiskSentinelForensics.dll`을 원클릭 동시 빌드.
+- **`build-dll.bat`**: MSVC (`cl.exe`) 및 MinGW (`g++.exe`)를 자동 감지하여 `DiskSentinelNativeCore.dll`, `DiskSentinelForensics.dll`, `DiskSentinelPredictive.dll`, `DiskSentinelRecovery.dll`을 원클릭 동시 빌드.
 - **`build.bat`**: Vite 기반 웹 애플리케이션 프로덕션 패키징 및 산출물 자동 오픈.
-- **`setup.iss`**: Inno Setup 전용 무인 설치(`/VERYSILENT`), 폴더 풀림 개별 파일 설치, 기존 설치본 감지/덮어쓰기 질의, `DiskSentinelForensics.dll` 포함 네이티브 바이너리 배포 및 Windows 방화벽 규칙 자동 등록.
+- **`setup.iss`**: Inno Setup 전용 무인 설치(`/VERYSILENT`), 폴더 풀림 개별 파일 설치, 기존 설치본 감지/덮어쓰기 질의, `DiskSentinelForensics.dll`·`DiskSentinelPredictive.dll`·`DiskSentinelRecovery.dll` 포함 4종 네이티브 바이너리 배포 및 Windows 방화벽 규칙 자동 등록.
+- **`.github/workflows/tauri-desktop.yml`**: Windows MSVC x64 환경에서 4종 순수 창작 DLL을 컴파일·`bin/native/` 스테이징한 뒤 Tauri v2 데스크톱 앱(`DiskBadSectorScanner.exe`, NSIS, MSI) `bundle.resources`에 포함해 빌드·배포.
 - **`git-push-auto.bat`**: 민감 정보 및 임시 파일을 자동 필터링하고 `bundle:release`와 연동하여 필수 소스만 GitHub에 자동 반영.
 - **`scripts/bundle-essential-release.mjs`**: 일반 디렉터리 `github-release/`와 숨김 디렉터리 `.github-release/`를 동시 생성 및 실시간 동기화.

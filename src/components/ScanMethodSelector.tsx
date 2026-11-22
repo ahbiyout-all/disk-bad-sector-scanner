@@ -6,15 +6,15 @@
  */
 
 import React, { useState } from 'react';
-import { DiskDrive, SectorBlock, SpecializedScanMethodId } from '../types';
+import { DiskDrive, SectorBlock, SpecializedScanMethodId, UsbSurfaceScanPolicy } from '../types';
 import { 
   SCAN_METHOD_DEFINITIONS, 
   getAvailableMethodsForDrive, 
   getDriveStorageCategory 
 } from '../utils/scanProfiles';
+import { generationIdToLabel, resolveDriveUsbTopology } from '../utils/usbScanMatrix';
 import { SmartRemapModal } from './SmartRemapModal';
 import { 
-  Layers, 
   Cpu, 
   HardDrive, 
   Usb, 
@@ -22,13 +22,9 @@ import {
   Check, 
   Info, 
   ShieldCheck, 
-  ShieldAlert,
   Wrench,
   ChevronDown, 
   Sliders, 
-  Activity, 
-  ArrowRight,
-  Gauge,
   Sparkles
 } from 'lucide-react';
 
@@ -40,6 +36,9 @@ interface ScanMethodSelectorProps {
   blocks?: SectorBlock[];
   onRepairSectors?: (driveId: string, repairedBlockIds: number[]) => void;
   onOpenRemapModal?: () => void;
+  activeUsbPolicy?: UsbSurfaceScanPolicy;
+  isUsbPolicyManual?: boolean;
+  onOpenUsbMatrix?: () => void;
 }
 
 export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
@@ -49,7 +48,10 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
   isScanning,
   blocks = [],
   onRepairSectors,
-  onOpenRemapModal
+  onOpenRemapModal,
+  activeUsbPolicy,
+  isUsbPolicyManual = false,
+  onOpenUsbMatrix
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -58,6 +60,13 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
   const availableMethods = getAvailableMethodsForDrive(activeDrive);
   const currentMethod = SCAN_METHOD_DEFINITIONS[activeMethodId] || availableMethods[0];
   const storageCategory = getDriveStorageCategory(activeDrive);
+  const usbTopo = resolveDriveUsbTopology(activeDrive);
+  const showUsbControls =
+    Boolean(activeUsbPolicy) ||
+    storageCategory === 'USB_STORAGE' ||
+    activeDrive.isExternal ||
+    activeDrive.type === 'USB' ||
+    Boolean(usbTopo);
 
   const badBlocksCount = blocks.filter(b => b.status === 'bad').length;
 
@@ -91,31 +100,46 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
 
   return (
     <div className="relative">
-      {/* Main Bar / Pill Display */}
+      {/* Main Bar / Control Header */}
       <div className="bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-lg p-2.5 sm:p-3 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className="p-2 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex-shrink-0">
             {getCategoryIcon(storageCategory)}
           </div>
 
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+              <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 whitespace-nowrap shrink-0">
                 {getCategoryLabel(storageCategory)}
               </span>
-              <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                {currentMethod.blockSizeKb}KB · {currentMethod.typicalBlockLatency}
+              <span className="text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                {activeUsbPolicy
+                  ? usbTopo
+                    ? `${generationIdToLabel(usbTopo.generation)} · ${usbTopo.transport} · ${activeUsbPolicy.chunkKb}KB · >${activeUsbPolicy.slowThresholdMs}/${activeUsbPolicy.criticalThresholdMs}ms${isUsbPolicyManual ? ' (수동)' : ''}`
+                    : `${isUsbPolicyManual ? '수동 정책' : '기본 외장 정책'} · ${activeUsbPolicy.chunkKb}KB · >${activeUsbPolicy.slowThresholdMs}/${activeUsbPolicy.criticalThresholdMs}ms`
+                  : `${currentMethod.blockSizeKb}KB · ${currentMethod.typicalBlockLatency}`}
               </span>
             </div>
 
             <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 truncate mt-0.5">
-              <span>{currentMethod.nameKo}</span>
+              <span className="truncate">{currentMethod.nameKo}</span>
             </div>
           </div>
         </div>
 
         {/* Action Buttons */}
         <div className="w-full md:w-auto flex items-center justify-end gap-1.5 sm:gap-2 flex-wrap pt-1 sm:pt-0 border-t border-slate-200/60 dark:border-slate-800/60 md:border-t-0">
+          {showUsbControls && onOpenUsbMatrix && (
+            <button
+              type="button"
+              onClick={onOpenUsbMatrix}
+              className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded text-xs font-semibold text-cyan-700 dark:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 transition-colors cursor-pointer min-h-[34px] whitespace-nowrap shrink-0"
+              title="USB 버전/장치별 표면검사 매트릭스 및 위조 용량 가드 열기"
+            >
+              <Usb className="w-3.5 h-3.5 shrink-0" />
+              <span>USB 매트릭스</span>
+            </button>
+          )}
 
           {/* S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine Button */}
           <button
@@ -126,7 +150,7 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
                 setShowRemapModal(true);
               }
             }}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded text-xs font-bold bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-xs transition-all cursor-pointer relative group min-h-[34px]"
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded text-xs font-bold bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-xs transition-all cursor-pointer relative group min-h-[34px] whitespace-nowrap shrink-0"
             title="S.M.A.R.T. 논리 배드섹터 제로필 수복 & 섹터 재할당"
           >
             <Wrench className="w-3.5 h-3.5 shrink-0" />
@@ -140,7 +164,7 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
 
           <button
             onClick={() => setShowDetailModal(true)}
-            className="inline-flex items-center justify-center gap-1 px-2 sm:px-2.5 py-1.5 rounded text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shadow-xs min-h-[34px]"
+            className="inline-flex items-center justify-center gap-1 px-2 sm:px-2.5 py-1.5 rounded text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shadow-xs min-h-[34px] whitespace-nowrap shrink-0"
             title="맞춤 알고리즘 동작 원리 확인"
           >
             <Info className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
@@ -152,7 +176,7 @@ export const ScanMethodSelector: React.FC<ScanMethodSelectorProps> = ({
             <button
               disabled={isScanning}
               onClick={() => setIsOpen(!isOpen)}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white shadow-xs transition-colors cursor-pointer min-h-[34px]"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white shadow-xs transition-colors cursor-pointer min-h-[34px] whitespace-nowrap shrink-0"
             >
               <Sliders className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">방식 변경</span>

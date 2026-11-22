@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { DiskDrive, MainAppTab } from '../types';
+import { AppLocale, DiskDrive, MainAppTab } from '../types';
 import { PROJECT_INFO } from '../config/projectInfo';
 import { 
   Bell, 
@@ -35,7 +35,10 @@ import {
   Gauge,
   HardDriveDownload,
   FileSearch,
-  Trash2
+  Trash2,
+  Search,
+  LayoutGrid,
+  FolderLock
 } from 'lucide-react';
 
 export interface NavbarProps {
@@ -81,6 +84,9 @@ export interface NavbarProps {
   onOpenReport?: () => void;
   isAutoRepairMode?: boolean;
   onToggleAutoRepairMode?: () => void;
+  locale?: AppLocale;
+  onChangeLocale?: (locale: AppLocale) => void;
+  onOpenCommandPalette?: () => void;
 }
 
 type ActivePulldown = 'file' | 'view' | 'tools' | 'options' | 'help' | null;
@@ -118,6 +124,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenBenchmarkProfiler,
   onOpenLbaCloner,
   onOpenFileTracer,
+  locale = 'ko',
+  onChangeLocale,
+  onOpenCommandPalette,
   onOpenSanitizeTrim,
   onRescanDrives,
   isRescanning = false,
@@ -410,6 +419,40 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">5</span>
+                    </button>
+
+                    <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+
+                    <button
+                      onClick={() => {
+                        onSelectTab('fleet');
+                        setActiveMenu(null);
+                      }}
+                      className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                    >
+                      <div className="flex items-center gap-2">
+                        <LayoutGrid className="w-4 h-4 text-sky-500" />
+                        <span className={activeTab === 'fleet' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
+                          전체 디스크 플릿
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">6</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        onSelectTab('integrity');
+                        setActiveMenu(null);
+                      }}
+                      className="w-full px-3 py-2 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                    >
+                      <div className="flex items-center gap-2">
+                        <FolderLock className="w-4 h-4 text-emerald-500" />
+                        <span className={activeTab === 'integrity' ? 'font-bold text-indigo-600 dark:text-indigo-400' : ''}>
+                          폴더 LBA 무결성 감시
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">7</span>
                     </button>
                   </div>
                 )}
@@ -885,8 +928,33 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </div>
 
-          {/* Right: Target Drive Selector Dropdown & Desktop Vitals */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Right: Command Palette, Locale, Target Drive Selector Dropdown & Desktop Vitals */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {onOpenCommandPalette && (
+              <button
+                type="button"
+                onClick={onOpenCommandPalette}
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800/90 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 font-medium cursor-pointer whitespace-nowrap"
+                title="전체 도구 및 빠른 이동 명령 팔레트 (Ctrl+K)"
+              >
+                <Search className="w-3.5 h-3.5 text-indigo-500" />
+                <span className="hidden xl:inline">{locale === 'en' ? 'Commands' : '빠른 도구'}</span>
+                <kbd className="text-[10px] font-mono text-slate-400 px-1 py-0.2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                  Ctrl+K
+                </kbd>
+              </button>
+            )}
+
+            {onChangeLocale && (
+              <button
+                type="button"
+                onClick={() => onChangeLocale(locale === 'ko' ? 'en' : 'ko')}
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800/90 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-[11px] font-mono font-bold text-slate-700 dark:text-slate-200 cursor-pointer whitespace-nowrap"
+                title="Switch UI Language (한국어 / English)"
+              >
+                {locale.toUpperCase()}
+              </button>
+            )}
             
             {/* Target Drive Selector Pulldown */}
             <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg px-2 py-0.5 shadow-2xs">

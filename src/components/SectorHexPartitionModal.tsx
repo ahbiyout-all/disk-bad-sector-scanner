@@ -17,7 +17,15 @@ import {
 } from 'lucide-react';
 import { DiskDrive, ParsedPartitionTable, RawSectorRangeResponse, VbrBootInfo } from '../types';
 import { queryTauriRawSectorRange } from '../utils/nativeDriveEngine';
-import { detectVbrBootInfo, parsePartitionTableFromRawBytes } from '../utils/partitionParser';
+import {
+  computeSectorEntropySync,
+  ForensicsPartitionInspection,
+  ForensicsSectorEntropyReport,
+  ForensicsVbrInspection,
+  runForensicsPartitionInspection,
+  runForensicsSectorEntropy,
+  runForensicsVbrInspection
+} from '../utils/forensicsDllBridge';
 
 interface SectorHexPartitionModalProps {
   isOpen: boolean;
@@ -59,9 +67,12 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
 
   const [hexLoading, setHexLoading] = useState<boolean>(false);
   const [hexResponse, setHexResponse] = useState<RawSectorRangeResponse | null>(null);
+  const [nativeEntropy, setNativeEntropy] = useState<ForensicsSectorEntropyReport | null>(null);
+  const [nativeVbr, setNativeVbr] = useState<ForensicsVbrInspection | null>(null);
 
   const [partitionLoading, setPartitionLoading] = useState<boolean>(false);
   const [partitionTable, setPartitionTable] = useState<ParsedPartitionTable | null>(null);
+  const [partitionMeta, setPartitionMeta] = useState<ForensicsPartitionInspection | null>(null);
   const [partitionError, setPartitionError] = useState<string | null>(null);
 
   const maxLba = Math.max(0, (drive.totalSectors || 0) - 1);
@@ -136,13 +147,23 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
       }
       if (!res.supported || res.bytes.length < 512) {
         setPartitionTable(null);
+        setPartitionMeta(null);
         setPartitionError(
           res.reason || '물리 디스크 LBA 0~33 영역을 읽을 수 없어 파티션 테이블을 디코딩하지 못했습니다.'
         );
         return;
       }
-      const parsed = parsePartitionTableFromRawBytes(res.bytes, res.sectorSize || 512);
-      setPartitionTable(parsed);
+      const inspection = await runForensicsPartitionInspection(res.bytes, res.sectorSize || 512);
+      if (
+        !isMountedRef.current ||
+        !isOpenRef.current ||
+        activeDriveIdRef.current !== targetDriveId ||
+        partReqIdRef.current !== reqId
+      ) {
+        return;
+      }
+      setPartitionMeta(inspection);
+      setPartitionTable(inspection.parsed);
     } catch (err: any) {
       if (
         !isMountedRef.current ||
@@ -153,6 +174,7 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
         return;
       }
       setPartitionTable(null);
+      setPartitionMeta(null);
       setPartitionError(err?.message || '파티션 테이블 조회 중 오류가 발생했습니다.');
     } finally {
       if (
@@ -196,10 +218,39 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
   const bytes = hexResponse?.bytes ?? [];
   const sectorSize = hexResponse?.sectorSize || drive.hardwareSpecs?.logicalSectorSize || 512;
 
-  const vbrInfo: VbrBootInfo | null = useMemo(() => {
-    if (bytes.length < 512) return null;
-    return detectVbrBootInfo(bytes.slice(0, 512));
-  }, [bytes]);
+  const syncEntropy = useMemo(
+    () => (bytes.length > 0 ? computeSectorEntropySync(bytes) : null),
+    [bytes]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isOpen || bytes.length === 0) {
+      setNativeEntropy(null);
+      setNativeVbr(null);
+      return;
+    }
+    void runForensicsSectorEntropy(bytes).then(res => {
+      if (!cancelled && isMountedRef.current && res) {
+        setNativeEntropy(res);
+      }
+    });
+    if (bytes.length >= 512) {
+      void runForensicsVbrInspection(bytes).then(res => {
+        if (!cancelled && isMountedRef.current) {
+          setNativeVbr(res);
+        }
+      });
+    } else {
+      setNativeVbr(null);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, bytes]);
+
+  const entropyReport = nativeEntropy ?? syncEntropy;
+  const vbrInfo: VbrBootInfo | null = nativeVbr?.vbr ?? null;
 
   const { matchedIndices, matchCount } = useMemo(() => {
     const { pattern } = parseSearchPattern(searchQuery);
@@ -470,6 +521,32 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                 </div>
               </div>
 
+              {/* Inline Forensics Entropy & CRC32 Strip */}
+              {entropyReport && (
+                <div className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/60 flex items-center justify-between gap-2 flex-wrap text-[11px] font-mono tabular-nums">
+                  <div className="flex items-center gap-2 flex-wrap text-slate-700 dark:text-slate-300">
+                    <span className="font-sans font-semibold text-indigo-600 dark:text-indigo-400">
+                      {entropyReport.classificationLabel}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      엔트로피 {entropyReport.shannonEntropy.toFixed(3)} bits/B
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      CRC32 0x{(entropyReport.crc32 >>> 0).toString(16).toUpperCase().padStart(8, '0')}
+                    </span>
+                  </div>
+                  <div className="text-[10.5px] text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap">
+                    <span>Zero {(entropyReport.zeroByteRatio * 100).toFixed(1)}%</span>
+                    <span aria-hidden="true">·</span>
+                    <span>0xFF {(entropyReport.ffByteRatio * 100).toFixed(1)}%</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{entropyReport.engineSource === 'native-cpp-dll' ? 'Forensics DLL' : 'Parity Core'}</span>
+                  </div>
+                </div>
+              )}
+
               {/* VBR Boot Info Banner if detected */}
               {vbrInfo && (
                 <div className="p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-950/30 flex items-center justify-between gap-2 flex-wrap text-[11px]">
@@ -478,7 +555,8 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                     <span>VBR 부트 섹터 시그니처 감지: {vbrInfo.filesystem} ({vbrInfo.oemId})</span>
                   </div>
                   <div className="font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
-                    Sector {vbrInfo.bytesPerSector}B · Cluster {vbrInfo.clusterSizeBytes.toLocaleString()}B ({vbrInfo.sectorsPerCluster} sectors) ·{' '}
+                    Sector {vbrInfo.bytesPerSector}B · Cluster {vbrInfo.clusterSizeBytes.toLocaleString()}B ({vbrInfo.sectorsPerCluster} sectors)
+                    {nativeVbr?.mftStartLcn ? ` · $MFT LCN ${nativeVbr.mftStartLcn.toLocaleString()}` : ''} ·{' '}
                     {vbrInfo.signatureValid ? '0x55AA VALID' : '0x55AA MISSING'}
                   </div>
                 </div>
@@ -628,10 +706,10 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                     </div>
 
                     <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
-                      <div className="text-[10px] text-slate-500 uppercase font-semibold">GPT 헤더 무결성</div>
+                      <div className="text-[10px] text-slate-500 uppercase font-semibold">GPT 헤더 · 배열 무결성</div>
                       <div className="text-sm font-mono font-bold mt-0.5 flex items-center gap-1">
                         {partitionTable.scheme === 'GPT' ? (
-                          partitionTable.gptHeaderCrcValid ? (
+                          partitionTable.gptHeaderCrcValid && (partitionMeta?.gptEntriesCrcValid ?? true) ? (
                             <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                               <ShieldCheck className="w-4 h-4" /> CRC32 정상
                             </span>
@@ -645,7 +723,7 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                         )}
                       </div>
                       <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">
-                        {partitionTable.gptHeaderSignature || 'Legacy Boot'}
+                        {partitionTable.gptHeaderSignature || 'Legacy Boot'} · {partitionMeta?.engineSource === 'native-cpp-dll' ? 'Forensics DLL' : 'Parity Core'}
                       </div>
                     </div>
 

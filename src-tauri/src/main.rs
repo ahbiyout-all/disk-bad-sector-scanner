@@ -187,6 +187,17 @@ struct BatchScanItem {
     sector_count: u64,
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct BatchScanPolicy {
+    slow_threshold_ms: Option<u32>,
+    critical_threshold_ms: Option<u32>,
+    max_retries: Option<u32>,
+    retry_delay_ms: Option<u32>,
+    cooldown_every_n_blocks: Option<u32>,
+    cooldown_ms: Option<u32>,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchScanItemResult {
@@ -203,6 +214,7 @@ fn scan_lba_batch(
     drive_index: u32,
     items: Vec<BatchScanItem>,
     verify_mode: bool,
+    policy: Option<BatchScanPolicy>,
 ) -> Result<Vec<BatchScanItemResult>, String> {
     if items.is_empty() {
         return Ok(Vec::new());
@@ -212,8 +224,20 @@ fn scan_lba_batch(
     let guard = pooled.lock().map_err(|_| "Drive handle mutex poisoned".to_string())?;
     let mut results = Vec::with_capacity(items.len().min(128));
 
+    let pol = policy.unwrap_or_default();
+    let use_policy = pol.slow_threshold_ms.is_some()
+        || pol.critical_threshold_ms.is_some()
+        || pol.max_retries.is_some()
+        || pol.retry_delay_ms.is_some();
+    let slow_ms = pol.slow_threshold_ms.unwrap_or(50).max(5);
+    let crit_ms = pol.critical_threshold_ms.unwrap_or(slow_ms.saturating_mul(3)).max(slow_ms + 5);
+    let retries = pol.max_retries.unwrap_or(1).min(5);
+    let retry_delay_ms = pol.retry_delay_ms.unwrap_or(40).min(2000);
+    let cooldown_every = pol.cooldown_every_n_blocks.unwrap_or(0);
+    let cooldown_ms = pol.cooldown_ms.unwrap_or(0).min(500);
+
     let mut stale_detected = false;
-    for item in items.into_iter().take(128) {
+    for (idx, item) in items.into_iter().take(128).enumerate() {
         let mut total_latency_ms = 0.0;
         let mut final_result: DSBlockResult = unsafe { std::mem::zeroed() };
         let mut remaining = item.sector_count.max(1);
@@ -224,6 +248,19 @@ fn scan_lba_batch(
             let mut chunk_res: DSBlockResult = unsafe { std::mem::zeroed() };
             let ok = if verify_mode {
                 unsafe { DS_VerifyLbaBlock(guard.raw, current_lba, chunk, &mut chunk_res) }
+            } else if use_policy {
+                unsafe {
+                    DS_ScanLbaBlockWithPolicy(
+                        guard.raw,
+                        current_lba,
+                        chunk,
+                        slow_ms,
+                        crit_ms,
+                        retries,
+                        retry_delay_ms,
+                        &mut chunk_res,
+                    )
+                }
             } else {
                 unsafe { DS_ScanLbaBlock(guard.raw, current_lba, chunk, &mut chunk_res) }
             };
@@ -237,6 +274,10 @@ fn scan_lba_batch(
             }
             current_lba = current_lba.saturating_add(chunk as u64);
             remaining -= chunk as u64;
+        }
+
+        if cooldown_every > 0 && cooldown_ms > 0 && (idx as u32 + 1) % cooldown_every == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(cooldown_ms as u64));
         }
 
         results.push(BatchScanItemResult {
@@ -266,13 +307,16 @@ fn attempt_sector_repair(drive_index: u32, lba: u64, count: u32) -> Result<serde
         return Err(format!("Failed to open physical drive {}", drive_index));
     }
 
+    let t0 = std::time::Instant::now();
     let mut recovered_status: u32 = 0;
     let ok = unsafe { DS_AttemptSoftSectorRepair(handle, lba, count, &mut recovered_status) };
+    let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
     unsafe { DS_CloseDrive(handle) };
 
     Ok(serde_json::json!({
         "success": ok,
-        "recoveredStatus": recovered_status
+        "recoveredStatus": recovered_status,
+        "latencyMs": (elapsed_ms * 1000.0).round() / 1000.0
     }))
 }
 
@@ -427,6 +471,12 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
                 false
             };
 
+            let ext_caps = unsafe {
+                ds_probe_extended_drive_caps(handle, &bus, detail.physical_sector_size)
+            };
+
+            let link_probe = probe_drive_bus_link_and_controller(i, handle, &bus, detail.is_ssd);
+
             // Close handle after all telemetry is gathered
             unsafe { DS_CloseDrive(handle) };
 
@@ -489,6 +539,45 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
                 None
             };
 
+            let mut usb_info: DSUsbTopologyInfo = unsafe { std::mem::zeroed() };
+            let has_usb_probe = if is_external || bus.eq_ignore_ascii_case("NVMe") {
+                unsafe { DS_ProbeUsbTopology(i, &mut usb_info) }
+            } else {
+                false
+            };
+
+            let usb_topology_json = if has_usb_probe && usb_info.probe_succeeded != 0 && (usb_info.usb_generation_code > 0 || usb_info.transport_code == 1 || usb_info.transport_code == 2 || usb_info.transport_code == 4) {
+                let gen_code = usb_info.usb_generation_code;
+                let speed_mbps = usb_info.negotiated_speed_mbps;
+                let tr_code = usb_info.transport_code;
+                let vid = usb_info.vendor_id;
+                let pid = usb_info.product_id;
+                let bcd = usb_info.bcd_usb;
+                let port_num = usb_info.port_number;
+                let ver_label = String::from_utf8_lossy(&usb_info.usb_version_label).trim_matches(char::from(0)).to_string();
+                let tr_label = String::from_utf8_lossy(&usb_info.transport_label).trim_matches(char::from(0)).to_string();
+                let drv_svc = String::from_utf8_lossy(&usb_info.driver_service).trim_matches(char::from(0)).to_string();
+                let chipset = String::from_utf8_lossy(&usb_info.bridge_chipset).trim_matches(char::from(0)).to_string();
+                let pnp = String::from_utf8_lossy(&usb_info.pnp_device_id).trim_matches(char::from(0)).to_string();
+                Some(serde_json::json!({
+                    "usbGenerationCode": gen_code,
+                    "negotiatedSpeedMbps": speed_mbps,
+                    "transportCode": tr_code,
+                    "vendorIdHex": if vid > 0 { Some(format!("{:04X}", vid)) } else { None },
+                    "productIdHex": if pid > 0 { Some(format!("{:04X}", pid)) } else { None },
+                    "bcdUsbHex": if bcd > 0 { Some(format!("{:04X}", bcd)) } else { None },
+                    "portNumber": port_num,
+                    "usbVersionLabel": ver_label,
+                    "transportLabel": tr_label,
+                    "driverService": drv_svc,
+                    "bridgeChipset": if chipset.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(chipset) },
+                    "pnpDeviceId": pnp,
+                    "probeSucceeded": true
+                }))
+            } else {
+                None
+            };
+
             drives.push(serde_json::json!({
                 "driveIndex": i,
                 "devicePath": path,
@@ -500,16 +589,30 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
                 "isTrimSupported": detail.is_trim_supported,
                 "isExternal": is_external,
                 "connectionType": connection_type,
+                "usbTopology": usb_topology_json,
                 "mountPoints": mount_points,
                 "partitions": partitions_json,
                 "totalCapacityBytes": detail.total_capacity_bytes,
                 "totalCapacityGb": detail.total_capacity_bytes / (1024 * 1024 * 1024),
                 "sectorSize": detail.sector_size,
                 "physicalSectorSize": detail.physical_sector_size,
+                "partitionStyle": ext_caps.partition_style,
+                "alignmentStatus": ext_caps.alignment_status,
+                "misalignedPartitions": ext_caps.misaligned_partitions,
+                "isWriteCacheEnabled": detail.is_write_cache_enabled,
+                "volatileWriteCache": ext_caps.volatile_write_cache,
+                "writeCacheFlushSupported": ext_caps.write_cache_flush_supported,
+                "readLookAheadSupported": ext_caps.read_look_ahead_supported,
+                "ncqSupported": ext_caps.ncq_supported,
+                "queueDepth": ext_caps.queue_depth,
+                "apmAamSupported": ext_caps.apm_aam_supported,
+                "rotationalSpeedRpm": ext_caps.rotational_speed_rpm,
+                "warningTempThresholdC": ext_caps.warning_temp_threshold_c,
                 "temperatureC": resolved_temp,
                 "reliabilityScore": resolved_reliability,
                 "powerOnHours": resolved_poh,
                 "reallocatedSectors": health_report.reallocated_sectors,
+                "linkProbe": link_probe,
                 "nvmeTelemetry": if has_nvme_log {
                     Some(serde_json::json!({
                         "percentageUsed": nvme_log.percentage_used,
@@ -548,6 +651,354 @@ fn get_physical_drives() -> Result<Vec<serde_json::Value>, String> {
     }
 
     Ok(drives)
+}
+
+#[tauri::command]
+fn eject_physical_drive(drive_index: u32) -> Result<serde_json::Value, String> {
+    let (is_sys, mounted_vols) = is_os_system_drive(drive_index);
+    if is_sys {
+        return Ok(serde_json::json!({
+            "success": false,
+            "win32ErrorCode": 5,
+            "message": format!(
+                "OS 시스템/부트 드라이브(PhysicalDrive{}, 볼륨: {})는 안전상 분리할 수 없습니다.",
+                drive_index,
+                if mounted_vols.is_empty() { "N/A".to_string() } else { mounted_vols.join(", ") }
+            )
+        }));
+    }
+
+    // Release any cached physical disk HANDLE before locking/dismounting volumes and invoking PnP eject
+    invalidate_pooled_drive(drive_index);
+
+    let (success, message, win32_err) = ds_eject_physical_drive_win32(drive_index, &mounted_vols);
+    Ok(serde_json::json!({
+        "success": success,
+        "win32ErrorCode": win32_err,
+        "message": message
+    }))
+}
+
+#[tauri::command]
+fn probe_usb_topology_all() -> Result<Vec<serde_json::Value>, String> {
+    let mut list = Vec::new();
+    for i in 0..32u32 {
+        let mut info: DSUsbTopologyInfo = unsafe { std::mem::zeroed() };
+        if unsafe { DS_ProbeUsbTopology(i, &mut info) } && info.probe_succeeded != 0 {
+            let gen_code = info.usb_generation_code;
+            let speed_mbps = info.negotiated_speed_mbps;
+            let tr_code = info.transport_code;
+            let vid = info.vendor_id;
+            let pid = info.product_id;
+            let bcd = info.bcd_usb;
+            let port_num = info.port_number;
+            if gen_code > 0 || tr_code == 1 || tr_code == 2 || tr_code == 4 {
+                list.push(serde_json::json!({
+                    "driveIndex": i,
+                    "usbGenerationCode": gen_code,
+                    "negotiatedSpeedMbps": speed_mbps,
+                    "transportCode": tr_code,
+                    "vendorIdHex": if vid > 0 { Some(format!("{:04X}", vid)) } else { None },
+                    "productIdHex": if pid > 0 { Some(format!("{:04X}", pid)) } else { None },
+                    "bcdUsbHex": if bcd > 0 { Some(format!("{:04X}", bcd)) } else { None },
+                    "portNumber": port_num,
+                    "usbVersionLabel": String::from_utf8_lossy(&info.usb_version_label).trim_matches(char::from(0)).to_string(),
+                    "transportLabel": String::from_utf8_lossy(&info.transport_label).trim_matches(char::from(0)).to_string(),
+                    "driverService": String::from_utf8_lossy(&info.driver_service).trim_matches(char::from(0)).to_string(),
+                    "bridgeChipset": String::from_utf8_lossy(&info.bridge_chipset).trim_matches(char::from(0)).to_string(),
+                    "pnpDeviceId": String::from_utf8_lossy(&info.pnp_device_id).trim_matches(char::from(0)).to_string(),
+                    "probeSucceeded": true
+                }));
+            }
+        }
+    }
+    Ok(list)
+}
+
+fn fill_xoshiro256_checkpoint_pattern(buf: &mut [u8], checkpoint_lba: u64) {
+    let mut s = [
+        checkpoint_lba ^ 0x4453_5553_4254_4553u64,
+        checkpoint_lba.wrapping_mul(0x9E37_79B9_7F4A_7C15u64) ^ 0xA076_1D64_78BD_642Fu64,
+        0xE703_7ED1_A0B4_28DBu64 ^ (checkpoint_lba >> 3),
+        0x8EBC_6AF0_9C88_C6E3u64 ^ (checkpoint_lba << 7),
+    ];
+    let mut next_u64 = || -> u64 {
+        let result = s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
+        let t = s[1] << 17;
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+        s[2] ^= t;
+        s[3] = s[3].rotate_left(45);
+        result
+    };
+    let mut offset = 0usize;
+    while offset + 8 <= buf.len() {
+        let val = next_u64().to_le_bytes();
+        buf[offset..offset + 8].copy_from_slice(&val);
+        offset += 8;
+    }
+}
+
+fn compute_shannon_entropy_bits(buf: &[u8]) -> f64 {
+    if buf.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u32; 256];
+    for &b in buf {
+        counts[b as usize] += 1;
+    }
+    let len = buf.len() as f64;
+    let mut ent = 0.0f64;
+    for &c in &counts {
+        if c > 0 {
+            let p = c as f64 / len;
+            ent -= p * p.log2();
+        }
+    }
+    ent
+}
+
+#[tauri::command]
+fn probe_fake_capacity_checkpoints(
+    drive_index: u32,
+    write_verify_mode: bool,
+    allow_destructive_write: bool,
+) -> Result<serde_json::Value, String> {
+    let vol_map = get_volume_mappings();
+    let is_c_drive = vol_map
+        .get(&drive_index)
+        .map(|vols| vols.iter().any(|v| v.drive_letter.eq_ignore_ascii_case("C:")))
+        .unwrap_or(false);
+
+    if write_verify_mode && (drive_index == 0 || is_c_drive || !allow_destructive_write) {
+        return Err(
+            "OS/System boot drive (PhysicalDrive0 / C:) is permanently protected from Tier-2 write verification."
+                .to_string(),
+        );
+    }
+
+    let mut sector_size: u32 = 512;
+    let handle = unsafe { DS_OpenDriveDirect(drive_index, &mut sector_size) };
+    if handle.is_null() {
+        return Err(format!("Failed to open physical drive {}", drive_index));
+    }
+
+    let mut detail: DSPhysicalDriveDetail = unsafe { std::mem::zeroed() };
+    let has_detail = unsafe { DS_GetDriveDetails(handle, &mut detail) };
+    let cap_bytes = if has_detail { detail.total_capacity_bytes } else { 0 };
+    let sec_size = sector_size.max(512) as u64;
+    let total_sectors = cap_bytes / sec_size;
+
+    if total_sectors < 16384 {
+        unsafe { DS_CloseDrive(handle) };
+        return Err("Drive capacity too small or inaccessible for boundary verification.".to_string());
+    }
+
+    // Power-of-2 checkpoints: 512MB, 1GB, 2GB, ..., 1TB plus 99.5% tail boundary
+    let mut mb_points: Vec<(String, u64)> = Vec::new();
+    let mut target_mb = 512u64;
+    while target_mb <= 1024 * 1024 {
+        let lba = (target_mb * 1024 * 1024) / sec_size;
+        if lba + 64 < total_sectors {
+            let label = if target_mb >= 1024 {
+                format!("{} GiB", target_mb / 1024)
+            } else {
+                format!("{} MiB", target_mb)
+            };
+            mb_points.push((label, lba));
+        }
+        target_mb *= 2;
+    }
+    let tail_lba = ((total_sectors as f64) * 0.995) as u64;
+    if tail_lba + 32 < total_sectors && mb_points.last().map(|x| x.1 != tail_lba).unwrap_or(true) {
+        mb_points.push(("99.5% Tail".to_string(), tail_lba));
+    }
+
+    let sample_bytes: u32 = (sec_size as u32) * 8; // 4KB for 512B sector
+    let mut seen_non_zero_crcs: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    let mut checkpoints_json = Vec::new();
+    let mut verified_limit_bytes: u64 = 0;
+    let mut suspected_fake = false;
+    let mut failure_reason = String::new();
+
+    #[cfg(windows)]
+    let mut rw_handle: *mut std::ffi::c_void = std::ptr::null_mut();
+    #[cfg(windows)]
+    {
+        if write_verify_mode && allow_destructive_write && drive_index != 0 && !is_c_drive {
+            use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+            use windows_sys::Win32::Storage::FileSystem::{
+                CreateFileW, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
+                FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            };
+            let path_w: Vec<u16> = format!("\\\\.\\PhysicalDrive{}\0", drive_index).encode_utf16().collect();
+            let h_rw = unsafe {
+                CreateFileW(
+                    path_w.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
+                    0,
+                )
+            };
+            if h_rw != INVALID_HANDLE_VALUE {
+                rw_handle = h_rw as *mut std::ffi::c_void;
+            }
+        }
+    }
+
+    for (label, lba) in &mb_points {
+        let mut buf = vec![0u8; sample_bytes as usize];
+        let mut bytes_read: u32 = 0;
+        let mut w32_err: u32 = 0;
+        let t0 = std::time::Instant::now();
+        let read_ok = unsafe {
+            DS_ReadRawSectorWithError(
+                handle,
+                *lba,
+                buf.as_mut_ptr(),
+                sample_bytes,
+                &mut bytes_read,
+                &mut w32_err,
+            )
+        };
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let mut is_all_zero = false;
+        let mut crc32: u32 = 0;
+        let mut parity: u64 = 0;
+        if read_ok {
+            unsafe {
+                DS_CalculateAvx2ChecksumAndZeroCheck(
+                    buf.as_ptr(),
+                    bytes_read,
+                    &mut is_all_zero,
+                    &mut crc32,
+                    &mut parity,
+                );
+            }
+        }
+        let entropy = if read_ok { compute_shannon_entropy_bits(&buf) } else { 0.0 };
+
+        let mut status = "PASS";
+        let mut note = "Valid unique boundary block".to_string();
+
+        if !read_ok {
+            status = "UNREACHABLE";
+            note = format!("Boundary I/O read error (Win32 {})", w32_err);
+            suspected_fake = true;
+            if failure_reason.is_empty() {
+                failure_reason = format!("Read error beyond physical boundary at {}", label);
+            }
+        } else if !is_all_zero && seen_non_zero_crcs.contains_key(&crc32) {
+            let first_lba = seen_non_zero_crcs[&crc32];
+            status = "ALIAS_COLLISION";
+            note = format!("CRC32 0x{:08X} mirrors LBA {}", crc32, first_lba);
+            suspected_fake = true;
+            if failure_reason.is_empty() {
+                failure_reason = format!("LBA wraparound / aliasing collision detected at {}", label);
+            }
+        } else {
+            if !is_all_zero {
+                seen_non_zero_crcs.insert(crc32, *lba);
+            } else {
+                note = "Zero-filled unallocated block (clean read)".to_string();
+            }
+
+            #[cfg(windows)]
+            if write_verify_mode && !rw_handle.is_null() {
+                use windows_sys::Win32::Storage::FileSystem::{
+                    FlushFileBuffers, ReadFile, SetFilePointerEx, WriteFile, FILE_BEGIN,
+                };
+                let byte_off = (*lba * sec_size) as i64;
+                let mut prng_buf = vec![0u8; sample_bytes as usize];
+                fill_xoshiro256_checkpoint_pattern(&mut prng_buf, *lba);
+                let mut readback = vec![0u8; sample_bytes as usize];
+                let mut wr: u32 = 0;
+                let mut rd: u32 = 0;
+
+                let write_ok = unsafe {
+                    SetFilePointerEx(rw_handle as _, byte_off, std::ptr::null_mut(), FILE_BEGIN) != 0
+                        && WriteFile(rw_handle as _, prng_buf.as_ptr(), sample_bytes, &mut wr, std::ptr::null_mut()) != 0
+                        && wr == sample_bytes
+                };
+                if write_ok {
+                    unsafe { FlushFileBuffers(rw_handle as _) };
+                    let rb_ok = unsafe {
+                        SetFilePointerEx(rw_handle as _, byte_off, std::ptr::null_mut(), FILE_BEGIN) != 0
+                            && ReadFile(rw_handle as _, readback.as_mut_ptr(), sample_bytes, &mut rd, std::ptr::null_mut()) != 0
+                            && rd == sample_bytes
+                    };
+                    if !rb_ok || readback != prng_buf {
+                        status = "WRITE_CORRUPTION";
+                        note = "Xoshiro256** write-readback mismatch (fake / black-hole NAND)";
+                        suspected_fake = true;
+                        if failure_reason.is_empty() {
+                            failure_reason = format!("Tier-2 write-readback failure at {}", label);
+                        }
+                    } else {
+                        note = "Tier-2 Xoshiro256** non-destructive roundtrip verified";
+                    }
+                    // Restore original sector payload immediately
+                    unsafe {
+                        let mut rw_orig: u32 = 0;
+                        SetFilePointerEx(rw_handle as _, byte_off, std::ptr::null_mut(), FILE_BEGIN);
+                        WriteFile(rw_handle as _, buf.as_ptr(), sample_bytes, &mut rw_orig, std::ptr::null_mut());
+                        FlushFileBuffers(rw_handle as _);
+                    }
+                } else {
+                    status = "WRITE_LOCKED";
+                    note = "Controller write-protected or volume mounted (Tier-1 read-only passed)";
+                }
+            }
+
+            if !suspected_fake {
+                verified_limit_bytes = (*lba).saturating_mul(sec_size);
+            }
+        }
+
+        checkpoints_json.push(serde_json::json!({
+            "label": label,
+            "lba": lba,
+            "offsetBytes": (*lba).saturating_mul(sec_size),
+            "crc32Hex": format!("{:08X}", crc32),
+            "entropyBits": (entropy * 100.0).round() / 100.0,
+            "isAllZero": is_all_zero,
+            "latencyMs": (latency_ms * 100.0).round() / 100.0,
+            "status": status,
+            "note": note
+        }));
+    }
+
+    #[cfg(windows)]
+    if !rw_handle.is_null() {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(rw_handle as _) };
+    }
+    unsafe { DS_CloseDrive(handle) };
+
+    let verdict = if suspected_fake {
+        "SUSPECTED_FAKE_CAPACITY"
+    } else {
+        "GENUINE_CAPACITY_VERIFIED"
+    };
+
+    Ok(serde_json::json!({
+        "driveIndex": drive_index,
+        "tier": if write_verify_mode { "tier2_prng_roundtrip" } else { "tier1_readonly_alias" },
+        "reportedCapacityBytes": cap_bytes,
+        "verifiedBoundaryBytes": if suspected_fake { verified_limit_bytes } else { cap_bytes },
+        "verdict": verdict,
+        "summary": if suspected_fake {
+            failure_reason
+        } else {
+            format!("All {} power-of-2 LBA checkpoints passed without aliasing or wraparound.", checkpoints_json.len())
+        },
+        "checkpoints": checkpoints_json
+    }))
 }
 
 #[tauri::command]
@@ -2614,6 +3065,3192 @@ fn execute_sanitize_or_trim(
     }))
 }
 
+// ===========================================================================
+// Pure Creative Predictive & Acoustic Analytics DLL Bridge (DiskSentinelPredictive.dll)
+// ===========================================================================
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspEngineInfoC {
+    engine_name: [u8; 48],
+    version: [u8; 16],
+    abi_version: u32,
+    capabilities_mask: u32,
+    self_test_passed: u8,
+    reserved: [u8; 7],
+    weibull_self_test_error: f64,
+    ols_self_test_r2: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspWeibullInputC {
+    media_type: u32,
+    power_on_hours: u32,
+    temperature_celsius: u32,
+    percentage_used: u32,
+    available_spare_pct: u32,
+    reallocated_sectors: u32,
+    pending_sectors: u32,
+    uncorrectable_errors: u32,
+    unsafe_shutdowns: u64,
+    avg_daily_power_on_hours: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspWeibullRulReportC {
+    weibull_shape_beta: f64,
+    weibull_scale_eta_hours: f64,
+    failure_prob_30d_pct: f64,
+    failure_prob_90d_pct: f64,
+    failure_prob_365d_pct: f64,
+    hazard_rate_per_1k_hours: f64,
+    reliability_index_pct: f64,
+    estimated_rul_days: u32,
+    risk_grade_code: u32,
+    primary_risk_factor: [u8; 64],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspAcousticSampleC {
+    lba: u64,
+    latency_ms: f64,
+    status_code: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspAcousticProfileC {
+    valid_sample_count: u32,
+    consecutive_step_count: u32,
+    micro_stall_burst_count: u32,
+    stride_jump_count: u32,
+    acoustic_grade_code: u32,
+    reserved: u32,
+    rmssd_jitter_ms: f64,
+    mean_step_delta_ms: f64,
+    peak_step_delta_ms: f64,
+    sequential_jitter_ms: f64,
+    random_seek_jitter_ms: f64,
+    resonance_ratio: f64,
+    acoustic_instability_score: f64,
+    diagnostic_summary: [u8; 96],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspThermalWearInputC {
+    media_type: u32,
+    current_temp_celsius: u32,
+    peak_temp_celsius: u32,
+    warning_temp_time_min: u32,
+    critical_temp_time_min: u32,
+    power_on_hours: u64,
+    total_tb_written: f64,
+    rated_tbw_limit_tb: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspThermalWearReportC {
+    arrhenius_acceleration_factor: f64,
+    sustained_thermal_stress_factor: f64,
+    effective_aged_hours: f64,
+    daily_tbw_rate_gb: f64,
+    estimated_tbw_remaining_years: f64,
+    thermal_stress_score: f64,
+    thermal_grade_code: u32,
+    reserved: u32,
+    thermal_summary: [u8; 96],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspSmartHistoryPointC {
+    timestamp_sec: i64,
+    value: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DspSmartTrendProjectionC {
+    valid_point_count: u32,
+    trend_direction: u32,
+    is_statistically_significant: u8,
+    reserved: [u8; 7],
+    observation_span_days: f64,
+    latest_value: f64,
+    slope_per_day: f64,
+    intercept_value: f64,
+    r_squared: f64,
+    projected_value_30d: f64,
+    projected_days_to_warning: f64,
+    projected_days_to_critical: f64,
+}
+
+#[cfg(windows)]
+struct PredictiveDllDispatch {
+    loaded_path: String,
+    fn_info: unsafe extern "system" fn(*mut DspEngineInfoC) -> bool,
+    fn_weibull: unsafe extern "system" fn(*const DspWeibullInputC, *mut DspWeibullRulReportC) -> bool,
+    fn_acoustic: unsafe extern "system" fn(*const DspAcousticSampleC, u32, u32, *mut DspAcousticProfileC) -> bool,
+    fn_thermal: unsafe extern "system" fn(*const DspThermalWearInputC, *mut DspThermalWearReportC) -> bool,
+    fn_trend: unsafe extern "system" fn(*const DspSmartHistoryPointC, u32, f64, f64, u32, *mut DspSmartTrendProjectionC) -> bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for PredictiveDllDispatch {}
+#[cfg(windows)]
+unsafe impl Sync for PredictiveDllDispatch {}
+
+#[cfg(windows)]
+static PREDICTIVE_DLL_DISPATCH: std::sync::OnceLock<Option<PredictiveDllDispatch>> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn get_predictive_dll() -> Option<&'static PredictiveDllDispatch> {
+    PREDICTIVE_DLL_DISPATCH
+        .get_or_init(|| {
+            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidates.push(dir.join("DiskSentinelPredictive.dll"));
+                    candidates.push(dir.join("resources").join("DiskSentinelPredictive.dll"));
+                    candidates.push(dir.join("_up_").join("bin").join("native").join("DiskSentinelPredictive.dll"));
+                }
+            }
+            candidates.push(std::path::PathBuf::from("bin\\native\\DiskSentinelPredictive.dll"));
+            candidates.push(std::path::PathBuf::from("DiskSentinelPredictive.dll"));
+
+            for path in candidates {
+                let path_str = path.to_string_lossy().to_string();
+                let mut wide: Vec<u16> = path_str.encode_utf16().collect();
+                wide.push(0);
+                let hmod = unsafe { LoadLibraryW(wide.as_ptr()) };
+                if hmod == 0 {
+                    continue;
+                }
+
+                unsafe {
+                    let p_info = GetProcAddress(hmod, b"DSP_GetPredictiveEngineInfo\0".as_ptr());
+                    let p_weibull = GetProcAddress(hmod, b"DSP_ComputeWeibullRul\0".as_ptr());
+                    let p_acoustic = GetProcAddress(hmod, b"DSP_AnalyzeAcousticSeekProfile\0".as_ptr());
+                    let p_thermal = GetProcAddress(hmod, b"DSP_EvaluateThermalWearStress\0".as_ptr());
+                    let p_trend = GetProcAddress(hmod, b"DSP_ProjectSmartDegradationTrend\0".as_ptr());
+
+                    if let (Some(f_info), Some(f_weibull), Some(f_acoustic), Some(f_thermal), Some(f_trend)) =
+                        (p_info, p_weibull, p_acoustic, p_thermal, p_trend)
+                    {
+                        return Some(PredictiveDllDispatch {
+                            loaded_path: path_str,
+                            fn_info: std::mem::transmute(f_info),
+                            fn_weibull: std::mem::transmute(f_weibull),
+                            fn_acoustic: std::mem::transmute(f_acoustic),
+                            fn_thermal: std::mem::transmute(f_thermal),
+                            fn_trend: std::mem::transmute(f_trend),
+                        });
+                    }
+                    FreeLibrary(hmod);
+                }
+            }
+            None
+        })
+        .as_ref()
+}
+
+fn c_buf_to_string(buf: &[u8]) -> String {
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).trim().to_string()
+}
+
+#[inline]
+fn dsp_clamp(val: f64, lo: f64, hi: f64) -> f64 {
+    if !val.is_finite() {
+        lo
+    } else {
+        val.clamp(lo, hi)
+    }
+}
+
+fn dsp_weibull_cond_prob_rust(t0_hours: f64, delta_hours: f64, beta: f64, eta_hours: f64) -> f64 {
+    if eta_hours <= 1.0 || delta_hours <= 0.0 || beta <= 0.0 {
+        return 0.0;
+    }
+    let ratio0 = (t0_hours / eta_hours).min(50.0);
+    let ratio1 = ((t0_hours + delta_hours) / eta_hours).min(50.0);
+    let diff = ratio0.powf(beta) - ratio1.powf(beta);
+    if !diff.is_finite() {
+        return 1.0;
+    }
+    if diff >= 0.0 {
+        return 0.0;
+    }
+    if diff < -60.0 {
+        return 1.0;
+    }
+    dsp_clamp(1.0 - diff.exp(), 0.0, 1.0)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PredictiveWeibullArgs {
+    media_type: u32,
+    power_on_hours: u32,
+    temperature_celsius: u32,
+    percentage_used: u32,
+    available_spare_pct: u32,
+    reallocated_sectors: u32,
+    pending_sectors: u32,
+    uncorrectable_errors: u32,
+    unsafe_shutdowns: u64,
+    avg_daily_power_on_hours: f64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PredictiveAcousticSampleArg {
+    lba: u64,
+    latency_ms: f64,
+    status_code: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PredictiveThermalArgs {
+    media_type: u32,
+    current_temp_celsius: u32,
+    peak_temp_celsius: u32,
+    warning_temp_time_min: u32,
+    critical_temp_time_min: u32,
+    power_on_hours: u64,
+    total_tb_written: f64,
+    rated_tbw_limit_tb: f64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PredictiveHistoryPointArg {
+    timestamp_sec: i64,
+    value: f64,
+}
+
+fn eval_smart_trend_rust(
+    points: &[PredictiveHistoryPointArg],
+    warning_threshold: f64,
+    critical_threshold: f64,
+    lower_is_worse: bool,
+) -> (u32, u32, bool, f64, f64, f64, f64, f64, f64, f64, f64) {
+    let mut valid_n: u32 = 0;
+    let mut min_ts: i64 = 0;
+    let mut max_ts: i64 = 0;
+    let mut latest_ts: i64 = 0;
+    let mut latest_val: f64 = 0.0;
+
+    for pt in points {
+        if !pt.value.is_finite() {
+            continue;
+        }
+        if valid_n == 0 {
+            min_ts = pt.timestamp_sec;
+            max_ts = pt.timestamp_sec;
+            latest_ts = pt.timestamp_sec;
+            latest_val = pt.value;
+        } else {
+            min_ts = min_ts.min(pt.timestamp_sec);
+            max_ts = max_ts.max(pt.timestamp_sec);
+            if pt.timestamp_sec >= latest_ts {
+                latest_ts = pt.timestamp_sec;
+                latest_val = pt.value;
+            }
+        }
+        valid_n += 1;
+    }
+
+    if valid_n == 0 {
+        return (0, 0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0);
+    }
+
+    let span_days = ((max_ts - min_ts) as f64 / 86400.0).max(0.0);
+    if valid_n < 2 || max_ts == min_ts {
+        return (valid_n, 0, false, span_days, latest_val, 0.0, latest_val, 0.0, latest_val, -1.0, -1.0);
+    }
+
+    let mut mean_x = 0.0;
+    let mut mean_y = 0.0;
+    for pt in points {
+        if !pt.value.is_finite() {
+            continue;
+        }
+        mean_x += (pt.timestamp_sec - min_ts) as f64 / 86400.0;
+        mean_y += pt.value;
+    }
+    mean_x /= valid_n as f64;
+    mean_y /= valid_n as f64;
+
+    let mut sxx = 0.0;
+    let mut syy = 0.0;
+    let mut sxy = 0.0;
+    for pt in points {
+        if !pt.value.is_finite() {
+            continue;
+        }
+        let dx = ((pt.timestamp_sec - min_ts) as f64 / 86400.0) - mean_x;
+        let dy = pt.value - mean_y;
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
+    }
+
+    let slope = if sxx > 1e-12 { sxy / sxx } else { 0.0 };
+    let intercept = mean_y - slope * mean_x;
+    let r2 = if sxx > 1e-12 && syy > 1e-12 {
+        dsp_clamp((sxy * sxy) / (sxx * syy), 0.0, 1.0)
+    } else {
+        0.0
+    };
+    let proj30 = latest_val + slope * 30.0;
+    let eps = 1e-6;
+    let dir = if lower_is_worse {
+        if slope < -eps { 1 } else if slope > eps { 2 } else { 0 }
+    } else if slope > eps {
+        1
+    } else if slope < -eps {
+        2
+    } else {
+        0
+    };
+
+    let days_to = |threshold: f64| -> f64 {
+        if !threshold.is_finite() || threshold < 0.0 {
+            return -1.0;
+        }
+        if lower_is_worse {
+            if latest_val <= threshold { return 0.0; }
+            if slope >= -eps { return -1.0; }
+            ((latest_val - threshold) / (-slope)).min(36500.0)
+        } else {
+            if latest_val >= threshold { return 0.0; }
+            if slope <= eps { return -1.0; }
+            ((threshold - latest_val) / slope).min(36500.0)
+        }
+    };
+
+    let sig = valid_n >= 3 && r2 >= 0.35 && slope.abs() > eps;
+    (
+        valid_n,
+        dir,
+        sig,
+        span_days,
+        latest_val,
+        slope,
+        intercept,
+        r2,
+        proj30,
+        days_to(warning_threshold),
+        days_to(critical_threshold),
+    )
+}
+
+#[tauri::command]
+fn inspect_predictive_dll_status() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_predictive_dll() {
+            let mut info: DspEngineInfoC = unsafe { std::mem::zeroed() };
+            let ok = unsafe { (dll.fn_info)(&mut info) };
+            if ok {
+                return serde_json::json!({
+                    "dllLoaded": true,
+                    "engineSource": "native-cpp-dll",
+                    "loadedPath": dll.loaded_path,
+                    "engineName": c_buf_to_string(&info.engine_name),
+                    "version": c_buf_to_string(&info.version),
+                    "abiVersion": info.abi_version,
+                    "capabilitiesMask": info.capabilities_mask,
+                    "selfTestPassed": info.self_test_passed != 0,
+                    "weibullSelfTestError": info.weibull_self_test_error,
+                    "olsSelfTestR2": info.ols_self_test_r2
+                });
+            }
+        }
+    }
+
+    let expected_f = 1.0 - (-1.0f64).exp();
+    let actual_f = dsp_weibull_cond_prob_rust(0.0, 1000.0, 2.0, 1000.0);
+    let weibull_err = (actual_f - expected_f).abs();
+    let test_pts = [
+        PredictiveHistoryPointArg { timestamp_sec: 0, value: 10.0 },
+        PredictiveHistoryPointArg { timestamp_sec: 86400, value: 12.0 },
+        PredictiveHistoryPointArg { timestamp_sec: 172800, value: 14.0 },
+    ];
+    let (_, _, _, _, _, slope, _, r2, _, _, _) = eval_smart_trend_rust(&test_pts, 20.0, 30.0, false);
+
+    serde_json::json!({
+        "dllLoaded": false,
+        "engineSource": "rust-parity-fallback",
+        "loadedPath": null,
+        "engineName": "DiskSentinelPredictive Rust Parity Engine",
+        "version": "4.6.0",
+        "abiVersion": 1,
+        "capabilitiesMask": 0b1111,
+        "selfTestPassed": weibull_err < 1e-9 && (slope - 2.0).abs() < 1e-6 && r2 > 0.999999,
+        "weibullSelfTestError": weibull_err,
+        "olsSelfTestR2": r2
+    })
+}
+
+#[tauri::command]
+fn compute_predictive_weibull_rul(input: PredictiveWeibullArgs) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_predictive_dll() {
+            let c_in = DspWeibullInputC {
+                media_type: input.media_type,
+                power_on_hours: input.power_on_hours,
+                temperature_celsius: input.temperature_celsius,
+                percentage_used: input.percentage_used,
+                available_spare_pct: input.available_spare_pct,
+                reallocated_sectors: input.reallocated_sectors,
+                pending_sectors: input.pending_sectors,
+                uncorrectable_errors: input.uncorrectable_errors,
+                unsafe_shutdowns: input.unsafe_shutdowns,
+                avg_daily_power_on_hours: input.avg_daily_power_on_hours,
+            };
+            let mut c_out: DspWeibullRulReportC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_weibull)(&c_in, &mut c_out) } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "weibullShapeBeta": c_out.weibull_shape_beta,
+                    "weibullScaleEtaHours": c_out.weibull_scale_eta_hours,
+                    "failureProb30dPct": c_out.failure_prob_30d_pct,
+                    "failureProb90dPct": c_out.failure_prob_90d_pct,
+                    "failureProb365dPct": c_out.failure_prob_365d_pct,
+                    "hazardRatePer1kHours": c_out.hazard_rate_per_1k_hours,
+                    "reliabilityIndexPct": c_out.reliability_index_pct,
+                    "estimatedRulDays": c_out.estimated_rul_days,
+                    "riskGradeCode": c_out.risk_grade_code,
+                    "primaryRiskFactor": c_buf_to_string(&c_out.primary_risk_factor)
+                }));
+            }
+        }
+    }
+
+    let (base_eta, base_beta) = match input.media_type {
+        2 => (75000.0, 1.25),
+        1 => (65000.0, 1.30),
+        3 => (25000.0, 1.45),
+        _ => (50000.0, 1.40),
+    };
+    let t0 = input.power_on_hours as f64;
+    let avg_daily = if input.avg_daily_power_on_hours.is_finite() && input.avg_daily_power_on_hours > 0.25 {
+        dsp_clamp(input.avg_daily_power_on_hours, 0.25, 24.0)
+    } else {
+        8.0
+    };
+
+    let mut defect_severity = 0.0;
+    let mut max_weight = 0.0;
+    let mut primary_driver = "Nominal Aging Baseline";
+
+    if input.pending_sectors > 0 {
+        let w = 0.45 * (input.pending_sectors as f64).ln_1p() + 0.06 * (input.pending_sectors as f64);
+        defect_severity += w;
+        if w > max_weight { max_weight = w; primary_driver = "Pending Unstable Sectors (0xC5)"; }
+    }
+    if input.uncorrectable_errors > 0 {
+        let w = 0.40 * (input.uncorrectable_errors as f64).ln_1p() + 0.05 * (input.uncorrectable_errors as f64);
+        defect_severity += w;
+        if w > max_weight { max_weight = w; primary_driver = "Uncorrectable Media Errors (0xBB/0xC6)"; }
+    }
+    if input.reallocated_sectors > 0 {
+        let w = 0.28 * (input.reallocated_sectors as f64).ln_1p() + 0.015 * (input.reallocated_sectors as f64);
+        defect_severity += w;
+        if w > max_weight { max_weight = w; primary_driver = "Reallocated Spare Sectors (0x05)"; }
+    }
+    let used_clamped = dsp_clamp(input.percentage_used as f64, 0.0, 200.0);
+    if used_clamped >= 70.0 {
+        let w = (used_clamped - 65.0) * 0.025;
+        defect_severity += w;
+        if w > max_weight { max_weight = w; primary_driver = "Flash Wear-Out Depletion (% Used)"; }
+    }
+    if (input.available_spare_pct > 0 && input.available_spare_pct < 40)
+        || (input.available_spare_pct == 0 && (used_clamped >= 80.0 || input.uncorrectable_errors > 0))
+    {
+        let w = (40.0 - input.available_spare_pct as f64) * 0.04;
+        defect_severity += w;
+        if w > max_weight { max_weight = w; primary_driver = "Low Available Spare Blocks"; }
+    }
+    if input.temperature_celsius > 45 && input.temperature_celsius < 150 {
+        let w = (input.temperature_celsius - 45) as f64 * 0.035;
+        defect_severity += w;
+        if w > max_weight { primary_driver = "Elevated Operating Temperature Stress"; }
+    }
+    if input.unsafe_shutdowns > 50 {
+        defect_severity += 0.08 * ((input.unsafe_shutdowns - 50) as f64).ln_1p();
+    }
+
+    let eta = (base_eta * (-dsp_clamp(defect_severity * 0.42, 0.0, 4.5)).exp()).max(720.0);
+    let beta = dsp_clamp(base_beta + defect_severity * 0.35 + used_clamped * 0.005, 1.05, 3.80);
+
+    let p30 = dsp_weibull_cond_prob_rust(t0, 30.0 * avg_daily, beta, eta);
+    let p90 = dsp_weibull_cond_prob_rust(t0, 90.0 * avg_daily, beta, eta);
+    let p365 = dsp_weibull_cond_prob_rust(t0, 365.0 * avg_daily, beta, eta);
+
+    let safe_ratio = if t0 > 1.0 { t0 / eta } else { 1.0 / eta }.min(20.0);
+    let hazard_per_1k = dsp_clamp((beta / eta) * safe_ratio.powf(beta - 1.0) * 1000.0, 0.0, 1000.0);
+
+    let base_cum = dsp_clamp(t0 / eta, 0.0, 50.0).powf(beta);
+    let target_total_hours = eta * (base_cum + std::f64::consts::LN_2).powf(1.0 / beta);
+    let remaining_hours = (target_total_hours - t0).max(0.0);
+    let est_days = dsp_clamp(remaining_hours / avg_daily, 0.0, 3650.0).round() as u32;
+
+    let mut reliability = (1.0 - p90) * 100.0;
+    reliability = dsp_clamp(reliability - dsp_clamp(defect_severity * 12.0, 0.0, 65.0), 0.0, 100.0);
+
+    let grade: u32 = if p30 >= 0.25 || reliability < 35.0 || est_days <= 30 {
+        4
+    } else if p90 >= 0.22 || reliability < 60.0 || est_days <= 120 {
+        3
+    } else if p365 >= 0.25 || reliability < 80.0 || defect_severity > 0.35 {
+        2
+    } else if reliability < 93.0 || defect_severity > 0.05 {
+        1
+    } else {
+        0
+    };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "weibullShapeBeta": beta,
+        "weibullScaleEtaHours": eta,
+        "failureProb30dPct": p30 * 100.0,
+        "failureProb90dPct": p90 * 100.0,
+        "failureProb365dPct": p365 * 100.0,
+        "hazardRatePer1kHours": hazard_per_1k,
+        "reliabilityIndexPct": reliability,
+        "estimatedRulDays": est_days,
+        "riskGradeCode": grade,
+        "primaryRiskFactor": primary_driver
+    }))
+}
+
+#[tauri::command]
+fn analyze_acoustic_seek_profile(
+    samples: Vec<PredictiveAcousticSampleArg>,
+    media_type: u32,
+) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_predictive_dll() {
+            let c_samples: Vec<DspAcousticSampleC> = samples
+                .iter()
+                .map(|s| DspAcousticSampleC {
+                    lba: s.lba,
+                    latency_ms: s.latency_ms,
+                    status_code: s.status_code,
+                    reserved: 0,
+                })
+                .collect();
+            let mut c_out: DspAcousticProfileC = unsafe { std::mem::zeroed() };
+            let ptr = if c_samples.is_empty() { std::ptr::null() } else { c_samples.as_ptr() };
+            if unsafe { (dll.fn_acoustic)(ptr, c_samples.len() as u32, media_type, &mut c_out) } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "validSampleCount": c_out.valid_sample_count,
+                    "consecutiveStepCount": c_out.consecutive_step_count,
+                    "microStallBurstCount": c_out.micro_stall_burst_count,
+                    "strideJumpCount": c_out.stride_jump_count,
+                    "acousticGradeCode": c_out.acoustic_grade_code,
+                    "rmssdJitterMs": c_out.rmssd_jitter_ms,
+                    "meanStepDeltaMs": c_out.mean_step_delta_ms,
+                    "peakStepDeltaMs": c_out.peak_step_delta_ms,
+                    "sequentialJitterMs": c_out.sequential_jitter_ms,
+                    "randomSeekJitterMs": c_out.random_seek_jitter_ms,
+                    "resonanceRatio": c_out.resonance_ratio,
+                    "acousticInstabilityScore": c_out.acoustic_instability_score,
+                    "diagnosticSummary": c_buf_to_string(&c_out.diagnostic_summary)
+                }));
+            }
+        }
+    }
+
+    if samples.is_empty() {
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "validSampleCount": 0,
+            "consecutiveStepCount": 0,
+            "microStallBurstCount": 0,
+            "strideJumpCount": 0,
+            "acousticGradeCode": 0,
+            "rmssdJitterMs": 0.0,
+            "meanStepDeltaMs": 0.0,
+            "peakStepDeltaMs": 0.0,
+            "sequentialJitterMs": 0.0,
+            "randomSeekJitterMs": 0.0,
+            "resonanceRatio": 0.0,
+            "acousticInstabilityScore": 0.0,
+            "diagnosticSummary": "No sector latency samples available"
+        }));
+    }
+
+    let mut valid_lats: Vec<f64> = Vec::with_capacity(samples.len());
+    let mut bad_count: u32 = 0;
+    for s in &samples {
+        if s.status_code >= 4 || !s.latency_ms.is_finite() || s.latency_ms < 0.0 {
+            bad_count += 1;
+        } else {
+            valid_lats.push(s.latency_ms);
+        }
+    }
+
+    if valid_lats.is_empty() {
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "validSampleCount": 0,
+            "consecutiveStepCount": 0,
+            "microStallBurstCount": 0,
+            "strideJumpCount": 0,
+            "acousticGradeCode": if bad_count > 0 { 3 } else { 0 },
+            "rmssdJitterMs": 0.0,
+            "meanStepDeltaMs": 0.0,
+            "peakStepDeltaMs": 0.0,
+            "sequentialJitterMs": 0.0,
+            "randomSeekJitterMs": 0.0,
+            "resonanceRatio": 0.0,
+            "acousticInstabilityScore": if bad_count > 0 { 95.0 } else { 0.0 },
+            "diagnosticSummary": if bad_count > 0 { "All sampled blocks failed I/O (severe media fault)" } else { "No valid latency readings" }
+        }));
+    }
+
+    valid_lats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_ms = valid_lats[valid_lats.len() / 2];
+    let is_solid_state = media_type == 1 || media_type == 2;
+    let stall_floor = if is_solid_state { 15.0 } else { 35.0 };
+    let stall_threshold = (median_ms * 3.0).max(stall_floor);
+
+    let mut sum_sq_all = 0.0;
+    let mut sum_abs_all = 0.0;
+    let mut peak_delta = 0.0f64;
+    let mut sum_sq_seq = 0.0;
+    let mut sum_sq_rand = 0.0;
+    let mut step_count = 0u32;
+    let mut seq_count = 0u32;
+    let mut rand_count = 0u32;
+    let mut stride_jumps = 0u32;
+    let mut micro_stall_bursts = 0u32;
+    let mut current_stall_run = 0u32;
+
+    let mut has_prev = false;
+    let mut prev_lba = 0u64;
+    let mut prev_lat = 0.0f64;
+
+    for s in &samples {
+        if s.status_code >= 4 || !s.latency_ms.is_finite() || s.latency_ms < 0.0 {
+            if current_stall_run >= 2 { micro_stall_bursts += 1; }
+            current_stall_run = 0;
+            has_prev = false;
+            continue;
+        }
+        if s.latency_ms >= stall_threshold {
+            current_stall_run += 1;
+        } else {
+            if current_stall_run >= 2 { micro_stall_bursts += 1; }
+            current_stall_run = 0;
+        }
+        if has_prev {
+            let delta = (s.latency_ms - prev_lat).abs();
+            sum_abs_all += delta;
+            sum_sq_all += delta * delta;
+            peak_delta = peak_delta.max(delta);
+            step_count += 1;
+            if s.lba > prev_lba && (s.lba - prev_lba) <= 131_072 {
+                sum_sq_seq += delta * delta;
+                seq_count += 1;
+            } else {
+                sum_sq_rand += delta * delta;
+                rand_count += 1;
+                stride_jumps += 1;
+            }
+        }
+        prev_lba = s.lba;
+        prev_lat = s.latency_ms;
+        has_prev = true;
+    }
+    if current_stall_run >= 2 { micro_stall_bursts += 1; }
+
+    let rmssd_all = if step_count > 0 { (sum_sq_all / step_count as f64).sqrt() } else { 0.0 };
+    let mean_delta = if step_count > 0 { sum_abs_all / step_count as f64 } else { 0.0 };
+    let seq_rmssd = if seq_count > 0 { (sum_sq_seq / seq_count as f64).sqrt() } else { rmssd_all };
+    let rand_rmssd = if rand_count > 0 { (sum_sq_rand / rand_count as f64).sqrt() } else { seq_rmssd };
+    let mut resonance_ratio = if rand_count > 0 {
+        rand_rmssd / seq_rmssd.max(0.25)
+    } else {
+        peak_delta / median_ms.max(0.25)
+    };
+    if !resonance_ratio.is_finite() { resonance_ratio = 1.0; }
+
+    let ref_jitter = if is_solid_state { 6.0 } else { 18.0 };
+    let score = dsp_clamp(
+        dsp_clamp((rmssd_all / ref_jitter) * 42.0, 0.0, 55.0)
+            + dsp_clamp(micro_stall_bursts as f64 * 8.5, 0.0, 30.0)
+            + dsp_clamp((peak_delta / (ref_jitter * 5.0)) * 15.0, 0.0, 15.0),
+        0.0,
+        100.0,
+    );
+
+    let (grade, summary) = if score >= 70.0 {
+        (3u32, if is_solid_state { "Severe FTL GC/die-stall spikes detected" } else { "Severe actuator seek settling oscillation detected" })
+    } else if score >= 42.0 {
+        (2u32, if is_solid_state { "Elevated NAND write-amplification / GC latency jitter" } else { "Moderate mechanical seek-jitter / track retry resonance" })
+    } else if score >= 18.0 {
+        (1u32, if is_solid_state { "Mild controller queue jitter within normal tolerance" } else { "Minor rotational seek step variance" })
+    } else {
+        (0u32, if is_solid_state { "Low NAND latency variance (FTL stable)" } else { "Quiet sequential seek track profile" })
+    };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "validSampleCount": valid_lats.len() as u32,
+        "consecutiveStepCount": step_count,
+        "microStallBurstCount": micro_stall_bursts,
+        "strideJumpCount": stride_jumps,
+        "acousticGradeCode": grade,
+        "rmssdJitterMs": rmssd_all,
+        "meanStepDeltaMs": mean_delta,
+        "peakStepDeltaMs": peak_delta,
+        "sequentialJitterMs": seq_rmssd,
+        "randomSeekJitterMs": rand_rmssd,
+        "resonanceRatio": resonance_ratio,
+        "acousticInstabilityScore": score,
+        "diagnosticSummary": summary
+    }))
+}
+
+#[tauri::command]
+fn evaluate_thermal_wear_stress(input: PredictiveThermalArgs) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_predictive_dll() {
+            let c_in = DspThermalWearInputC {
+                media_type: input.media_type,
+                current_temp_celsius: input.current_temp_celsius,
+                peak_temp_celsius: input.peak_temp_celsius,
+                warning_temp_time_min: input.warning_temp_time_min,
+                critical_temp_time_min: input.critical_temp_time_min,
+                power_on_hours: input.power_on_hours,
+                total_tb_written: input.total_tb_written,
+                rated_tbw_limit_tb: input.rated_tbw_limit_tb,
+            };
+            let mut c_out: DspThermalWearReportC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_thermal)(&c_in, &mut c_out) } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "arrheniusAccelerationFactor": c_out.arrhenius_acceleration_factor,
+                    "sustainedThermalStressFactor": c_out.sustained_thermal_stress_factor,
+                    "effectiveAgedHours": c_out.effective_aged_hours,
+                    "dailyTbwRateGb": c_out.daily_tbw_rate_gb,
+                    "estimatedTbwRemainingYears": c_out.estimated_tbw_remaining_years,
+                    "thermalStressScore": c_out.thermal_stress_score,
+                    "thermalGradeCode": c_out.thermal_grade_code,
+                    "thermalSummary": c_buf_to_string(&c_out.thermal_summary)
+                }));
+            }
+        }
+    }
+
+    let ea_over_kb = 8123.166;
+    let t_ref_k = 35.0 + 273.15;
+    let cur_c = if input.current_temp_celsius > 0 && input.current_temp_celsius < 150 {
+        input.current_temp_celsius as f64
+    } else {
+        35.0
+    };
+    let t_op_k = cur_c + 273.15;
+    let af = dsp_clamp(ea_over_kb * ((1.0 / t_ref_k) - (1.0 / t_op_k)), -5.0, 5.0).exp();
+
+    let total_min = if input.power_on_hours > 0 { input.power_on_hours as f64 * 60.0 } else { 60.0 };
+    let warn_ratio = dsp_clamp(input.warning_temp_time_min as f64 / total_min, 0.0, 1.0);
+    let crit_ratio = dsp_clamp(input.critical_temp_time_min as f64 / total_min, 0.0, 1.0);
+    let excursion_boost = 1.0 + warn_ratio * 1.4 + crit_ratio * 3.8;
+    let sustained_factor = dsp_clamp((0.65 * af + 0.35) * excursion_boost, 0.3, 12.0);
+    let effective_hours = input.power_on_hours as f64 * sustained_factor;
+
+    let mut daily_tbw_gb = 0.0;
+    let mut tbw_rem_years = -1.0;
+    if input.power_on_hours > 0 && input.total_tb_written.is_finite() && input.total_tb_written > 0.0 {
+        let days_active = (input.power_on_hours as f64 / 24.0).max(0.05);
+        daily_tbw_gb = (input.total_tb_written * 1000.0) / days_active;
+        if input.rated_tbw_limit_tb.is_finite() && input.rated_tbw_limit_tb > 0.0 {
+            let rem_tb = input.rated_tbw_limit_tb - input.total_tb_written;
+            if rem_tb <= 0.0 {
+                tbw_rem_years = 0.0;
+            } else if daily_tbw_gb > 0.001 {
+                tbw_rem_years = dsp_clamp(((rem_tb * 1000.0) / daily_tbw_gb) / 365.25, 0.0, 99.0);
+            }
+        }
+    }
+
+    let wear_pressure = if input.rated_tbw_limit_tb.is_finite()
+        && input.rated_tbw_limit_tb > 0.0
+        && input.total_tb_written.is_finite()
+        && input.total_tb_written > 0.0
+    {
+        dsp_clamp((input.total_tb_written / input.rated_tbw_limit_tb) * 35.0, 0.0, 35.0)
+    } else {
+        0.0
+    };
+    let thermal_comp = dsp_clamp(
+        (sustained_factor - 1.0) * 18.0 + if cur_c > 45.0 { (cur_c - 45.0) * 1.8 } else { 0.0 },
+        0.0,
+        65.0,
+    );
+    let stress_score = dsp_clamp(thermal_comp + wear_pressure, 0.0, 100.0);
+
+    let (grade, summary) = if cur_c >= 65.0 || input.critical_temp_time_min >= 15 || stress_score >= 75.0 {
+        (4u32, "Critical thermal acceleration or TBW endurance saturation")
+    } else if cur_c >= 55.0 || input.warning_temp_time_min >= 60 || stress_score >= 50.0 {
+        (3u32, "High sustained thermal stress accelerating cell/lubricant aging")
+    } else if cur_c >= 46.0 || stress_score >= 25.0 {
+        (2u32, "Moderate thermal load; verify chassis airflow under sustained I/O")
+    } else if stress_score >= 10.0 {
+        (1u32, "Acceptable thermal aging factor")
+    } else {
+        (0u32, "Optimal thermal headroom (Arrhenius AF ~ 1.0x)")
+    };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "arrheniusAccelerationFactor": af,
+        "sustainedThermalStressFactor": sustained_factor,
+        "effectiveAgedHours": effective_hours,
+        "dailyTbwRateGb": daily_tbw_gb,
+        "estimatedTbwRemainingYears": tbw_rem_years,
+        "thermalStressScore": stress_score,
+        "thermalGradeCode": grade,
+        "thermalSummary": summary
+    }))
+}
+
+#[tauri::command]
+fn project_smart_degradation_trend(
+    points: Vec<PredictiveHistoryPointArg>,
+    warning_threshold: f64,
+    critical_threshold: f64,
+    lower_is_worse: bool,
+) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_predictive_dll() {
+            let c_pts: Vec<DspSmartHistoryPointC> = points
+                .iter()
+                .map(|p| DspSmartHistoryPointC {
+                    timestamp_sec: p.timestamp_sec,
+                    value: p.value,
+                })
+                .collect();
+            let mut c_out: DspSmartTrendProjectionC = unsafe { std::mem::zeroed() };
+            let ptr = if c_pts.is_empty() { std::ptr::null() } else { c_pts.as_ptr() };
+            if unsafe {
+                (dll.fn_trend)(
+                    ptr,
+                    c_pts.len() as u32,
+                    warning_threshold,
+                    critical_threshold,
+                    if lower_is_worse { 1 } else { 0 },
+                    &mut c_out,
+                )
+            } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "validPointCount": c_out.valid_point_count,
+                    "trendDirection": c_out.trend_direction,
+                    "isStatisticallySignificant": c_out.is_statistically_significant != 0,
+                    "observationSpanDays": c_out.observation_span_days,
+                    "latestValue": c_out.latest_value,
+                    "slopePerDay": c_out.slope_per_day,
+                    "interceptValue": c_out.intercept_value,
+                    "rSquared": c_out.r_squared,
+                    "projectedValue30d": c_out.projected_value_30d,
+                    "projectedDaysToWarning": c_out.projected_days_to_warning,
+                    "projectedDaysToCritical": c_out.projected_days_to_critical
+                }));
+            }
+        }
+    }
+
+    let (valid_n, dir, sig, span_days, latest_val, slope, intercept, r2, proj30, days_warn, days_crit) =
+        eval_smart_trend_rust(&points, warning_threshold, critical_threshold, lower_is_worse);
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "validPointCount": valid_n,
+        "trendDirection": dir,
+        "isStatisticallySignificant": sig,
+        "observationSpanDays": span_days,
+        "latestValue": latest_val,
+        "slopePerDay": slope,
+        "interceptValue": intercept,
+        "rSquared": r2,
+        "projectedValue30d": proj30,
+        "projectedDaysToWarning": days_warn,
+        "projectedDaysToCritical": days_crit
+    }))
+}
+
+// ===========================================================================
+// Pure Creative Compute & Forensics DLL Bridge (DiskSentinelForensics.dll)
+// ===========================================================================
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfEngineInfoC {
+    engine_name: [u8; 48],
+    version: [u8; 16],
+    capabilities_mask: u32,
+    crc32_self_test_value: u32,
+    crc32_self_test_passed: u8,
+    reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfTelemetrySampleC {
+    lba: u64,
+    block_id: u32,
+    status_code: u32,
+    latency_ms: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfContiguousZoneC {
+    start_lba: u64,
+    end_lba: u64,
+    start_block_id: u32,
+    end_block_id: u32,
+    block_count: u32,
+    bad_count: u32,
+    avg_latency_ms: f64,
+    peak_latency_ms: f64,
+    peak_z_score: f64,
+    severity: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfZScoreReportC {
+    total_samples: u32,
+    slow_or_bad_count: u32,
+    within_1_sigma_count: u32,
+    sigma_1_to_2_count: u32,
+    sigma_2_to_3_count: u32,
+    over_3_sigma_count: u32,
+    contiguous_zone_count: u32,
+    longest_run_blocks: u32,
+    risk_level: u32,
+    reserved: u32,
+    mean_ms: f64,
+    std_dev_ms: f64,
+    max_latency_ms: f64,
+    degradation_risk_score: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfExtentInputC {
+    start_lba: u64,
+    sector_count: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfHeatmapSummaryC {
+    total_extents: u32,
+    impacted_extent_count: u32,
+    peak_cell_index: u32,
+    total_bad_hits: u32,
+    total_sectors_mapped: u64,
+    peak_cell_density_pct: f64,
+    fragmentation_spread_score: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfSectorEntropyResultC {
+    inspected_bytes: u32,
+    crc32: u32,
+    repeating_word32: u32,
+    sector_class: u32,
+    shannon_entropy: f64,
+    zero_byte_ratio: f64,
+    ff_byte_ratio: f64,
+    printable_ratio: f64,
+    has_repeating_pattern: u8,
+    is_all_zero: u8,
+    is_all_ff: u8,
+    reserved: [u8; 5],
+    classification_label: [u8; 48],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfPartitionRecordC {
+    index: u32,
+    sector_aligned_4k: u32,
+    start_lba: u64,
+    end_lba: u64,
+    sector_count: u64,
+    size_bytes: u64,
+    mbr_type_byte: u8,
+    is_bootable: u8,
+    is_gpt: u8,
+    reserved: [u8; 5],
+    type_label: [u8; 48],
+    name_utf8: [u8; 72],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfPartitionTableReportC {
+    sector_size: u32,
+    partition_count: u32,
+    has_mbr_signature: u8,
+    has_gpt_header: u8,
+    gpt_header_crc_valid: u8,
+    gpt_entries_crc_valid: u8,
+    is_protective_mbr: u8,
+    reserved: [u8; 3],
+    stored_header_crc32: u32,
+    computed_header_crc32: u32,
+    stored_entries_crc32: u32,
+    computed_entries_crc32: u32,
+    first_usable_lba: u64,
+    last_usable_lba: u64,
+    scheme_name: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsfVbrInfoC {
+    fs_type: u32,
+    bytes_per_sector: u32,
+    sectors_per_cluster: u32,
+    cluster_size_bytes: u32,
+    reserved_sectors: u32,
+    root_cluster: u32,
+    total_sectors: u64,
+    mft_start_lcn: u64,
+    has_boot_signature: u8,
+    reserved: [u8; 7],
+    oem_id: [u8; 16],
+}
+
+#[cfg(windows)]
+struct ForensicsDllDispatch {
+    loaded_path: String,
+    fn_info: unsafe extern "system" fn(*mut DsfEngineInfoC) -> bool,
+    fn_zscore: unsafe extern "system" fn(
+        *const DsfTelemetrySampleC,
+        u32,
+        f64,
+        u32,
+        *mut DsfZScoreReportC,
+        *mut DsfContiguousZoneC,
+        u32,
+        *mut u32,
+    ) -> bool,
+    fn_heatmap: unsafe extern "system" fn(
+        *const DsfExtentInputC,
+        u32,
+        *const u64,
+        u32,
+        bool,
+        u32,
+        *mut u32,
+        *mut f64,
+        *mut DsfHeatmapSummaryC,
+    ) -> bool,
+    fn_entropy: unsafe extern "system" fn(*const u8, u32, *mut DsfSectorEntropyResultC) -> bool,
+    fn_partition: unsafe extern "system" fn(
+        *const u8,
+        u32,
+        u32,
+        *mut DsfPartitionTableReportC,
+        *mut DsfPartitionRecordC,
+        u32,
+    ) -> bool,
+    fn_vbr: unsafe extern "system" fn(*const u8, u32, *mut DsfVbrInfoC) -> bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for ForensicsDllDispatch {}
+#[cfg(windows)]
+unsafe impl Sync for ForensicsDllDispatch {}
+
+#[cfg(windows)]
+static FORENSICS_DLL_DISPATCH: std::sync::OnceLock<Option<ForensicsDllDispatch>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn get_forensics_dll() -> Option<&'static ForensicsDllDispatch> {
+    FORENSICS_DLL_DISPATCH
+        .get_or_init(|| {
+            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidates.push(dir.join("DiskSentinelForensics.dll"));
+                    candidates.push(dir.join("resources").join("DiskSentinelForensics.dll"));
+                    candidates.push(dir.join("_up_").join("bin").join("native").join("DiskSentinelForensics.dll"));
+                }
+            }
+            candidates.push(std::path::PathBuf::from("bin\\native\\DiskSentinelForensics.dll"));
+            candidates.push(std::path::PathBuf::from("DiskSentinelForensics.dll"));
+
+            for path in candidates {
+                let path_str = path.to_string_lossy().to_string();
+                let mut wide: Vec<u16> = path_str.encode_utf16().collect();
+                wide.push(0);
+                let hmod = unsafe { LoadLibraryW(wide.as_ptr()) };
+                if hmod == 0 {
+                    continue;
+                }
+
+                unsafe {
+                    let p_info = GetProcAddress(hmod, b"DSF_GetForensicsEngineInfo\0".as_ptr());
+                    let p_zscore = GetProcAddress(hmod, b"DSF_AnalyzeSectorTelemetryZScore\0".as_ptr());
+                    let p_heatmap = GetProcAddress(hmod, b"DSF_ComputeExtentBadDensityHeatmap\0".as_ptr());
+                    let p_entropy = GetProcAddress(hmod, b"DSF_ComputeSectorEntropyAndPattern\0".as_ptr());
+                    let p_partition = GetProcAddress(hmod, b"DSF_InspectBootAndPartitionTable\0".as_ptr());
+                    let p_vbr = GetProcAddress(hmod, b"DSF_InspectVbrBootSector\0".as_ptr());
+
+                    if let (
+                        Some(f_info),
+                        Some(f_zscore),
+                        Some(f_heatmap),
+                        Some(f_entropy),
+                        Some(f_partition),
+                        Some(f_vbr),
+                    ) = (p_info, p_zscore, p_heatmap, p_entropy, p_partition, p_vbr)
+                    {
+                        return Some(ForensicsDllDispatch {
+                            loaded_path: path_str,
+                            fn_info: std::mem::transmute(f_info),
+                            fn_zscore: std::mem::transmute(f_zscore),
+                            fn_heatmap: std::mem::transmute(f_heatmap),
+                            fn_entropy: std::mem::transmute(f_entropy),
+                            fn_partition: std::mem::transmute(f_partition),
+                            fn_vbr: std::mem::transmute(f_vbr),
+                        });
+                    }
+                    FreeLibrary(hmod);
+                }
+            }
+            None
+        })
+        .as_ref()
+}
+
+fn dsf_crc32_ieee_rust(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = if (crc & 1) != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForensicsTelemetrySampleArg {
+    lba: u64,
+    block_id: u32,
+    status_code: u32,
+    latency_ms: f64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForensicsExtentInputArg {
+    start_lba: u64,
+    sector_count: u64,
+}
+
+#[tauri::command]
+fn inspect_forensics_dll_status() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_forensics_dll() {
+            let mut info: DsfEngineInfoC = unsafe { std::mem::zeroed() };
+            let ok = unsafe { (dll.fn_info)(&mut info) };
+            if ok {
+                return serde_json::json!({
+                    "dllLoaded": true,
+                    "engineSource": "native-cpp-dll",
+                    "loadedPath": dll.loaded_path,
+                    "engineName": c_buf_to_string(&info.engine_name),
+                    "version": c_buf_to_string(&info.version),
+                    "capabilitiesMask": info.capabilities_mask,
+                    "crc32SelfTestValue": info.crc32_self_test_value,
+                    "crc32SelfTestPassed": info.crc32_self_test_passed != 0
+                });
+            }
+        }
+    }
+
+    let check_crc = dsf_crc32_ieee_rust(b"123456789");
+    serde_json::json!({
+        "dllLoaded": false,
+        "engineSource": "rust-parity-fallback",
+        "loadedPath": null,
+        "engineName": "DiskSentinelForensics Rust Parity Engine",
+        "version": "4.6.0",
+        "capabilitiesMask": 0b11111,
+        "crc32SelfTestValue": check_crc,
+        "crc32SelfTestPassed": check_crc == 0xCBF43926
+    })
+}
+
+#[tauri::command]
+fn analyze_forensics_sector_zscore(
+    samples: Vec<ForensicsTelemetrySampleArg>,
+    baseline_expected_ms: f64,
+    max_block_id_gap: u32,
+) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_forensics_dll() {
+            let c_samples: Vec<DsfTelemetrySampleC> = samples
+                .iter()
+                .map(|s| DsfTelemetrySampleC {
+                    lba: s.lba,
+                    block_id: s.block_id,
+                    status_code: s.status_code,
+                    latency_ms: s.latency_ms,
+                })
+                .collect();
+            let mut report: DsfZScoreReportC = unsafe { std::mem::zeroed() };
+            let mut zones = vec![unsafe { std::mem::zeroed::<DsfContiguousZoneC>() }; 64];
+            let mut written_zones: u32 = 0;
+            let ptr = if c_samples.is_empty() { std::ptr::null() } else { c_samples.as_ptr() };
+            if unsafe {
+                (dll.fn_zscore)(
+                    ptr,
+                    c_samples.len() as u32,
+                    baseline_expected_ms,
+                    max_block_id_gap,
+                    &mut report,
+                    zones.as_mut_ptr(),
+                    zones.len() as u32,
+                    &mut written_zones,
+                )
+            } {
+                let zones_json: Vec<serde_json::Value> = zones[..(written_zones as usize).min(zones.len())]
+                    .iter()
+                    .map(|z| {
+                        serde_json::json!({
+                            "startLba": z.start_lba,
+                            "endLba": z.end_lba,
+                            "startBlockId": z.start_block_id,
+                            "endBlockId": z.end_block_id,
+                            "blockCount": z.block_count,
+                            "badCount": z.bad_count,
+                            "avgLatencyMs": z.avg_latency_ms,
+                            "peakLatencyMs": z.peak_latency_ms,
+                            "peakZScore": z.peak_z_score,
+                            "severity": z.severity
+                        })
+                    })
+                    .collect();
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "totalSamples": report.total_samples,
+                    "slowOrBadCount": report.slow_or_bad_count,
+                    "within1SigmaCount": report.within_1_sigma_count,
+                    "sigma1To2Count": report.sigma_1_to_2_count,
+                    "sigma2To3Count": report.sigma_2_to_3_count,
+                    "over3SigmaCount": report.over_3_sigma_count,
+                    "contiguousZoneCount": report.contiguous_zone_count,
+                    "longestRunBlocks": report.longest_run_blocks,
+                    "riskLevel": report.risk_level,
+                    "meanMs": report.mean_ms,
+                    "stdDevMs": report.std_dev_ms,
+                    "maxLatencyMs": report.max_latency_ms,
+                    "degradationRiskScore": report.degradation_risk_score,
+                    "zones": zones_json
+                }));
+            }
+        }
+    }
+
+    if samples.is_empty() {
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "totalSamples": 0,
+            "slowOrBadCount": 0,
+            "within1SigmaCount": 0,
+            "sigma1To2Count": 0,
+            "sigma2To3Count": 0,
+            "over3SigmaCount": 0,
+            "contiguousZoneCount": 0,
+            "longestRunBlocks": 0,
+            "riskLevel": 0,
+            "meanMs": 0.0,
+            "stdDevMs": 0.0,
+            "maxLatencyMs": 0.0,
+            "degradationRiskScore": 0.0,
+            "zones": []
+        }));
+    }
+
+    let safe_gap = max_block_id_gap.max(1);
+    let safe_baseline = if baseline_expected_ms > 0.1 { baseline_expected_ms } else { 1.0 };
+
+    let mut mean = 0.0f64;
+    let mut m2 = 0.0f64;
+    let mut max_lat = 0.0f64;
+    let mut valid_n = 0u32;
+    let mut slow_bad_count = 0u32;
+    let mut needs_sort = false;
+
+    for (i, s) in samples.iter().enumerate() {
+        if i > 0 && s.block_id < samples[i - 1].block_id {
+            needs_sort = true;
+        }
+        if s.status_code >= 2 {
+            slow_bad_count += 1;
+        }
+        if !s.latency_ms.is_finite() || s.latency_ms < 0.0 {
+            continue;
+        }
+        valid_n += 1;
+        let delta = s.latency_ms - mean;
+        mean += delta / valid_n as f64;
+        let delta2 = s.latency_ms - mean;
+        m2 += delta * delta2;
+        if s.latency_ms > max_lat {
+            max_lat = s.latency_ms;
+        }
+    }
+
+    let variance = if valid_n > 1 { m2 / (valid_n - 1) as f64 } else { 0.0 };
+    let std_dev = variance.max(0.0).sqrt();
+    let eff_std_dev = std_dev.max(0.05);
+
+    let mut ordered_indices: Vec<usize> = (0..samples.len()).collect();
+    if needs_sort && samples.len() > 1 {
+        ordered_indices.sort_by(|&a, &b| {
+            samples[a]
+                .block_id
+                .cmp(&samples[b].block_id)
+                .then_with(|| samples[a].lba.cmp(&samples[b].lba))
+        });
+    }
+
+    let mut w1 = 0u32;
+    let mut s12 = 0u32;
+    let mut s23 = 0u32;
+    let mut s3p = 0u32;
+    let mut zones_out: Vec<serde_json::Value> = Vec::new();
+    let mut total_zones = 0u32;
+    let mut longest_run = 0u32;
+
+    let mut in_run = false;
+    let mut z_start_lba = 0u64;
+    let mut z_end_lba = 0u64;
+    let mut z_start_blk = 0u32;
+    let mut z_end_blk = 0u32;
+    let mut z_blk_cnt = 0u32;
+    let mut z_bad_cnt = 0u32;
+    let mut z_peak_lat = 0.0f64;
+    let mut z_peak_z = 0.0f64;
+    let mut z_sev = 1u32;
+    let mut z_lat_sum = 0.0f64;
+
+    let flush_zone = |in_run: &mut bool,
+                      z_blk_cnt: u32,
+                      z_bad_cnt: u32,
+                      z_start_lba: u64,
+                      z_end_lba: u64,
+                      z_start_blk: u32,
+                      z_end_blk: u32,
+                      z_peak_lat: f64,
+                      z_peak_z: f64,
+                      z_sev: u32,
+                      z_lat_sum: &mut f64,
+                      longest_run: &mut u32,
+                      total_zones: &mut u32,
+                      zones_out: &mut Vec<serde_json::Value>| {
+        if !*in_run {
+            return;
+        }
+        if z_blk_cnt >= 2 || z_bad_cnt >= 1 {
+            let avg_lat = *z_lat_sum / (z_blk_cnt.max(1) as f64);
+            if z_blk_cnt > *longest_run {
+                *longest_run = z_blk_cnt;
+            }
+            if zones_out.len() < 64 {
+                zones_out.push(serde_json::json!({
+                    "startLba": z_start_lba,
+                    "endLba": z_end_lba,
+                    "startBlockId": z_start_blk,
+                    "endBlockId": z_end_blk,
+                    "blockCount": z_blk_cnt,
+                    "badCount": z_bad_cnt,
+                    "avgLatencyMs": avg_lat,
+                    "peakLatencyMs": z_peak_lat,
+                    "peakZScore": z_peak_z,
+                    "severity": z_sev
+                }));
+            }
+            *total_zones += 1;
+        }
+        *in_run = false;
+        *z_lat_sum = 0.0;
+    };
+
+    for idx in ordered_indices {
+        let s = &samples[idx];
+        let is_bad = s.status_code >= 4;
+        let lat_valid = s.latency_ms.is_finite() && s.latency_ms >= 0.0;
+        let lat = if lat_valid { s.latency_ms } else { 0.0 };
+        let z = if valid_n > 0 && lat_valid {
+            (lat - mean) / eff_std_dev
+        } else {
+            0.0
+        };
+        if valid_n > 0 && lat_valid {
+            if z <= 1.0 { w1 += 1; }
+            else if z <= 2.0 { s12 += 1; }
+            else if z <= 3.0 { s23 += 1; }
+            else { s3p += 1; }
+        }
+        let is_anom = s.status_code >= 2 || (z >= 2.5 && lat >= safe_baseline * 2.0);
+        if is_anom {
+            if !in_run {
+                in_run = true;
+                z_start_lba = s.lba;
+                z_end_lba = s.lba;
+                z_start_blk = s.block_id;
+                z_end_blk = s.block_id;
+                z_blk_cnt = 1;
+                z_bad_cnt = if is_bad { 1 } else { 0 };
+                z_peak_lat = lat;
+                z_peak_z = z;
+                z_sev = if is_bad { 2 } else { 1 };
+                z_lat_sum = lat;
+            } else {
+                let gap = if s.block_id >= z_end_blk { s.block_id - z_end_blk } else { safe_gap + 1 };
+                if gap <= safe_gap {
+                    z_end_lba = s.lba;
+                    z_end_blk = s.block_id;
+                    z_blk_cnt += 1;
+                    if is_bad { z_bad_cnt += 1; z_sev = 2; }
+                    if lat > z_peak_lat { z_peak_lat = lat; }
+                    if z > z_peak_z { z_peak_z = z; }
+                    z_lat_sum += lat;
+                } else {
+                    flush_zone(
+                        &mut in_run, z_blk_cnt, z_bad_cnt, z_start_lba, z_end_lba,
+                        z_start_blk, z_end_blk, z_peak_lat, z_peak_z, z_sev, &mut z_lat_sum,
+                        &mut longest_run, &mut total_zones, &mut zones_out,
+                    );
+                    in_run = true;
+                    z_start_lba = s.lba;
+                    z_end_lba = s.lba;
+                    z_start_blk = s.block_id;
+                    z_end_blk = s.block_id;
+                    z_blk_cnt = 1;
+                    z_bad_cnt = if is_bad { 1 } else { 0 };
+                    z_peak_lat = lat;
+                    z_peak_z = z;
+                    z_sev = if is_bad { 2 } else { 1 };
+                    z_lat_sum = lat;
+                }
+            }
+        } else {
+            flush_zone(
+                &mut in_run, z_blk_cnt, z_bad_cnt, z_start_lba, z_end_lba,
+                z_start_blk, z_end_blk, z_peak_lat, z_peak_z, z_sev, &mut z_lat_sum,
+                &mut longest_run, &mut total_zones, &mut zones_out,
+            );
+        }
+    }
+    flush_zone(
+        &mut in_run, z_blk_cnt, z_bad_cnt, z_start_lba, z_end_lba,
+        z_start_blk, z_end_blk, z_peak_lat, z_peak_z, z_sev, &mut z_lat_sum,
+        &mut longest_run, &mut total_zones, &mut zones_out,
+    );
+
+    let sample_cnt = samples.len() as f64;
+    let slow_pct = (slow_bad_count as f64 * 100.0) / sample_cnt;
+    let outlier_pct = ((s23 + s3p) as f64 * 100.0) / sample_cnt;
+    let cluster_pen = (total_zones as f64 * 7.5) + (longest_run as f64 * 2.5);
+    let score = dsp_clamp(slow_pct * 3.0 + outlier_pct * 1.4 + cluster_pen, 0.0, 100.0);
+    let risk: u32 = if score >= 70.0 || longest_run >= 8 { 4 }
+        else if score >= 45.0 || total_zones >= 3 { 3 }
+        else if score >= 20.0 || total_zones >= 1 { 2 }
+        else if score >= 5.0 || slow_bad_count > 0 { 1 }
+        else { 0 };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "totalSamples": samples.len() as u32,
+        "slowOrBadCount": slow_bad_count,
+        "within1SigmaCount": w1,
+        "sigma1To2Count": s12,
+        "sigma2To3Count": s23,
+        "over3SigmaCount": s3p,
+        "contiguousZoneCount": total_zones,
+        "longestRunBlocks": longest_run,
+        "riskLevel": risk,
+        "meanMs": mean,
+        "stdDevMs": std_dev,
+        "maxLatencyMs": max_lat,
+        "degradationRiskScore": score,
+        "zones": zones_out
+    }))
+}
+
+#[tauri::command]
+fn compute_forensics_extent_heatmap(
+    extents: Vec<ForensicsExtentInputArg>,
+    bad_lbas: Vec<u64>,
+    cell_count: u32,
+) -> Result<serde_json::Value, String> {
+    let safe_cells = cell_count.clamp(1, 4096);
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_forensics_dll() {
+            let c_ext: Vec<DsfExtentInputC> = extents
+                .iter()
+                .map(|e| DsfExtentInputC {
+                    start_lba: e.start_lba,
+                    sector_count: e.sector_count,
+                })
+                .collect();
+            let mut counts = vec![0u32; safe_cells as usize];
+            let mut densities = vec![0.0f64; safe_cells as usize];
+            let mut summary: DsfHeatmapSummaryC = unsafe { std::mem::zeroed() };
+            let ext_ptr = if c_ext.is_empty() { std::ptr::null() } else { c_ext.as_ptr() };
+            let bad_ptr = if bad_lbas.is_empty() { std::ptr::null() } else { bad_lbas.as_ptr() };
+            if unsafe {
+                (dll.fn_heatmap)(
+                    ext_ptr,
+                    c_ext.len() as u32,
+                    bad_ptr,
+                    bad_lbas.len() as u32,
+                    false,
+                    safe_cells,
+                    counts.as_mut_ptr(),
+                    densities.as_mut_ptr(),
+                    &mut summary,
+                )
+            } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "totalExtents": summary.total_extents,
+                    "impactedExtentCount": summary.impacted_extent_count,
+                    "peakCellIndex": summary.peak_cell_index,
+                    "totalBadHits": summary.total_bad_hits,
+                    "totalSectorsMapped": summary.total_sectors_mapped,
+                    "peakCellDensityPct": summary.peak_cell_density_pct,
+                    "fragmentationSpreadScore": summary.fragmentation_spread_score,
+                    "cellBadCounts": counts,
+                    "cellDensityPct": densities
+                }));
+            }
+        }
+    }
+
+    let mut counts = vec![0u32; safe_cells as usize];
+    let mut densities = vec![0.0f64; safe_cells as usize];
+    let total_sectors: u64 = extents.iter().fold(0u64, |acc, e| acc.saturating_add(e.sector_count));
+
+    if extents.is_empty() || total_sectors == 0 || bad_lbas.is_empty() {
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "totalExtents": extents.len() as u32,
+            "impactedExtentCount": 0,
+            "peakCellIndex": 0,
+            "totalBadHits": 0,
+            "totalSectorsMapped": total_sectors,
+            "peakCellDensityPct": 0.0,
+            "fragmentationSpreadScore": 0.0,
+            "cellBadCounts": counts,
+            "cellDensityPct": densities
+        }));
+    }
+
+    let mut sorted_bad = bad_lbas;
+    sorted_bad.sort_unstable();
+    let min_bad = sorted_bad[0];
+    let max_bad = sorted_bad[sorted_bad.len() - 1];
+
+    let mut impacted = 0u32;
+    let mut total_hits = 0u32;
+    let mut cum_off = 0u64;
+
+    for e in &extents {
+        if e.sector_count == 0 { continue; }
+        let ext_end = e.start_lba.saturating_add(e.sector_count);
+        if max_bad >= e.start_lba && min_bad < ext_end {
+            let lo = sorted_bad.partition_point(|&v| v < e.start_lba);
+            let hi = sorted_bad.partition_point(|&v| v < ext_end);
+            if hi > lo {
+                impacted += 1;
+                for &b in &sorted_bad[lo..hi] {
+                    let rel = cum_off.saturating_add(b - e.start_lba);
+                    let mut cidx = ((rel as f64 / total_sectors as f64) * safe_cells as f64) as usize;
+                    if cidx >= safe_cells as usize { cidx = safe_cells as usize - 1; }
+                    counts[cidx] += 1;
+                    total_hits += 1;
+                }
+            }
+        }
+        cum_off = cum_off.saturating_add(e.sector_count);
+    }
+
+    let sec_per_cell = (total_sectors as f64 / safe_cells as f64).max(1.0);
+    let mut non_zero = 0u32;
+    let mut peak_idx = 0u32;
+    let mut peak_pct = 0.0f64;
+    for c in 0..safe_cells as usize {
+        let pct = ((counts[c] as f64 / sec_per_cell) * 100.0).min(100.0);
+        densities[c] = pct;
+        if counts[c] > 0 { non_zero += 1; }
+        if pct > peak_pct { peak_pct = pct; peak_idx = c as u32; }
+    }
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "totalExtents": extents.len() as u32,
+        "impactedExtentCount": impacted,
+        "peakCellIndex": peak_idx,
+        "totalBadHits": total_hits,
+        "totalSectorsMapped": total_sectors,
+        "peakCellDensityPct": peak_pct,
+        "fragmentationSpreadScore": (non_zero as f64 * 100.0) / (safe_cells as f64),
+        "cellBadCounts": counts,
+        "cellDensityPct": densities
+    }))
+}
+
+#[tauri::command]
+fn compute_forensics_sector_entropy(bytes: Vec<u8>) -> Result<serde_json::Value, String> {
+    if bytes.is_empty() {
+        return Err("Empty sector buffer".to_string());
+    }
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_forensics_dll() {
+            let mut res: DsfSectorEntropyResultC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_entropy)(bytes.as_ptr(), bytes.len() as u32, &mut res) } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "inspectedBytes": res.inspected_bytes,
+                    "crc32": res.crc32,
+                    "repeatingWord32": res.repeating_word32,
+                    "sectorClass": res.sector_class,
+                    "shannonEntropy": res.shannon_entropy,
+                    "zeroByteRatio": res.zero_byte_ratio,
+                    "ffByteRatio": res.ff_byte_ratio,
+                    "printableRatio": res.printable_ratio,
+                    "hasRepeatingPattern": res.has_repeating_pattern != 0,
+                    "isAllZero": res.is_all_zero != 0,
+                    "isAllFF": res.is_all_ff != 0,
+                    "classificationLabel": c_buf_to_string(&res.classification_label)
+                }));
+            }
+        }
+    }
+
+    let n = bytes.len() as f64;
+    let mut hist = [0u32; 256];
+    let mut printable = 0u32;
+    for &b in &bytes {
+        hist[b as usize] += 1;
+        if (32..=126).contains(&b) || b == b'\t' || b == b'\r' || b == b'\n' {
+            printable += 1;
+        }
+    }
+    let mut entropy = 0.0f64;
+    for &cnt in &hist {
+        if cnt > 0 {
+            let p = cnt as f64 / n;
+            entropy -= p * p.log2();
+        }
+    }
+    if entropy < 0.0 { entropy = 0.0; }
+    let is_zero = hist[0] as usize == bytes.len();
+    let is_ff = hist[0xFF] as usize == bytes.len();
+
+    let mut has_pat = false;
+    let mut word0 = 0u32;
+    if bytes.len() >= 8 {
+        word0 = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        has_pat = true;
+        for chunk in bytes.chunks_exact(4).skip(1) {
+            if u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) != word0 {
+                has_pat = false;
+                break;
+            }
+        }
+        if has_pat {
+            let tail_start = bytes.len() & !3usize;
+            for (idx, &b) in bytes[tail_start..].iter().enumerate() {
+                if b != word0.to_le_bytes()[idx & 3] {
+                    has_pat = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    let print_ratio = printable as f64 / n;
+    let (s_class, label) = if is_zero {
+        (0u32, "Zero-Filled / TRIM-Deallocated Sector")
+    } else if is_ff {
+        (1u32, "Erased NAND / All-0xFF Sector")
+    } else if has_pat {
+        (2u32, "Repeating Wipe / Poison Word Pattern")
+    } else if print_ratio >= 0.85 && entropy <= 6.2 {
+        (3u32, "UTF-8 / ASCII Text or System Log")
+    } else if entropy >= 7.5 {
+        (5u32, "High-Entropy Encrypted / Compressed Data")
+    } else {
+        (4u32, "Structured Binary / Filesystem Metadata")
+    };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "inspectedBytes": bytes.len() as u32,
+        "crc32": dsf_crc32_ieee_rust(&bytes),
+        "repeatingWord32": word0,
+        "sectorClass": s_class,
+        "shannonEntropy": entropy,
+        "zeroByteRatio": hist[0] as f64 / n,
+        "ffByteRatio": hist[0xFF] as f64 / n,
+        "printableRatio": print_ratio,
+        "hasRepeatingPattern": has_pat,
+        "isAllZero": is_zero,
+        "isAllFF": is_ff,
+        "classificationLabel": label
+    }))
+}
+
+#[tauri::command]
+fn inspect_forensics_partition_table(bytes: Vec<u8>, sector_size: u32) -> Result<serde_json::Value, String> {
+    if bytes.len() < 512 {
+        return Err("Buffer smaller than 512 bytes".to_string());
+    }
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_forensics_dll() {
+            let mut rep: DsfPartitionTableReportC = unsafe { std::mem::zeroed() };
+            let mut recs = vec![unsafe { std::mem::zeroed::<DsfPartitionRecordC>() }; 128];
+            if unsafe {
+                (dll.fn_partition)(
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                    sector_size,
+                    &mut rep,
+                    recs.as_mut_ptr(),
+                    recs.len() as u32,
+                )
+            } {
+                let take_n = (rep.partition_count as usize).min(recs.len());
+                let parts: Vec<serde_json::Value> = recs[..take_n]
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "index": r.index,
+                            "sectorAligned4K": r.sector_aligned_4k != 0,
+                            "startLba": r.start_lba,
+                            "endLba": r.end_lba,
+                            "sectorCount": r.sector_count,
+                            "sizeBytes": r.size_bytes,
+                            "mbrTypeByte": r.mbr_type_byte,
+                            "isBootable": r.is_bootable != 0,
+                            "isGpt": r.is_gpt != 0,
+                            "typeLabel": c_buf_to_string(&r.type_label),
+                            "nameUtf8": c_buf_to_string(&r.name_utf8)
+                        })
+                    })
+                    .collect();
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "sectorSize": rep.sector_size,
+                    "partitionCount": rep.partition_count,
+                    "hasMbrSignature": rep.has_mbr_signature != 0,
+                    "hasGptHeader": rep.has_gpt_header != 0,
+                    "gptHeaderCrcValid": rep.gpt_header_crc_valid != 0,
+                    "gptEntriesCrcValid": rep.gpt_entries_crc_valid != 0,
+                    "isProtectiveMbr": rep.is_protective_mbr != 0,
+                    "storedHeaderCrc32": rep.stored_header_crc32,
+                    "computedHeaderCrc32": rep.computed_header_crc32,
+                    "storedEntriesCrc32": rep.stored_entries_crc32,
+                    "computedEntriesCrc32": rep.computed_entries_crc32,
+                    "firstUsableLba": rep.first_usable_lba,
+                    "lastUsableLba": rep.last_usable_lba,
+                    "schemeName": c_buf_to_string(&rep.scheme_name),
+                    "partitions": parts
+                }));
+            }
+        }
+    }
+
+    let sec_bytes = if sector_size == 4096 { 4096usize } else { 512usize };
+    let mbr_sig = bytes[510] == 0x55 && bytes[511] == 0xAA;
+    let is_protective = mbr_sig && bytes[446 + 4] == 0xEE;
+
+    if bytes.len() >= sec_bytes + 92 && &bytes[sec_bytes..sec_bytes + 8] == b"EFI PART" {
+        let hdr = &bytes[sec_bytes..];
+        let mut hdr_size = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]) as usize;
+        if hdr_size < 92 || hdr_size > sec_bytes {
+            hdr_size = 92;
+        }
+        let stored_hdr_crc = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
+        let copy_len = hdr_size.min(128).min(hdr.len());
+        let mut hdr_copy = hdr[..copy_len].to_vec();
+        if hdr_copy.len() >= 20 {
+            hdr_copy[16..20].fill(0);
+        }
+        let computed_hdr_crc = dsf_crc32_ieee_rust(&hdr_copy);
+        let first_usable = u64::from_le_bytes(hdr[40..48].try_into().unwrap_or([0; 8]));
+        let last_usable = u64::from_le_bytes(hdr[48..56].try_into().unwrap_or([0; 8]));
+        let part_lba = u64::from_le_bytes(hdr[72..80].try_into().unwrap_or([0; 8]));
+        let num_entries = u32::from_le_bytes([hdr[80], hdr[81], hdr[82], hdr[83]]) as usize;
+        let entry_size = u32::from_le_bytes([hdr[84], hdr[85], hdr[86], hdr[87]]) as usize;
+        let stored_arr_crc = u32::from_le_bytes([hdr[88], hdr[89], hdr[90], hdr[91]]);
+
+        let mut parts = Vec::new();
+        let mut computed_arr_crc = 0u32;
+        let mut arr_crc_valid = false;
+        let mut found = 0u32;
+
+        if entry_size >= 128 && entry_size <= 512 && num_entries > 0 && num_entries <= 1024 {
+            if let Some(arr_off) = (part_lba as usize).checked_mul(sec_bytes) {
+                if let Some(arr_bytes) = num_entries.checked_mul(entry_size) {
+                    if arr_off <= bytes.len() && arr_bytes <= bytes.len() - arr_off {
+                        let arr_slice = &bytes[arr_off..arr_off + arr_bytes];
+                        computed_arr_crc = dsf_crc32_ieee_rust(arr_slice);
+                        arr_crc_valid = computed_arr_crc == stored_arr_crc;
+                        for idx in 0..num_entries {
+                            let ent = &arr_slice[idx * entry_size..(idx + 1) * entry_size];
+                            if ent[..16].iter().all(|&b| b == 0) {
+                                continue;
+                            }
+                            let s_lba = u64::from_le_bytes(ent[32..40].try_into().unwrap_or([0; 8]));
+                            let e_lba = u64::from_le_bytes(ent[40..48].try_into().unwrap_or([0; 8]));
+                            if e_lba < s_lba {
+                                continue;
+                            }
+                            found += 1;
+                            if parts.len() < 128 {
+                                let scnt = (e_lba - s_lba).saturating_add(1);
+                                let units: Vec<u16> = (0..36)
+                                    .map(|k| u16::from_le_bytes([ent[56 + k * 2], ent[56 + k * 2 + 1]]))
+                                    .take_while(|&u| u != 0)
+                                    .collect();
+                                let name_utf8 = String::from_utf16_lossy(&units);
+                                let d1 = u32::from_le_bytes([ent[0], ent[1], ent[2], ent[3]]);
+                                let d2 = u16::from_le_bytes([ent[4], ent[5]]);
+                                let d3 = u16::from_le_bytes([ent[6], ent[7]]);
+                                let type_label = match (d1, d2, d3) {
+                                    (0xEBD0A0A2, 0xB9E5, 0x4433) => "Microsoft Basic Data (NTFS/exFAT)",
+                                    (0xC12A7328, 0xF81F, 0x11D2) => "EFI System Partition (ESP)",
+                                    (0xE3C9E316, 0x0B5C, 0x4DB8) => "Microsoft Reserved (MSR)",
+                                    (0xDE94BBA4, 0x06D1, 0x4D40) => "Windows Recovery Environment",
+                                    (0x0FC63DAF, 0x8483, 0x4772) => "Linux Filesystem Data",
+                                    _ => "GPT Partition",
+                                };
+                                parts.push(serde_json::json!({
+                                    "index": found,
+                                    "sectorAligned4K": s_lba.checked_mul(sec_bytes as u64).map(|b| b % 4096 == 0).unwrap_or(false),
+                                    "startLba": s_lba,
+                                    "endLba": e_lba,
+                                    "sectorCount": scnt,
+                                    "sizeBytes": scnt.saturating_mul(sec_bytes as u64),
+                                    "mbrTypeByte": 0,
+                                    "isBootable": (ent[48] & 0x04) != 0,
+                                    "isGpt": true,
+                                    "typeLabel": type_label,
+                                    "nameUtf8": name_utf8
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "sectorSize": sec_bytes as u32,
+            "partitionCount": found,
+            "hasMbrSignature": mbr_sig,
+            "hasGptHeader": true,
+            "gptHeaderCrcValid": stored_hdr_crc == computed_hdr_crc,
+            "gptEntriesCrcValid": arr_crc_valid,
+            "isProtectiveMbr": is_protective,
+            "storedHeaderCrc32": stored_hdr_crc,
+            "computedHeaderCrc32": computed_hdr_crc,
+            "storedEntriesCrc32": stored_arr_crc,
+            "computedEntriesCrc32": computed_arr_crc,
+            "firstUsableLba": first_usable,
+            "lastUsableLba": last_usable,
+            "schemeName": "GPT",
+            "partitions": parts
+        }));
+    }
+
+    if mbr_sig {
+        let mut parts = Vec::new();
+        let mut found = 0u32;
+        for p in 0..4 {
+            let ent = &bytes[446 + p * 16..446 + (p + 1) * 16];
+            let p_type = ent[4];
+            let s_lba = u32::from_le_bytes([ent[8], ent[9], ent[10], ent[11]]) as u64;
+            let cnt = u32::from_le_bytes([ent[12], ent[13], ent[14], ent[15]]) as u64;
+            if p_type == 0 || cnt == 0 {
+                continue;
+            }
+            found += 1;
+            let label = match p_type {
+                0x07 => "NTFS / exFAT",
+                0x0B | 0x0C => "FAT32",
+                0x83 => "Linux ext4/xfs",
+                0xEE => "Protective GPT",
+                _ => "MBR Partition",
+            };
+            parts.push(serde_json::json!({
+                "index": found,
+                "sectorAligned4K": (s_lba * sec_bytes as u64) % 4096 == 0,
+                "startLba": s_lba,
+                "endLba": s_lba + cnt - 1,
+                "sectorCount": cnt,
+                "sizeBytes": cnt * sec_bytes as u64,
+                "mbrTypeByte": p_type,
+                "isBootable": ent[0] == 0x80,
+                "isGpt": false,
+                "typeLabel": label,
+                "nameUtf8": format!("MBR Partition #{}", p + 1)
+            }));
+        }
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "sectorSize": sec_bytes as u32,
+            "partitionCount": found,
+            "hasMbrSignature": true,
+            "hasGptHeader": false,
+            "gptHeaderCrcValid": false,
+            "gptEntriesCrcValid": false,
+            "isProtectiveMbr": is_protective,
+            "storedHeaderCrc32": 0,
+            "computedHeaderCrc32": 0,
+            "storedEntriesCrc32": 0,
+            "computedEntriesCrc32": 0,
+            "firstUsableLba": 0,
+            "lastUsableLba": 0,
+            "schemeName": "MBR",
+            "partitions": parts
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "sectorSize": sec_bytes as u32,
+        "partitionCount": 0,
+        "hasMbrSignature": false,
+        "hasGptHeader": false,
+        "gptHeaderCrcValid": false,
+        "gptEntriesCrcValid": false,
+        "isProtectiveMbr": false,
+        "storedHeaderCrc32": 0,
+        "computedHeaderCrc32": 0,
+        "storedEntriesCrc32": 0,
+        "computedEntriesCrc32": 0,
+        "firstUsableLba": 0,
+        "lastUsableLba": 0,
+        "schemeName": "RAW/UNFORMATTED",
+        "partitions": []
+    }))
+}
+
+#[tauri::command]
+fn inspect_forensics_vbr_sector(bytes: Vec<u8>) -> Result<serde_json::Value, String> {
+    if bytes.len() < 512 {
+        return Ok(serde_json::json!({ "detected": false }));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_forensics_dll() {
+            let mut info: DsfVbrInfoC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_vbr)(bytes.as_ptr(), bytes.len() as u32, &mut info) } && info.fs_type != 0 {
+                return Ok(serde_json::json!({
+                    "detected": true,
+                    "engineSource": "native-cpp-dll",
+                    "fsType": info.fs_type,
+                    "bytesPerSector": info.bytes_per_sector,
+                    "sectorsPerCluster": info.sectors_per_cluster,
+                    "clusterSizeBytes": info.cluster_size_bytes,
+                    "reservedSectors": info.reserved_sectors,
+                    "rootCluster": info.root_cluster,
+                    "totalSectors": info.total_sectors,
+                    "mftStartLcn": info.mft_start_lcn,
+                    "hasBootSignature": info.has_boot_signature != 0,
+                    "oemId": c_buf_to_string(&info.oem_id)
+                }));
+            }
+        }
+    }
+
+    let has_sig = bytes[510] == 0x55 && bytes[511] == 0xAA;
+    let oem_id: String = bytes[3..11]
+        .iter()
+        .map(|&b| if (32..=126).contains(&b) { b as char } else { ' ' })
+        .collect::<String>()
+        .trim()
+        .to_string();
+
+    if &bytes[3..11] == b"NTFS    " {
+        let bps = u16::from_le_bytes([bytes[11], bytes[12]]) as u32;
+        let spc = bytes[13] as u32;
+        if (512..=4096).contains(&bps) && bps.is_power_of_two() && spc > 0 && spc.is_power_of_two() {
+            return Ok(serde_json::json!({
+                "detected": true,
+                "engineSource": "rust-parity-fallback",
+                "fsType": 1,
+                "bytesPerSector": bps,
+                "sectorsPerCluster": spc,
+                "clusterSizeBytes": bps * spc,
+                "reservedSectors": u16::from_le_bytes([bytes[14], bytes[15]]) as u32,
+                "rootCluster": 0,
+                "totalSectors": u64::from_le_bytes(bytes[40..48].try_into().unwrap_or([0; 8])),
+                "mftStartLcn": u64::from_le_bytes(bytes[48..56].try_into().unwrap_or([0; 8])),
+                "hasBootSignature": has_sig,
+                "oemId": oem_id
+            }));
+        }
+        return Ok(serde_json::json!({ "detected": false }));
+    }
+
+    if &bytes[3..11] == b"EXFAT   " {
+        let sec_shift = bytes[108];
+        let clus_shift = bytes[109];
+        if (9..=12).contains(&sec_shift) && clus_shift <= 25 {
+            let bps = 1u32 << sec_shift;
+            let spc = 1u32 << clus_shift;
+            if (bps as u64) * (spc as u64) <= 33_554_432 {
+                return Ok(serde_json::json!({
+                    "detected": true,
+                    "engineSource": "rust-parity-fallback",
+                    "fsType": 3,
+                    "bytesPerSector": bps,
+                    "sectorsPerCluster": spc,
+                    "clusterSizeBytes": bps * spc,
+                    "reservedSectors": 0,
+                    "rootCluster": u32::from_le_bytes([bytes[96], bytes[97], bytes[98], bytes[99]]),
+                    "totalSectors": u64::from_le_bytes(bytes[72..80].try_into().unwrap_or([0; 8])),
+                    "mftStartLcn": 0,
+                    "hasBootSignature": has_sig,
+                    "oemId": oem_id
+                }));
+            }
+        }
+        return Ok(serde_json::json!({ "detected": false }));
+    }
+
+    let has_fat32_sig = &bytes[82..87] == b"FAT32";
+    let fat_size32 = u32::from_le_bytes([bytes[36], bytes[37], bytes[38], bytes[39]]);
+    let res_secs = u16::from_le_bytes([bytes[14], bytes[15]]) as u32;
+    let num_fats = bytes[16];
+    if has_fat32_sig || (has_sig && fat_size32 > 0 && res_secs > 0 && (1..=4).contains(&num_fats)) {
+        let bps = u16::from_le_bytes([bytes[11], bytes[12]]) as u32;
+        let spc = bytes[13] as u32;
+        if (512..=4096).contains(&bps) && bps.is_power_of_two() && spc > 0 && spc.is_power_of_two() {
+            let tot16 = u16::from_le_bytes([bytes[19], bytes[20]]) as u64;
+            let tot32 = u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]) as u64;
+            return Ok(serde_json::json!({
+                "detected": true,
+                "engineSource": "rust-parity-fallback",
+                "fsType": 2,
+                "bytesPerSector": bps,
+                "sectorsPerCluster": spc,
+                "clusterSizeBytes": bps * spc,
+                "reservedSectors": res_secs,
+                "rootCluster": u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]),
+                "totalSectors": if tot16 != 0 { tot16 } else { tot32 },
+                "mftStartLcn": 0,
+                "hasBootSignature": has_sig,
+                "oemId": oem_id
+            }));
+        }
+    }
+
+    Ok(serde_json::json!({ "detected": false }))
+}
+
+// ===========================================================================
+// Pure Creative Deep Recovery, MFT Decoder & PRNG Sanitize DLL (DiskSentinelRecovery.dll)
+// ===========================================================================
+#[cfg(windows)]
+#[repr(C)]
+struct DsrEngineInfoC {
+    version: [u8; 32],
+    capability_mask: u32,
+    self_test_passed: u8,
+    reserved0: [u8; 3],
+    signature_rule_count: u32,
+    self_test_crc32: u32,
+    self_test_prng_sample: u64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsrCarveInspectionResultC {
+    inspected_bytes: u32,
+    signature_type: u32,
+    confidence_score: u32,
+    footer_detected: u8,
+    is_truncated: u8,
+    is_zero_filled: u8,
+    reserved0: u8,
+    estimated_payload_bytes: u64,
+    crc32: u32,
+    near_match_bit_flips: u32,
+    galois_parity_64: u64,
+    shannon_entropy: f64,
+    printable_ratio: f64,
+    signature_name: [u8; 64],
+    file_extension: [u8; 16],
+    footer_marker: [u8; 32],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsrNtfsDataRunC {
+    lcn_start: u64,
+    vcn_start: u64,
+    cluster_count: u64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsrNtfsMftParsedRecordC {
+    record_number: u32,
+    parent_record_number: u32,
+    in_use: u8,
+    is_directory: u8,
+    is_resident_data: u8,
+    usa_fixup_applied: u8,
+    usa_mismatch_sectors: u32,
+    best_namespace: i32,
+    data_run_count: u32,
+    file_size_bytes: u64,
+    creation_timestamp_ms: i64,
+    file_name_utf8: [u8; 256],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsrWipeVerifyReportC {
+    checked_bytes: u64,
+    verified_clean: u8,
+    reserved0: [u8; 3],
+    pattern_mode: u32,
+    residual_non_matching_bytes: u64,
+    first_mismatch_offset: i64,
+    crc32: u32,
+    reserved1: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsrDdrescueIntervalC {
+    start_lba: u64,
+    sector_count: u64,
+    status_code: u32,
+    attempts: u32,
+    last_error_code: u32,
+    reserved0: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsrDdrescuePlanSummaryC {
+    coalesced_interval_count: u32,
+    suggested_phase_code: u32,
+    next_work_start_lba: u64,
+    next_work_sector_count: u32,
+    has_next_work: u8,
+    completed: u8,
+    reserved0: [u8; 2],
+    total_sectors: u64,
+    finished_sectors: u64,
+    non_tried_sectors: u64,
+    non_trimmed_sectors: u64,
+    non_scraped_sectors: u64,
+    bad_sectors: u64,
+}
+
+#[cfg(windows)]
+struct RecoveryDllDispatch {
+    loaded_path: String,
+    fn_info: unsafe extern "system" fn(*mut DsrEngineInfoC) -> bool,
+    fn_carve: unsafe extern "system" fn(*const u8, u32, *mut DsrCarveInspectionResultC) -> bool,
+    fn_scan_mft: unsafe extern "system" fn(
+        *const u8,
+        u32,
+        u32,
+        u32,
+        u64,
+        u32,
+        u64,
+        u64,
+        *mut DsrNtfsMftParsedRecordC,
+        u32,
+        *mut u32,
+        *mut DsrNtfsDataRunC,
+        u32,
+        *mut u32,
+    ) -> bool,
+    fn_gen_wipe: unsafe extern "system" fn(*mut u8, u32, u32, u8, u64, u64, *mut u32) -> bool,
+    fn_verify_wipe: unsafe extern "system" fn(*const u8, u32, u32, u8, u64, u64, *mut DsrWipeVerifyReportC) -> bool,
+    fn_plan_ddrescue: unsafe extern "system" fn(
+        *const DsrDdrescueIntervalC,
+        u32,
+        u32,
+        *mut DsrDdrescueIntervalC,
+        u32,
+        *mut DsrDdrescuePlanSummaryC,
+    ) -> bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for RecoveryDllDispatch {}
+#[cfg(windows)]
+unsafe impl Sync for RecoveryDllDispatch {}
+
+#[cfg(windows)]
+static RECOVERY_DLL_DISPATCH: std::sync::OnceLock<Option<RecoveryDllDispatch>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn get_recovery_dll() -> Option<&'static RecoveryDllDispatch> {
+    RECOVERY_DLL_DISPATCH
+        .get_or_init(|| {
+            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidates.push(dir.join("DiskSentinelRecovery.dll"));
+                    candidates.push(dir.join("resources").join("DiskSentinelRecovery.dll"));
+                    candidates.push(dir.join("_up_").join("bin").join("native").join("DiskSentinelRecovery.dll"));
+                }
+            }
+            candidates.push(std::path::PathBuf::from("bin\\native\\DiskSentinelRecovery.dll"));
+            candidates.push(std::path::PathBuf::from("DiskSentinelRecovery.dll"));
+
+            for path in candidates {
+                let path_str = path.to_string_lossy().to_string();
+                let mut wide: Vec<u16> = path_str.encode_utf16().collect();
+                wide.push(0);
+                let hmod = unsafe { LoadLibraryW(wide.as_ptr()) };
+                if hmod == 0 {
+                    continue;
+                }
+                unsafe {
+                    let p_info = GetProcAddress(hmod, b"DSR_GetRecoveryEngineInfo\0".as_ptr());
+                    let p_carve = GetProcAddress(hmod, b"DSR_InspectRecoveryCarveBuffer\0".as_ptr());
+                    let p_scan_mft = GetProcAddress(hmod, b"DSR_ScanMftBufferForCluster\0".as_ptr());
+                    let p_gen_wipe = GetProcAddress(hmod, b"DSR_GenerateWipePatternBuffer\0".as_ptr());
+                    let p_verify_wipe = GetProcAddress(hmod, b"DSR_VerifyWipedBuffer\0".as_ptr());
+                    let p_plan_dd = GetProcAddress(hmod, b"DSR_CoalesceAndPlanDdrescueIntervals\0".as_ptr());
+
+                    if let (
+                        Some(f_info),
+                        Some(f_carve),
+                        Some(f_mft),
+                        Some(f_gen),
+                        Some(f_ver),
+                        Some(f_plan),
+                    ) = (p_info, p_carve, p_scan_mft, p_gen_wipe, p_verify_wipe, p_plan_dd)
+                    {
+                        return Some(RecoveryDllDispatch {
+                            loaded_path: path_str,
+                            fn_info: std::mem::transmute(f_info),
+                            fn_carve: std::mem::transmute(f_carve),
+                            fn_scan_mft: std::mem::transmute(f_mft),
+                            fn_gen_wipe: std::mem::transmute(f_gen),
+                            fn_verify_wipe: std::mem::transmute(f_ver),
+                            fn_plan_ddrescue: std::mem::transmute(f_plan),
+                        });
+                    }
+                    FreeLibrary(hmod);
+                }
+            }
+            None
+        })
+        .as_ref()
+}
+
+fn dsr_splitmix64_rust(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+struct DsrXoshiro256Rust {
+    s: [u64; 4],
+}
+
+impl DsrXoshiro256Rust {
+    fn new(seed64: u64, lba_offset: u64) -> Self {
+        let mut sm = seed64
+            ^ lba_offset.wrapping_mul(0xD6E8_FEB8_6659_FD93)
+            ^ 0xA076_1D64_78BD_642F;
+        let mut s = [
+            dsr_splitmix64_rust(&mut sm),
+            dsr_splitmix64_rust(&mut sm),
+            dsr_splitmix64_rust(&mut sm),
+            dsr_splitmix64_rust(&mut sm),
+        ];
+        if (s[0] | s[1] | s[2] | s[3]) == 0 {
+            s = [
+                0x243F_6A88_85A3_08D3,
+                0x1319_8A2E_0370_7344,
+                0xA409_3822_299F_31D0,
+                0x082E_FA98_EC4E_6C89,
+            ];
+        }
+        Self { s }
+    }
+
+    fn next64(&mut self) -> u64 {
+        let result = self.s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
+        let t = self.s[1] << 17;
+        self.s[2] ^= self.s[0];
+        self.s[3] ^= self.s[1];
+        self.s[1] ^= self.s[2];
+        self.s[0] ^= self.s[3];
+        self.s[2] ^= t;
+        self.s[3] = self.s[3].rotate_left(45);
+        result
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryDdrescueIntervalArg {
+    start_lba: u64,
+    sector_count: u64,
+    status: String,
+    attempts: u32,
+    last_error_code: Option<u32>,
+}
+
+#[tauri::command]
+fn inspect_recovery_dll_status() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_recovery_dll() {
+            let mut info: DsrEngineInfoC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_info)(&mut info) } {
+                return serde_json::json!({
+                    "nativeDllLoaded": true,
+                    "dllPath": dll.loaded_path,
+                    "version": c_buf_to_string(&info.version),
+                    "capabilityMask": info.capability_mask,
+                    "selfTestPassed": info.self_test_passed != 0,
+                    "signatureRuleCount": info.signature_rule_count,
+                    "selfTestCrc32": info.self_test_crc32,
+                    "selfTestPrngSample": info.self_test_prng_sample.to_string()
+                });
+            }
+        }
+    }
+
+    let crc = dsf_crc32_ieee_rust(b"123456789");
+    let mut rng = DsrXoshiro256Rust::new(0x2026_0406, 0);
+    let sample = rng.next64();
+    serde_json::json!({
+        "nativeDllLoaded": false,
+        "dllPath": serde_json::Value::Null,
+        "version": "4.6.0-rust-parity",
+        "capabilityMask": 0x0F,
+        "selfTestPassed": crc == 0xCBF4_3926,
+        "signatureRuleCount": 16,
+        "selfTestCrc32": crc,
+        "selfTestPrngSample": sample.to_string()
+    })
+}
+
+#[tauri::command]
+fn analyze_recovery_carve_buffer(bytes: Vec<u8>) -> Result<serde_json::Value, String> {
+    if bytes.is_empty() {
+        return Err("Empty recovery inspection buffer".to_string());
+    }
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_recovery_dll() {
+            let mut res: DsrCarveInspectionResultC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_carve)(bytes.as_ptr(), bytes.len() as u32, &mut res) } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "inspectedBytes": res.inspected_bytes,
+                    "signatureType": res.signature_type,
+                    "confidenceScore": res.confidence_score,
+                    "footerDetected": res.footer_detected != 0,
+                    "isTruncated": res.is_truncated != 0,
+                    "isZeroFilled": res.is_zero_filled != 0,
+                    "estimatedPayloadBytes": res.estimated_payload_bytes,
+                    "crc32": res.crc32,
+                    "nearMatchBitFlips": res.near_match_bit_flips,
+                    "galoisParity64": res.galois_parity_64.to_string(),
+                    "shannonEntropy": res.shannon_entropy,
+                    "printableRatio": res.printable_ratio,
+                    "signatureName": c_buf_to_string(&res.signature_name),
+                    "fileExtension": c_buf_to_string(&res.file_extension),
+                    "footerMarker": c_buf_to_string(&res.footer_marker)
+                }));
+            }
+        }
+    }
+
+    let n = bytes.len();
+    let mut hist = [0u32; 256];
+    let mut printable = 0u32;
+    let mut zero_acc = 0u8;
+    let mut galois_parity = 0u64;
+    for (i, &b) in bytes.iter().enumerate() {
+        hist[b as usize] += 1;
+        zero_acc |= b;
+        galois_parity ^= (b as u64) << ((i & 7) * 8);
+        if (32..=126).contains(&b) || b == b'\t' || b == b'\r' || b == b'\n' {
+            printable += 1;
+        }
+    }
+    let nf = n as f64;
+    let mut entropy = 0.0f64;
+    for &c in &hist {
+        if c > 0 {
+            let p = c as f64 / nf;
+            entropy -= p * p.log2();
+        }
+    }
+    if entropy < 0.0 { entropy = 0.0; }
+    let printable_ratio = printable as f64 / nf;
+    let crc32 = dsf_crc32_ieee_rust(&bytes);
+
+    if zero_acc == 0 {
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "inspectedBytes": n,
+            "signatureType": 0,
+            "confidenceScore": 100,
+            "footerDetected": false,
+            "isTruncated": false,
+            "isZeroFilled": true,
+            "estimatedPayloadBytes": 0,
+            "crc32": crc32,
+            "nearMatchBitFlips": 0,
+            "galoisParity64": galois_parity.to_string(),
+            "shannonEntropy": entropy,
+            "printableRatio": printable_ratio,
+            "signatureName": "Zero-Filled / Deallocated Sector",
+            "fileExtension": "bin",
+            "footerMarker": ""
+        }));
+    }
+
+    let find_sub = |needle: &[u8], start: usize| -> Option<usize> {
+        if start >= bytes.len() || needle.is_empty() || bytes.len() - start < needle.len() {
+            return None;
+        }
+        bytes[start..].windows(needle.len()).position(|w| w == needle).map(|idx| start + idx)
+    };
+
+    let (sig_type, sig_name, ext, conf, footer_ok, trunc, est_bytes, footer_marker, bit_flips): (
+        u32, &str, &str, u32, bool, bool, u64, &str, u32
+    ) = if n >= 3 && bytes[..3] == [0xFF, 0xD8, 0xFF] {
+        if let Some(pos) = find_sub(&[0xFF, 0xD9], 4) {
+            (1, "JPEG Image (EXIF/JFIF)", "jpg", 98, true, false, (pos + 2) as u64, "FF D9 (JPEG EOI)", 0)
+        } else {
+            (1, "JPEG Image (EXIF/JFIF)", "jpg", 88, false, true, n as u64, "", 0)
+        }
+    } else if n >= 8 && bytes[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        if let Some(pos) = find_sub(&[0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82], 8) {
+            (2, "PNG Lossless Image", "png", 99, true, false, (pos + 8) as u64, "IEND (CRC32 OK)", 0)
+        } else {
+            (2, "PNG Lossless Image", "png", 92, false, true, n as u64, "", 0)
+        }
+    } else if n >= 5 && &bytes[..5] == b"%PDF-" {
+        if let Some(pos) = find_sub(b"%%EOF", 5) {
+            (3, "PDF Portable Document", "pdf", 97, true, false, (pos + 5) as u64, "%%EOF Trailer", 0)
+        } else {
+            (3, "PDF Portable Document", "pdf", 90, false, true, n as u64, "", 0)
+        }
+    } else if n >= 4 && bytes[..4] == [0x50, 0x4B, 0x03, 0x04] {
+        if let Some(pos) = find_sub(&[0x50, 0x4B, 0x05, 0x06], 4) {
+            (4, "ZIP / DOCX / XLSX Archive", "zip", 97, true, false, (pos + 22) as u64, "PK EOCD (0x06054B50)", 0)
+        } else {
+            (4, "ZIP / DOCX / XLSX Archive", "zip", 89, false, true, n as u64, "", 0)
+        }
+    } else if n >= 8 && &bytes[4..8] == b"ftyp" {
+        (5, "MP4 / MOV / ISO BMFF Video", "mp4", 91, false, false, n as u64, "", 0)
+    } else if n >= 12 && &bytes[..4] == b"RIFF" {
+        let riff_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as u64 + 8;
+        let (sname, sext) = if &bytes[8..12] == b"WEBP" {
+            ("RIFF WebP Image", "webp")
+        } else if &bytes[8..12] == b"WAVE" {
+            ("RIFF WAV Audio", "wav")
+        } else {
+            ("RIFF Media Container (AVI/WAV)", "avi")
+        };
+        (7, sname, sext, 93, riff_len <= n as u64, riff_len > n as u64, riff_len, "", 0)
+    } else if n >= 6 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
+        (8, "GIF Animated Image", "gif", 94, false, false, n as u64, "", 0)
+    } else if n >= 14 && bytes[0] == 0x42 && bytes[1] == 0x4D && u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]) >= 26 {
+        let bmp_len = u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]) as u64;
+        (9, "BMP Bitmap Image", "bmp", 87, bmp_len <= n as u64, bmp_len > n as u64, bmp_len, "", 0)
+    } else if n >= 6 && bytes[..6] == [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] {
+        (10, "7-Zip Compressed Archive", "7z", 96, false, false, n as u64, "", 0)
+    } else if n >= 7 && bytes[..6] == *b"Rar!\x1A\x07" {
+        (11, "RAR Archive", "rar", 95, false, false, n as u64, "", 0)
+    } else if n >= 3 && bytes[..3] == [0x1F, 0x8B, 0x08] {
+        (12, "GZIP Compressed Stream", "gz", 90, false, false, n as u64, "", 0)
+    } else if n >= 16 && &bytes[..16] == b"SQLite format 3\0" {
+        (13, "SQLite 3 Database", "sqlite", 99, false, false, n as u64, "", 0)
+    } else if n >= 4 && bytes[..4] == [0x7F, b'E', b'L', b'F'] {
+        (14, "ELF Executable / Shared Object", "elf", 95, false, false, n as u64, "", 0)
+    } else if n >= 64 && bytes[0] == b'M' && bytes[1] == b'Z' {
+        let pe_off = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]) as usize;
+        if pe_off + 4 <= n && &bytes[pe_off..pe_off + 4] == b"PE\0\0" {
+            (15, "Windows PE Executable / DLL", "exe", 96, false, false, n as u64, "", 0)
+        } else if printable_ratio >= 0.80 {
+            (6, "UTF-8 Source / System Log", "txt", (printable_ratio * 90.0) as u32, false, false, n as u64, "", 0)
+        } else {
+            (0, "Raw Binary / Unmapped Sector", "bin", 0, false, false, 0, "", 0)
+        }
+    } else if n >= 512 && &bytes[3..11] == b"NTFS    " && bytes[510] == 0x55 && bytes[511] == 0xAA {
+        (16, "NTFS Volume Boot Record ($Boot)", "vbr", 99, false, false, 512, "", 0)
+    } else {
+        let near_candidates: &[(u32, &str, &str, &[u8])] = &[
+            (2, "PNG Lossless Image (Bit-Flip Header)", "png", &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            (3, "PDF Document (Bit-Flip Header)", "pdf", b"%PDF-"),
+            (4, "ZIP/OOXML Archive (Bit-Flip Header)", "zip", &[0x50, 0x4B, 0x03, 0x04]),
+            (13, "SQLite 3 DB (Bit-Flip Header)", "sqlite", b"SQLite f"),
+        ];
+        let mut best: Option<(u32, &str, &str, u32)> = None;
+        for &(st, nm, ex, pat) in near_candidates {
+            if n < pat.len() { continue; }
+            let flips: u32 = pat.iter().enumerate().map(|(i, &p)| (bytes[i] ^ p).count_ones()).sum();
+            if flips > 0 && flips <= 2 {
+                if best.as_ref().map(|b| flips < b.3).unwrap_or(true) {
+                    best = Some((st, nm, ex, flips));
+                }
+            }
+        }
+        if let Some((st, nm, ex, flips)) = best {
+            (st, nm, ex, if flips == 1 { 72 } else { 58 }, false, false, n as u64, "", flips)
+        } else if printable_ratio >= 0.80 {
+            (6, "UTF-8 Source / System Log", "txt", (printable_ratio * 90.0) as u32, false, false, n as u64, "", 0)
+        } else {
+            (0, "Raw Binary / Unmapped Sector", "bin", 0, false, false, 0, "", 0)
+        }
+    };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "inspectedBytes": n,
+        "signatureType": sig_type,
+        "confidenceScore": conf,
+        "footerDetected": footer_ok,
+        "isTruncated": trunc,
+        "isZeroFilled": false,
+        "estimatedPayloadBytes": est_bytes,
+        "crc32": crc32,
+        "nearMatchBitFlips": bit_flips,
+        "galoisParity64": galois_parity.to_string(),
+        "shannonEntropy": entropy,
+        "printableRatio": printable_ratio,
+        "signatureName": sig_name,
+        "fileExtension": ext,
+        "footerMarker": footer_marker
+    }))
+}
+
+#[tauri::command]
+fn parse_recovery_mft_batch(
+    mft_bytes: Vec<u8>,
+    mft_record_size: u32,
+    first_record_index: u32,
+    batch_start_lba: u64,
+    sector_size: u32,
+    target_lba: u64,
+    target_lcn: u64,
+) -> Result<serde_json::Value, String> {
+    let rec_size = mft_record_size.max(512) as usize;
+    let sec_size = sector_size.max(512) as usize;
+    if mft_bytes.len() < rec_size {
+        return Ok(serde_json::json!({
+            "engineSource": "rust-parity-fallback",
+            "matchedRecords": []
+        }));
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_recovery_dll() {
+            let max_matched = 64usize;
+            let max_runs = 1024usize;
+            let mut matched = vec![unsafe { std::mem::zeroed::<DsrNtfsMftParsedRecordC>() }; max_matched];
+            let mut runs_flat = vec![unsafe { std::mem::zeroed::<DsrNtfsDataRunC>() }; max_runs];
+            let mut matched_cnt: u32 = 0;
+            let mut written_runs: u32 = 0;
+
+            if unsafe {
+                (dll.fn_scan_mft)(
+                    mft_bytes.as_ptr(),
+                    mft_bytes.len() as u32,
+                    rec_size as u32,
+                    first_record_index,
+                    batch_start_lba,
+                    sec_size as u32,
+                    target_lba,
+                    target_lcn,
+                    matched.as_mut_ptr(),
+                    max_matched as u32,
+                    &mut matched_cnt,
+                    runs_flat.as_mut_ptr(),
+                    max_runs as u32,
+                    &mut written_runs,
+                )
+            } {
+                let take_rec = (matched_cnt as usize).min(max_matched);
+                let mut run_cursor = 0usize;
+                let mut out_recs = Vec::with_capacity(take_rec);
+                for r in &matched[..take_rec] {
+                    let rc = (r.data_run_count as usize).min((written_runs as usize).saturating_sub(run_cursor));
+                    let runs_json: Vec<serde_json::Value> = runs_flat[run_cursor..run_cursor + rc]
+                        .iter()
+                        .map(|run| {
+                            serde_json::json!({
+                                "lcnStart": run.lcn_start,
+                                "vcnStart": run.vcn_start,
+                                "clusterCount": run.cluster_count
+                            })
+                        })
+                        .collect();
+                    run_cursor += rc;
+                    out_recs.push(serde_json::json!({
+                        "recordNumber": r.record_number,
+                        "parentRecordNumber": r.parent_record_number,
+                        "inUse": r.in_use != 0,
+                        "isDirectory": r.is_directory != 0,
+                        "isResidentData": r.is_resident_data != 0,
+                        "usaMismatchSectors": r.usa_mismatch_sectors,
+                        "namespace": r.best_namespace,
+                        "fileSizeBytes": r.file_size_bytes,
+                        "creationTimestampMs": if r.creation_timestamp_ms > 0 { Some(r.creation_timestamp_ms) } else { None::<i64> },
+                        "fileName": c_buf_to_string(&r.file_name_utf8),
+                        "dataRuns": runs_json
+                    }));
+                }
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "matchedRecords": out_recs
+                }));
+            }
+        }
+    }
+
+    // Rust parity fallback for NTFS MFT batch scan
+    let rec_count = mft_bytes.len() / rec_size;
+    let mut out_recs = Vec::new();
+    for i in 0..rec_count {
+        let start = i * rec_size;
+        let mut buf = mft_bytes[start..start + rec_size].to_vec();
+        if buf.len() < 512 || &buf[0..4] != b"FILE" {
+            continue;
+        }
+        let usa_off = u16::from_le_bytes([buf[4], buf[5]]) as usize;
+        let usa_cnt = u16::from_le_bytes([buf[6], buf[7]]) as usize;
+        if usa_off < 42 || usa_cnt < 2 || usa_off + usa_cnt * 2 > buf.len() {
+            continue;
+        }
+        let usn0 = buf[usa_off];
+        let usn1 = buf[usa_off + 1];
+        let mut mismatches = 0u32;
+        for s in 1..usa_cnt {
+            let end = s * 512 - 2;
+            if end + 1 >= buf.len() { break; }
+            if buf[end] == usn0 && buf[end + 1] == usn1 {
+                buf[end] = buf[usa_off + s * 2];
+                buf[end + 1] = buf[usa_off + s * 2 + 1];
+            } else {
+                mismatches += 1;
+            }
+        }
+        let flags = u16::from_le_bytes([buf[22], buf[23]]);
+        if (flags & 0x01) == 0 {
+            continue;
+        }
+        let is_dir = (flags & 0x02) != 0;
+        let first_attr = u16::from_le_bytes([buf[20], buf[21]]) as usize;
+        let bytes_used = (u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]) as usize).clamp(0, buf.len());
+        let used_end = if bytes_used == 0 { buf.len() } else { bytes_used };
+        let rec_num_raw = u32::from_le_bytes([buf[44], buf[45], buf[46], buf[47]]);
+        let rec_num = if rec_num_raw == 0 { first_record_index + i as u32 } else { rec_num_raw };
+
+        let mut best_name = String::new();
+        let mut best_ns = -1i32;
+        let mut parent_rec = 5u32;
+        let mut file_size = 0u64;
+        let mut creation_ms = 0i64;
+        let mut is_resident = false;
+        let mut runs: Vec<(u64, u64, u64)> = Vec::new();
+
+        let mut off = first_attr;
+        while off + 16 <= used_end {
+            let atype = u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+            if atype == 0xFFFF_FFFF || atype == 0 { break; }
+            let alen = u32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]) as usize;
+            if alen < 16 || off + alen > used_end { break; }
+            let non_res = buf[off + 8] != 0;
+
+            if atype == 0x10 && !non_res && alen >= 24 {
+                let clen = u32::from_le_bytes([buf[off + 16], buf[off + 17], buf[off + 18], buf[off + 19]]) as usize;
+                let coff = off + u16::from_le_bytes([buf[off + 20], buf[off + 21]]) as usize;
+                if clen >= 8 && coff + 8 <= off + alen {
+                    let ft = u64::from_le_bytes(buf[coff..coff + 8].try_into().unwrap_or([0; 8]));
+                    if ft > 116_444_736_000_000_000 {
+                        creation_ms = ((ft - 116_444_736_000_000_000) / 10_000) as i64;
+                    }
+                }
+            }
+            if atype == 0x30 && !non_res && alen >= 24 {
+                let clen = u32::from_le_bytes([buf[off + 16], buf[off + 17], buf[off + 18], buf[off + 19]]) as usize;
+                let coff = off + u16::from_le_bytes([buf[off + 20], buf[off + 21]]) as usize;
+                if clen >= 66 && coff + 66 <= off + alen {
+                    let prec = u32::from_le_bytes([buf[coff], buf[coff + 1], buf[coff + 2], buf[coff + 3]]);
+                    let rsize = u64::from_le_bytes(buf[coff + 48..coff + 56].try_into().unwrap_or([0; 8]));
+                    let nlen = buf[coff + 64] as usize;
+                    let ns = buf[coff + 65] as i32;
+                    let nstart = coff + 66;
+                    let avail = (off + alen).saturating_sub(nstart);
+                    let take_chars = nlen.min(avail / 2);
+                    let rank = |v: i32| if v == 1 || v == 3 { 3 } else if v == 0 { 2 } else { 1 };
+                    if take_chars > 0 && rank(ns) >= rank(best_ns) {
+                        let units: Vec<u16> = (0..take_chars)
+                            .map(|k| u16::from_le_bytes([buf[nstart + k * 2], buf[nstart + k * 2 + 1]]))
+                            .take_while(|&u| u != 0)
+                            .collect();
+                        best_name = String::from_utf16_lossy(&units);
+                        best_ns = ns;
+                        parent_rec = prec;
+                        if file_size == 0 && rsize > 0 { file_size = rsize; }
+                    }
+                }
+            }
+            if atype == 0x80 && buf[off + 9] == 0 {
+                if !non_res && alen >= 24 {
+                    is_resident = true;
+                    let rsz = u32::from_le_bytes([buf[off + 16], buf[off + 17], buf[off + 18], buf[off + 19]]) as u64;
+                    if rsz > 0 { file_size = rsz; }
+                } else if non_res && alen >= 64 {
+                    let rsz = u64::from_le_bytes(buf[off + 48..off + 56].try_into().unwrap_or([0; 8]));
+                    if rsz > 0 { file_size = rsz; }
+                    let rl_rel = u16::from_le_bytes([buf[off + 32], buf[off + 33]]) as usize;
+                    if rl_rel >= 64 && off + rl_rel < off + alen {
+                        let mut pos = off + rl_rel;
+                        let end_pos = off + alen;
+                        let mut prev_lcn = 0i64;
+                        let mut cur_vcn = 0u64;
+                        while pos < end_pos {
+                            let hdr = buf[pos];
+                            pos += 1;
+                            if hdr == 0 { break; }
+                            let ls = (hdr & 0x0F) as usize;
+                            let os = ((hdr >> 4) & 0x0F) as usize;
+                            if ls == 0 || ls > 8 || os > 8 || pos + ls + os > end_pos { break; }
+                            let mut ccnt = 0u64;
+                            for k in 0..ls { ccnt |= (buf[pos + k] as u64) << (k * 8); }
+                            pos += ls;
+                            let mut delta = 0u64;
+                            for k in 0..os { delta |= (buf[pos + k] as u64) << (k * 8); }
+                            if os > 0 && os < 8 && (buf[pos + os - 1] & 0x80) != 0 {
+                                delta |= !0u64 << (os * 8);
+                            }
+                            pos += os;
+                            if os > 0 && ccnt > 0 {
+                                let next_lcn = prev_lcn + (delta as i64);
+                                prev_lcn = next_lcn;
+                                if next_lcn >= 0 {
+                                    runs.push((next_lcn as u64, cur_vcn, ccnt));
+                                }
+                            }
+                            cur_vcn += ccnt;
+                        }
+                    }
+                }
+            }
+            off += alen;
+        }
+
+        let hits_ext = runs.iter().any(|&(lcn, _, cnt)| lcn <= target_lcn && (target_lcn - lcn) < cnt);
+        let rec_lba_start = batch_start_lba + (start / sec_size) as u64;
+        let rec_lba_end = batch_start_lba + ((start + rec_size - 1) / sec_size) as u64;
+        if hits_ext || (target_lba >= rec_lba_start && target_lba <= rec_lba_end) {
+            let runs_json: Vec<serde_json::Value> = runs
+                .iter()
+                .map(|&(lcn, vcn, cnt)| serde_json::json!({ "lcnStart": lcn, "vcnStart": vcn, "clusterCount": cnt }))
+                .collect();
+            out_recs.push(serde_json::json!({
+                "recordNumber": rec_num,
+                "parentRecordNumber": parent_rec,
+                "inUse": true,
+                "isDirectory": is_dir,
+                "isResidentData": is_resident,
+                "usaMismatchSectors": mismatches,
+                "namespace": best_ns,
+                "fileSizeBytes": file_size,
+                "creationTimestampMs": if creation_ms > 0 { Some(creation_ms) } else { None::<i64> },
+                "fileName": best_name,
+                "dataRuns": runs_json
+            }));
+            if out_recs.len() >= 64 { break; }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "matchedRecords": out_recs
+    }))
+}
+
+#[tauri::command]
+fn generate_recovery_wipe_pattern(
+    buffer_length: u32,
+    pattern_mode: u32,
+    constant_byte: u8,
+    seed_str: String,
+    lba_offset: u64,
+) -> Result<serde_json::Value, String> {
+    let len = buffer_length.clamp(64, 65536) as usize;
+    let seed64 = seed_str.trim().parse::<u64>().unwrap_or(0x2026_0406_0001);
+    let mut buf = vec![0u8; len];
+
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_recovery_dll() {
+            let mut crc32: u32 = 0;
+            if unsafe {
+                (dll.fn_gen_wipe)(
+                    buf.as_mut_ptr(),
+                    len as u32,
+                    pattern_mode,
+                    constant_byte,
+                    seed64,
+                    lba_offset,
+                    &mut crc32,
+                )
+            } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "bufferLength": len,
+                    "crc32": crc32,
+                    "previewBytes": buf[..len.min(64)].to_vec(),
+                    "bytes": buf
+                }));
+            }
+        }
+    }
+
+    match pattern_mode {
+        0 => buf.fill(0x00),
+        1 => buf.fill(0xFF),
+        2 => buf.fill(constant_byte),
+        _ => {
+            let mut rng = DsrXoshiro256Rust::new(seed64, lba_offset);
+            let mut idx = 0usize;
+            while idx < len {
+                let v = rng.next64().to_le_bytes();
+                let take = (len - idx).min(8);
+                buf[idx..idx + take].copy_from_slice(&v[..take]);
+                idx += take;
+            }
+        }
+    }
+    let crc32 = dsf_crc32_ieee_rust(&buf);
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "bufferLength": len,
+        "crc32": crc32,
+        "previewBytes": buf[..len.min(64)].to_vec(),
+        "bytes": buf
+    }))
+}
+
+#[tauri::command]
+fn verify_recovery_wipe_buffer(
+    bytes: Vec<u8>,
+    pattern_mode: u32,
+    constant_byte: u8,
+    seed_str: String,
+    lba_offset: u64,
+) -> Result<serde_json::Value, String> {
+    if bytes.is_empty() {
+        return Err("Empty wipe verification buffer".to_string());
+    }
+    let seed64 = seed_str.trim().parse::<u64>().unwrap_or(0x2026_0406_0001);
+
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_recovery_dll() {
+            let mut rep: DsrWipeVerifyReportC = unsafe { std::mem::zeroed() };
+            if unsafe {
+                (dll.fn_verify_wipe)(
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                    pattern_mode,
+                    constant_byte,
+                    seed64,
+                    lba_offset,
+                    &mut rep,
+                )
+            } {
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "checkedBytes": rep.checked_bytes,
+                    "verifiedClean": rep.verified_clean != 0,
+                    "patternMode": rep.pattern_mode,
+                    "residualNonMatchingBytes": rep.residual_non_matching_bytes,
+                    "firstMismatchOffset": rep.first_mismatch_offset,
+                    "crc32": rep.crc32
+                }));
+            }
+        }
+    }
+
+    let mut mismatches = 0u64;
+    let mut first_off = -1i64;
+    match pattern_mode {
+        0 | 1 | 2 => {
+            let exp = if pattern_mode == 0 { 0x00 } else if pattern_mode == 1 { 0xFF } else { constant_byte };
+            for (i, &b) in bytes.iter().enumerate() {
+                if b != exp {
+                    if first_off < 0 { first_off = i as i64; }
+                    mismatches += 1;
+                }
+            }
+        }
+        _ => {
+            let mut rng = DsrXoshiro256Rust::new(seed64, lba_offset);
+            let mut idx = 0usize;
+            while idx < bytes.len() {
+                let v = rng.next64().to_le_bytes();
+                let take = (bytes.len() - idx).min(8);
+                for k in 0..take {
+                    if bytes[idx + k] != v[k] {
+                        if first_off < 0 { first_off = (idx + k) as i64; }
+                        mismatches += 1;
+                    }
+                }
+                idx += take;
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "checkedBytes": bytes.len() as u64,
+        "verifiedClean": mismatches == 0,
+        "patternMode": pattern_mode,
+        "residualNonMatchingBytes": mismatches,
+        "firstMismatchOffset": first_off,
+        "crc32": dsf_crc32_ieee_rust(&bytes)
+    }))
+}
+
+#[tauri::command]
+fn plan_recovery_ddrescue_intervals(
+    intervals: Vec<RecoveryDdrescueIntervalArg>,
+    chunk_sectors: u32,
+) -> Result<serde_json::Value, String> {
+    let status_to_code = |s: &str| -> u32 {
+        match s {
+            "non_tried" => 0,
+            "non_trimmed" => 1,
+            "non_scraped" => 2,
+            "bad_sector" => 3,
+            "finished" => 4,
+            _ => 0,
+        }
+    };
+    let code_to_status = |c: u32| -> &'static str {
+        match c {
+            0 => "non_tried",
+            1 => "non_trimmed",
+            2 => "non_scraped",
+            3 => "bad_sector",
+            _ => "finished",
+        }
+    };
+    let phase_name = |c: u32| -> &'static str {
+        match c {
+            0 => "copying",
+            1 => "trimming",
+            2 => "retrying",
+            _ => "completed",
+        }
+    };
+
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_recovery_dll() {
+            let c_in: Vec<DsrDdrescueIntervalC> = intervals
+                .iter()
+                .map(|iv| DsrDdrescueIntervalC {
+                    start_lba: iv.start_lba,
+                    sector_count: iv.sector_count,
+                    status_code: status_to_code(&iv.status),
+                    attempts: iv.attempts,
+                    last_error_code: iv.last_error_code.unwrap_or(0),
+                    reserved0: 0,
+                })
+                .collect();
+            let mut c_out = vec![unsafe { std::mem::zeroed::<DsrDdrescueIntervalC>() }; c_in.len().max(1)];
+            let mut summary: DsrDdrescuePlanSummaryC = unsafe { std::mem::zeroed() };
+            let in_ptr = if c_in.is_empty() { std::ptr::null() } else { c_in.as_ptr() };
+            if unsafe {
+                (dll.fn_plan_ddrescue)(
+                    in_ptr,
+                    c_in.len() as u32,
+                    chunk_sectors,
+                    c_out.as_mut_ptr(),
+                    c_out.len() as u32,
+                    &mut summary,
+                )
+            } {
+                let take = (summary.coalesced_interval_count as usize).min(c_out.len());
+                let out_list: Vec<serde_json::Value> = c_out[..take]
+                    .iter()
+                    .map(|iv| {
+                        serde_json::json!({
+                            "startLba": iv.start_lba,
+                            "sectorCount": iv.sector_count,
+                            "status": code_to_status(iv.status_code),
+                            "attempts": iv.attempts,
+                            "lastErrorCode": if iv.last_error_code > 0 { Some(iv.last_error_code) } else { None::<u32> }
+                        })
+                    })
+                    .collect();
+                return Ok(serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "coalescedIntervalCount": summary.coalesced_interval_count,
+                    "suggestedPhase": phase_name(summary.suggested_phase_code),
+                    "nextWorkStartLba": summary.next_work_start_lba,
+                    "nextWorkSectorCount": summary.next_work_sector_count,
+                    "hasNextWork": summary.has_next_work != 0,
+                    "completed": summary.completed != 0,
+                    "totalSectors": summary.total_sectors,
+                    "finishedSectors": summary.finished_sectors,
+                    "nonTriedSectors": summary.non_tried_sectors,
+                    "nonTrimmedSectors": summary.non_trimmed_sectors,
+                    "nonScrapedSectors": summary.non_scraped_sectors,
+                    "badSectors": summary.bad_sectors,
+                    "intervals": out_list
+                }));
+            }
+        }
+    }
+
+    let _ = status_to_code;
+    let _ = code_to_status;
+    let _ = phase_name;
+
+    let dd_ivs: Vec<DdrescueInterval> = intervals
+        .into_iter()
+        .map(|iv| DdrescueInterval {
+            start_lba: iv.start_lba,
+            sector_count: iv.sector_count,
+            status: iv.status,
+            attempts: iv.attempts,
+            last_error_code: iv.last_error_code,
+        })
+        .collect();
+    let coalesced = coalesce_ddrescue_intervals(dd_ivs);
+    let safe_chunk = chunk_sectors.clamp(16, 2048);
+    let trim_step = (safe_chunk / 4).clamp(4, 16);
+
+    let mut fin = 0u64;
+    let mut nt = 0u64;
+    let mut ntr = 0u64;
+    let mut nsc = 0u64;
+    let mut bad = 0u64;
+    let mut first_nt: Option<&DdrescueInterval> = None;
+    let mut first_ntr: Option<&DdrescueInterval> = None;
+    let mut first_nsc: Option<&DdrescueInterval> = None;
+    for iv in &coalesced {
+        match iv.status.as_str() {
+            "finished" => fin += iv.sector_count,
+            "non_tried" => { nt += iv.sector_count; if first_nt.is_none() { first_nt = Some(iv); } }
+            "non_trimmed" => { ntr += iv.sector_count; if first_ntr.is_none() { first_ntr = Some(iv); } }
+            "non_scraped" => { nsc += iv.sector_count; if first_nsc.is_none() { first_nsc = Some(iv); } }
+            "bad_sector" => bad += iv.sector_count,
+            _ => {}
+        }
+    }
+    let total = fin + nt + ntr + nsc + bad;
+    let (sug_phase, nw_lba, nw_cnt, has_next, comp) = if let Some(iv) = first_nt {
+        ("copying", iv.start_lba, iv.sector_count.min(safe_chunk as u64) as u32, true, false)
+    } else if let Some(iv) = first_ntr {
+        ("trimming", iv.start_lba, iv.sector_count.min(trim_step as u64) as u32, true, false)
+    } else if let Some(iv) = first_nsc {
+        ("retrying", iv.start_lba, 1u32, true, false)
+    } else {
+        ("completed", 0u64, 0u32, false, true)
+    };
+
+    Ok(serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "coalescedIntervalCount": coalesced.len(),
+        "suggestedPhase": sug_phase,
+        "nextWorkStartLba": nw_lba,
+        "nextWorkSectorCount": nw_cnt,
+        "hasNextWork": has_next,
+        "completed": comp,
+        "totalSectors": total,
+        "finishedSectors": fin,
+        "nonTriedSectors": nt,
+        "nonTrimmedSectors": ntr,
+        "nonScrapedSectors": nsc,
+        "badSectors": bad,
+        "intervals": coalesced
+    }))
+}
+
 fn run_cli_batch_mode(args: &[String]) -> i32 {
     let mut action = "smart-snapshot".to_string();
     let mut drives_arg = "all".to_string();
@@ -2809,6 +6446,1314 @@ fn run_cli_batch_mode(args: &[String]) -> i32 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Real Win32 PCIe/SATA Link Speed & NVMe Controller Probing
+// ---------------------------------------------------------------------------
+fn lookup_pci_controller_vendor(vid: u16, did: u16) -> Option<&'static str> {
+    match (vid, did) {
+        (0x144D, 0xA808) => Some("Samsung PM981 / 970 EVO Plus (Phoenix)"),
+        (0x144D, 0xA80A) => Some("Samsung 980 PRO / PM9A1 (Elpis PCIe 4.0)"),
+        (0x144D, 0xA80C) => Some("Samsung 990 PRO (Pascal PCIe 4.0)"),
+        (0x144D, _) => Some("Samsung NVMe Controller"),
+        (0x15B7, 0x5017) => Some("WD Black SN850X (Triton MP16+ B2)"),
+        (0x15B7, 0x5011) => Some("WD Black SN850 (SanDisk G2)"),
+        (0x15B7, _) => Some("Western Digital / SanDisk NVMe Controller"),
+        (0x1987, 0x5016) => Some("Phison PS5016-E16 PCIe 4.0 NVMe"),
+        (0x1987, 0x5018) => Some("Phison PS5018-E18 PCIe 4.0 NVMe"),
+        (0x1987, 0x5026) => Some("Phison PS5026-E26 PCIe 5.0 NVMe"),
+        (0x1987, _) => Some("Phison Electronics NVMe Controller"),
+        (0x1C5C, 0x174A) => Some("SK hynix Platinum P41 / PC801 (Aries)"),
+        (0x1C5C, _) => Some("SK hynix NVMe Controller"),
+        (0xC0A9, _) | (0x1344, _) => Some("Micron / Crucial NVMe Controller"),
+        (0x1E0F, _) | (0x1179, _) => Some("Kioxia / Toshiba NVMe Controller"),
+        (0x126F, _) => Some("Silicon Motion (SMI) NVMe Controller"),
+        (0x1E4B, _) => Some("MaxioTech MAP1602 / NVMe Controller"),
+        (0x2646, _) => Some("Kingston Technology NVMe Controller"),
+        (0x8086, _) => Some("Intel Storage / PCIe Root Controller"),
+        (0x1B21, _) => Some("ASMedia SATA/PCIe Bridge Controller"),
+        (0x10EC, _) => Some("Realtek PCIe/NVMe Controller"),
+        (0x152D, _) => Some("JMicron Storage Controller"),
+        (0x1022, _) => Some("AMD StorAHCI / NVMe RAID Controller"),
+        (0x1000, _) | (0x1028, _) => Some("Broadcom / Dell PERC SAS/SATA Controller"),
+        _ => None,
+    }
+}
+
+fn pcie_gen_gtps_label(gen: u32) -> (&'static str, f64) {
+    match gen {
+        1 => ("PCIe 1.0", 2.5),
+        2 => ("PCIe 2.0", 5.0),
+        3 => ("PCIe 3.0", 8.0),
+        4 => ("PCIe 4.0", 16.0),
+        5 => ("PCIe 5.0", 32.0),
+        6 => ("PCIe 6.0", 64.0),
+        _ => ("PCIe", 0.0),
+    }
+}
+
+fn pcie_effective_gbps(gen: u32, width: u32) -> Option<f64> {
+    let per_lane_gbps = match gen {
+        1 => 0.25,
+        2 => 0.50,
+        3 => 0.985,
+        4 => 1.969,
+        5 => 3.938,
+        6 => 7.563,
+        _ => return None,
+    };
+    if width == 0 {
+        return None;
+    }
+    Some(((per_lane_gbps * (width as f64)) * 100.0).round() / 100.0)
+}
+
+#[cfg(windows)]
+fn probe_pci_devnode_link_for_drive(
+    drive_index: u32,
+) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>, Option<u16>, Option<u16>, Option<String>) {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+
+    #[repr(C)]
+    struct SpDevinfoData {
+        cb_size: u32,
+        class_guid: Guid,
+        dev_inst: u32,
+        reserved: usize,
+    }
+
+    #[repr(C)]
+    struct SpDeviceInterfaceData {
+        cb_size: u32,
+        interface_class_guid: Guid,
+        flags: u32,
+        reserved: usize,
+    }
+
+    #[repr(C)]
+    struct DevPropKey {
+        fmtid: Guid,
+        pid: u32,
+    }
+
+    #[repr(C)]
+    struct StorageDeviceNumber {
+        device_type: u32,
+        device_number: u32,
+        partition_number: u32,
+    }
+
+    const DIGCF_PRESENT: u32 = 0x0000_0002;
+    const DIGCF_DEVICEINTERFACE: u32 = 0x0000_0010;
+    const IOCTL_STORAGE_GET_DEVICE_NUMBER: u32 = 0x002D1080;
+
+    let setupapi_w: Vec<u16> = "setupapi.dll\0".encode_utf16().collect();
+    let cfgmgr_w: Vec<u16> = "cfgmgr32.dll\0".encode_utf16().collect();
+    let h_setup = unsafe { LoadLibraryW(setupapi_w.as_ptr()) };
+    let h_cfg = unsafe { LoadLibraryW(cfgmgr_w.as_ptr()) };
+    if h_setup == 0 || h_cfg == 0 {
+        if h_setup != 0 {
+            unsafe { FreeLibrary(h_setup) };
+        }
+        if h_cfg != 0 {
+            unsafe { FreeLibrary(h_cfg) };
+        }
+        return (None, None, None, None, None, None, None);
+    }
+
+    type FnGetClassDevsW = unsafe extern "system" fn(*const Guid, *const u16, isize, u32) -> isize;
+    type FnEnumDeviceInterfaces = unsafe extern "system" fn(
+        isize,
+        *const SpDevinfoData,
+        *const Guid,
+        u32,
+        *mut SpDeviceInterfaceData,
+    ) -> i32;
+    type FnGetDeviceInterfaceDetailW = unsafe extern "system" fn(
+        isize,
+        *const SpDeviceInterfaceData,
+        *mut u8,
+        u32,
+        *mut u32,
+        *mut SpDevinfoData,
+    ) -> i32;
+    type FnDestroyDeviceInfoList = unsafe extern "system" fn(isize) -> i32;
+
+    type FnCmGetParent = unsafe extern "system" fn(*mut u32, u32, u32) -> u32;
+    type FnCmGetDeviceIdW = unsafe extern "system" fn(u32, *mut u16, u32, u32) -> u32;
+    type FnCmGetDevNodePropertyW = unsafe extern "system" fn(
+        u32,
+        *const DevPropKey,
+        *mut u32,
+        *mut u8,
+        *mut u32,
+        u32,
+    ) -> u32;
+
+    let get_proc = |hmod: isize, name: &[u8]| -> Option<*const ()> {
+        let p = unsafe { GetProcAddress(hmod, name.as_ptr()) };
+        p.map(|f| f as *const ())
+    };
+
+    let (
+        Some(p_get_devs),
+        Some(p_enum_iface),
+        Some(p_get_detail),
+        Some(p_destroy),
+        Some(p_cm_parent),
+        Some(p_cm_devid),
+        Some(p_cm_prop),
+    ) = (
+        get_proc(h_setup, b"SetupDiGetClassDevsW\0"),
+        get_proc(h_setup, b"SetupDiEnumDeviceInterfaces\0"),
+        get_proc(h_setup, b"SetupDiGetDeviceInterfaceDetailW\0"),
+        get_proc(h_setup, b"SetupDiDestroyDeviceInfoList\0"),
+        get_proc(h_cfg, b"CM_Get_Parent\0"),
+        get_proc(h_cfg, b"CM_Get_Device_IDW\0"),
+        get_proc(h_cfg, b"CM_Get_DevNode_PropertyW\0"),
+    ) else {
+        unsafe {
+            FreeLibrary(h_setup);
+            FreeLibrary(h_cfg);
+        }
+        return (None, None, None, None, None, None, None);
+    };
+
+    let setup_get_devs: FnGetClassDevsW = unsafe { std::mem::transmute(p_get_devs) };
+    let setup_enum_iface: FnEnumDeviceInterfaces = unsafe { std::mem::transmute(p_enum_iface) };
+    let setup_get_detail: FnGetDeviceInterfaceDetailW = unsafe { std::mem::transmute(p_get_detail) };
+    let setup_destroy: FnDestroyDeviceInfoList = unsafe { std::mem::transmute(p_destroy) };
+    let cm_get_parent: FnCmGetParent = unsafe { std::mem::transmute(p_cm_parent) };
+    let cm_get_device_id: FnCmGetDeviceIdW = unsafe { std::mem::transmute(p_cm_devid) };
+    let cm_get_prop: FnCmGetDevNodePropertyW = unsafe { std::mem::transmute(p_cm_prop) };
+
+    let guid_devinterface_disk = Guid {
+        data1: 0x53F56307,
+        data2: 0xB6BF,
+        data3: 0x11D0,
+        data4: [0x94, 0xF2, 0x00, 0xA0, 0xC9, 0x1E, 0xFB, 0x8B],
+    };
+
+    let h_dev_info = unsafe {
+        setup_get_devs(
+            &guid_devinterface_disk,
+            std::ptr::null(),
+            0,
+            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
+        )
+    };
+    if h_dev_info == -1 {
+        unsafe {
+            FreeLibrary(h_setup);
+            FreeLibrary(h_cfg);
+        }
+        return (None, None, None, None, None, None, None);
+    }
+
+    let devpkey_pci_guid = Guid {
+        data1: 0x3AB22E31,
+        data2: 0x8264,
+        data3: 0x4B4E,
+        data4: [0x9A, 0xF5, 0xA8, 0xD2, 0xD8, 0xE3, 0x3E, 0x62],
+    };
+    let devpkey_device_guid = Guid {
+        data1: 0xA45C254E,
+        data2: 0xDF1C,
+        data3: 0x4EFD,
+        data4: [0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0],
+    };
+
+    let read_u32_prop = |dev_inst: u32, pid: u32| -> Option<u32> {
+        let key = DevPropKey { fmtid: devpkey_pci_guid, pid };
+        let mut prop_type: u32 = 0;
+        let mut val: u32 = 0;
+        let mut size: u32 = std::mem::size_of::<u32>() as u32;
+        let cr = unsafe {
+            cm_get_prop(
+                dev_inst,
+                &key,
+                &mut prop_type,
+                &mut val as *mut u32 as *mut u8,
+                &mut size,
+                0,
+            )
+        };
+        if cr == 0 && val > 0 {
+            Some(val)
+        } else {
+            None
+        }
+    };
+
+    let read_str_prop = |dev_inst: u32, pid: u32| -> Option<String> {
+        let key = DevPropKey { fmtid: devpkey_device_guid, pid };
+        let mut prop_type: u32 = 0;
+        let mut buf = [0u16; 256];
+        let mut size: u32 = (buf.len() * 2) as u32;
+        let cr = unsafe {
+            cm_get_prop(
+                dev_inst,
+                &key,
+                &mut prop_type,
+                buf.as_mut_ptr() as *mut u8,
+                &mut size,
+                0,
+            )
+        };
+        if cr == 0 {
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let s = String::from_utf16_lossy(&buf[..len]).trim().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+        None
+    };
+
+    let mut result = (None, None, None, None, None, None, None);
+    let mut member_index: u32 = 0;
+
+    loop {
+        let mut if_data: SpDeviceInterfaceData = unsafe { std::mem::zeroed() };
+        if_data.cb_size = std::mem::size_of::<SpDeviceInterfaceData>() as u32;
+        let ok = unsafe {
+            setup_enum_iface(
+                h_dev_info,
+                std::ptr::null(),
+                &guid_devinterface_disk,
+                member_index,
+                &mut if_data,
+            )
+        };
+        if ok == 0 {
+            break;
+        }
+        member_index += 1;
+
+        let mut required_size: u32 = 0;
+        unsafe {
+            setup_get_detail(
+                h_dev_info,
+                &if_data,
+                std::ptr::null_mut(),
+                0,
+                &mut required_size,
+                std::ptr::null_mut(),
+            );
+        }
+        if required_size < 8 || required_size > 4096 {
+            continue;
+        }
+
+        let mut detail_buf = vec![0u8; required_size as usize];
+        let cb_detail: u32 = if std::mem::size_of::<usize>() == 8 { 8 } else { 6 };
+        detail_buf[0..4].copy_from_slice(&cb_detail.to_le_bytes());
+        let mut dev_info_data: SpDevinfoData = unsafe { std::mem::zeroed() };
+        dev_info_data.cb_size = std::mem::size_of::<SpDevinfoData>() as u32;
+
+        let detail_ok = unsafe {
+            setup_get_detail(
+                h_dev_info,
+                &if_data,
+                detail_buf.as_mut_ptr(),
+                required_size,
+                std::ptr::null_mut(),
+                &mut dev_info_data,
+            )
+        };
+        if detail_ok == 0 || required_size <= 4 {
+            continue;
+        }
+
+        let path_w_ptr = unsafe { detail_buf.as_ptr().add(4) as *const u16 };
+        let h_disk = unsafe {
+            CreateFileW(
+                path_w_ptr,
+                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                0,
+            )
+        };
+        if h_disk == INVALID_HANDLE_VALUE {
+            continue;
+        }
+
+        let mut sdn: StorageDeviceNumber = unsafe { std::mem::zeroed() };
+        let mut bytes_ret: u32 = 0;
+        let io_ok = unsafe {
+            DeviceIoControl(
+                h_disk as _,
+                IOCTL_STORAGE_GET_DEVICE_NUMBER,
+                std::ptr::null(),
+                0,
+                &mut sdn as *mut _ as _,
+                std::mem::size_of::<StorageDeviceNumber>() as u32,
+                &mut bytes_ret,
+                std::ptr::null_mut(),
+            )
+        };
+        unsafe { CloseHandle(h_disk) };
+
+        if io_ok == 0 || sdn.device_number != drive_index {
+            continue;
+        }
+
+        // Walk up parent DevNodes looking for a PCI\VEN_xxxx&DEV_yyyy controller
+        let mut cur_inst = dev_info_data.dev_inst;
+        for _ in 0..4 {
+            let mut parent_inst: u32 = 0;
+            if unsafe { cm_get_parent(&mut parent_inst, cur_inst, 0) } != 0 {
+                break;
+            }
+            cur_inst = parent_inst;
+
+            let mut dev_id_buf = [0u16; 320];
+            if unsafe { cm_get_device_id(cur_inst, dev_id_buf.as_mut_ptr(), dev_id_buf.len() as u32, 0) } != 0 {
+                continue;
+            }
+            let id_len = dev_id_buf.iter().position(|&c| c == 0).unwrap_or(dev_id_buf.len());
+            let dev_id = String::from_utf16_lossy(&dev_id_buf[..id_len]);
+            let dev_id_upper = dev_id.to_ascii_uppercase();
+
+            if dev_id_upper.starts_with("PCI\\VEN_") {
+                let vid = dev_id_upper
+                    .split("VEN_")
+                    .nth(1)
+                    .and_then(|s| s.get(0..4))
+                    .and_then(|hex| u16::from_str_radix(hex, 16).ok());
+                let did = dev_id_upper
+                    .split("DEV_")
+                    .nth(1)
+                    .and_then(|s| s.get(0..4))
+                    .and_then(|hex| u16::from_str_radix(hex, 16).ok());
+
+                let cur_spd = read_u32_prop(cur_inst, 9);
+                let max_spd = read_u32_prop(cur_inst, 10);
+                let cur_wid = read_u32_prop(cur_inst, 11);
+                let max_wid = read_u32_prop(cur_inst, 12);
+                let desc = read_str_prop(cur_inst, 2);
+
+                result = (cur_spd, max_spd, cur_wid, max_wid, vid, did, desc);
+                break;
+            }
+        }
+        break;
+    }
+
+    unsafe {
+        setup_destroy(h_dev_info);
+        FreeLibrary(h_setup);
+        FreeLibrary(h_cfg);
+    }
+
+    result
+}
+
+#[cfg(not(windows))]
+fn probe_pci_devnode_link_for_drive(
+    _drive_index: u32,
+) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>, Option<u16>, Option<u16>, Option<String>) {
+    (None, None, None, None, None, None, None)
+}
+
+fn probe_drive_bus_link_and_controller(
+    drive_index: u32,
+    handle: *mut std::ffi::c_void,
+    bus_type: &str,
+    _is_ssd: bool,
+) -> serde_json::Value {
+    let bus_upper = bus_type.to_ascii_uppercase();
+
+    let mut link_type = if bus_upper == "NVME" {
+        "PCIe"
+    } else if bus_upper == "SATA" || bus_upper == "ATA" {
+        "SATA"
+    } else if bus_upper.contains("USB") {
+        "USB"
+    } else {
+        "Unknown"
+    };
+
+    let mut sata_current_gen: Option<u32> = None;
+    let mut sata_max_gen: Option<u32> = None;
+    let mut nvme_spec_version: Option<String> = None;
+    let mut nvme_vid: Option<u16> = None;
+    let mut current_speed_label: Option<String> = None;
+    let mut max_speed_label: Option<String> = None;
+    let mut current_width: Option<u32> = None;
+    let mut max_width: Option<u32> = None;
+    let mut pcie_current_gen: Option<u32> = None;
+    let mut pcie_max_gen: Option<u32> = None;
+    let mut effective_bandwidth_gbps: Option<f64> = None;
+    let mut is_link_downgraded: Option<bool> = None;
+    let mut pci_vid: Option<u16> = None;
+    let mut pci_did: Option<u16> = None;
+    let mut controller_name: Option<String> = None;
+    let mut probe_source = "unavailable";
+
+    if bus_upper == "NVME" {
+        let mut nvme_id = vec![0u8; 4096];
+        if unsafe { DS_GetNvmeIdentifyController(handle, nvme_id.as_mut_ptr()) } {
+            let vid = u16::from_le_bytes([nvme_id[0], nvme_id[1]]);
+            if vid > 0 && vid != 0xFFFF {
+                nvme_vid = Some(vid);
+            }
+            let ver_raw = u32::from_le_bytes([nvme_id[80], nvme_id[81], nvme_id[82], nvme_id[83]]);
+            if ver_raw > 0 {
+                let major = (ver_raw >> 16) & 0xFFFF;
+                let minor = (ver_raw >> 8) & 0xFF;
+                let tertiary = ver_raw & 0xFF;
+                nvme_spec_version = Some(if tertiary > 0 {
+                    format!("NVMe {}.{}.{}", major, minor, tertiary)
+                } else {
+                    format!("NVMe {}.{}", major, minor)
+                });
+            }
+            probe_source = "nvme_identify";
+        }
+    } else if bus_upper != "USB" && bus_upper != "SD" && bus_upper != "MMC" {
+        let mut ata_id = [0u8; 512];
+        if unsafe { DS_AtaIdentifyDevice(handle, ata_id.as_mut_ptr()) } {
+            let word = |w: usize| -> u16 {
+                let idx = w * 2;
+                u16::from_le_bytes([ata_id[idx], ata_id[idx + 1]])
+            };
+            let w76 = word(76);
+            let w77 = word(77);
+            if w76 != 0 && w76 != 0xFFFF {
+                link_type = "SATA";
+                let max_g = if (w76 & (1 << 3)) != 0 {
+                    Some(3)
+                } else if (w76 & (1 << 2)) != 0 {
+                    Some(2)
+                } else if (w76 & (1 << 1)) != 0 {
+                    Some(1)
+                } else {
+                    None
+                };
+                sata_max_gen = max_g;
+                let cur_raw = ((w77 >> 1) & 0x07) as u32;
+                if matches!(cur_raw, 1 | 2 | 3) {
+                    sata_current_gen = Some(cur_raw);
+                } else {
+                    sata_current_gen = max_g;
+                }
+
+                let sata_label = |g: u32| -> (&'static str, f64) {
+                    match g {
+                        1 => ("SATA I (1.5 Gbps)", 0.15),
+                        2 => ("SATA II (3.0 Gbps)", 0.30),
+                        3 => ("SATA III (6.0 Gbps)", 0.60),
+                        _ => ("SATA", 0.0),
+                    }
+                };
+                if let Some(cg) = sata_current_gen {
+                    let (lbl, gbps) = sata_label(cg);
+                    current_speed_label = Some(lbl.to_string());
+                    if gbps > 0.0 {
+                        effective_bandwidth_gbps = Some(gbps);
+                    }
+                }
+                if let Some(mg) = sata_max_gen {
+                    max_speed_label = Some(sata_label(mg).0.to_string());
+                }
+                if let (Some(cg), Some(mg)) = (sata_current_gen, sata_max_gen) {
+                    is_link_downgraded = Some(cg < mg);
+                }
+                probe_source = "ata_identify";
+            }
+        }
+    }
+
+    // Query PCI DevNode properties via Win32 SetupAPI + CfgMgr32
+    let (p_cur_spd, p_max_spd, p_cur_wid, p_max_wid, p_vid, p_did, p_desc) =
+        probe_pci_devnode_link_for_drive(drive_index);
+
+    if let Some(v) = p_vid.or(nvme_vid) {
+        pci_vid = Some(v);
+        pci_did = p_did;
+        controller_name = lookup_pci_controller_vendor(v, p_did.unwrap_or(0))
+            .map(|s| s.to_string())
+            .or(p_desc.clone());
+    } else if let Some(d) = p_desc {
+        controller_name = Some(d);
+    }
+
+    if bus_upper == "NVME" && (p_cur_spd.is_some() || p_cur_wid.is_some()) {
+        link_type = "PCIe";
+        pcie_current_gen = p_cur_spd;
+        pcie_max_gen = p_max_spd;
+        current_width = p_cur_wid;
+        max_width = p_max_wid;
+
+        if let Some(cg) = p_cur_spd {
+            let (gen_lbl, gtps) = pcie_gen_gtps_label(cg);
+            let w_str = p_cur_wid.map(|w| format!(" x{}", w)).unwrap_or_default();
+            current_speed_label = Some(if gtps > 0.0 {
+                format!("{}{} ({:.1} GT/s)", gen_lbl, w_str, gtps)
+            } else {
+                format!("{}{}", gen_lbl, w_str)
+            });
+            if let Some(w) = p_cur_wid {
+                effective_bandwidth_gbps = pcie_effective_gbps(cg, w);
+            }
+        }
+        if let Some(mg) = p_max_spd {
+            let (gen_lbl, _) = pcie_gen_gtps_label(mg);
+            let w_str = p_max_wid.map(|w| format!(" x{}", w)).unwrap_or_default();
+            max_speed_label = Some(format!("{}{}", gen_lbl, w_str));
+        }
+        if let (Some(cg), Some(mg)) = (p_cur_spd, p_max_spd) {
+            let wid_down = match (p_cur_wid, p_max_wid) {
+                (Some(cw), Some(mw)) => cw < mw,
+                _ => false,
+            };
+            is_link_downgraded = Some(cg < mg || wid_down);
+        }
+        probe_source = "win32_cfgmgr32_pci";
+    }
+
+    serde_json::json!({
+        "linkType": link_type,
+        "currentSpeedLabel": current_speed_label,
+        "maxSpeedLabel": max_speed_label,
+        "currentWidth": current_width,
+        "maxWidth": max_width,
+        "pcieCurrentGen": pcie_current_gen,
+        "pcieMaxGen": pcie_max_gen,
+        "sataCurrentGen": sata_current_gen,
+        "sataMaxGen": sata_max_gen,
+        "nvmeSpecVersion": nvme_spec_version,
+        "effectiveBandwidthGbps": effective_bandwidth_gbps,
+        "isLinkDowngraded": is_link_downgraded,
+        "pciVendorIdHex": pci_vid.map(|v| format!("0x{:04X}", v)),
+        "pciDeviceIdHex": pci_did.map(|d| format!("0x{:04X}", d)),
+        "controllerName": controller_name,
+        "probeSource": probe_source
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Pure Rust FIPS 180-4 SHA-256 + Win32 File Physical LBA Extent Mapping
+// ---------------------------------------------------------------------------
+struct Sha256 {
+    state: [u32; 8],
+    bit_len: u64,
+    buffer: [u8; 64],
+    buf_len: usize,
+}
+
+impl Sha256 {
+    fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            ],
+            bit_len: 0,
+            buffer: [0u8; 64],
+            buf_len: 0,
+        }
+    }
+
+    fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
+        const K: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        ];
+
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            let j = i * 4;
+            w[i] = u32::from_be_bytes([block[j], block[j + 1], block[j + 2], block[j + 3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.bit_len = self.bit_len.wrapping_add((data.len() as u64) * 8);
+        let mut idx = 0;
+        if self.buf_len > 0 {
+            let needed = 64 - self.buf_len;
+            let take = needed.min(data.len());
+            self.buffer[self.buf_len..self.buf_len + take].copy_from_slice(&data[..take]);
+            self.buf_len += take;
+            idx += take;
+            if self.buf_len == 64 {
+                let block = self.buffer;
+                Self::compress(&mut self.state, &block);
+                self.buf_len = 0;
+            }
+        }
+        while idx + 64 <= data.len() {
+            let block: &[u8; 64] = data[idx..idx + 64].try_into().unwrap();
+            Self::compress(&mut self.state, block);
+            idx += 64;
+        }
+        if idx < data.len() {
+            let rem = data.len() - idx;
+            self.buffer[..rem].copy_from_slice(&data[idx..]);
+            self.buf_len = rem;
+        }
+    }
+
+    fn finalize_hex(mut self) -> String {
+        let len = self.buf_len;
+        self.buffer[len] = 0x80;
+        if len + 1 > 56 {
+            for b in &mut self.buffer[len + 1..64] {
+                *b = 0;
+            }
+            let block = self.buffer;
+            Self::compress(&mut self.state, &block);
+            self.buffer = [0u8; 64];
+        } else {
+            for b in &mut self.buffer[len + 1..56] {
+                *b = 0;
+            }
+        }
+        self.buffer[56..64].copy_from_slice(&self.bit_len.to_be_bytes());
+        let block = self.buffer;
+        Self::compress(&mut self.state, &block);
+
+        let mut hex = String::with_capacity(64);
+        for word in self.state {
+            hex.push_str(&format!("{:08x}", word));
+        }
+        hex
+    }
+}
+
+fn sha256_file_streaming(path: &std::path::Path, max_bytes: u64) -> Result<(String, u64), String> {
+    use std::io::Read;
+    let meta = std::fs::metadata(path).map_err(|e| format!("메타데이터 조회 실패: {}", e))?;
+    let size = meta.len();
+    if size > max_bytes {
+        return Err(format!("SIZE_LIMIT_EXCEEDED:{} > {}", size, max_bytes));
+    }
+    let mut file = std::fs::File::open(path).map_err(|e| format!("파일 열기 실패: {}", e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    let mut read_total: u64 = 0;
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("파일 읽기 오류: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        read_total += n as u64;
+    }
+    Ok((hasher.finalize_hex(), read_total))
+}
+
+#[cfg(windows)]
+fn get_file_physical_lba_extents(path: &std::path::Path) -> (Option<u32>, Vec<(u64, u64)>, Option<String>) {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetDiskFreeSpaceW, GetVolumePathNameW,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x00560000;
+    const FSCTL_GET_RETRIEVAL_POINTERS: u32 = 0x00090073;
+    const ERROR_MORE_DATA: u32 = 234;
+    const ERROR_HANDLE_EOF: u32 = 38;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct DiskExtent {
+        disk_number: u32,
+        starting_offset: i64,
+        extent_length: i64,
+    }
+
+    #[repr(C)]
+    struct VolumeDiskExtents {
+        number_of_disk_extents: u32,
+        extents: [DiskExtent; 1],
+    }
+
+    #[repr(C)]
+    struct StartingVcnInputBuffer {
+        starting_vcn: i64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RetrievalExtent {
+        next_vcn: i64,
+        lcn: i64,
+    }
+
+    #[repr(C)]
+    struct RetrievalPointersBuffer {
+        extent_count: u32,
+        starting_vcn: i64,
+        extents: [RetrievalExtent; 1],
+    }
+
+    let path_str = path.to_string_lossy();
+    let mut path_w: Vec<u16> = path_str.encode_utf16().collect();
+    path_w.push(0);
+
+    let mut vol_root_buf = [0u16; 260];
+    let got_root = unsafe {
+        GetVolumePathNameW(path_w.as_ptr(), vol_root_buf.as_mut_ptr(), vol_root_buf.len() as u32)
+    };
+    if got_root == 0 {
+        return (None, Vec::new(), Some("볼륨 마운트 경로 확인 실패".to_string()));
+    }
+
+    let mut sectors_per_cluster: u32 = 0;
+    let mut bytes_per_sector: u32 = 0;
+    let mut free_clusters: u32 = 0;
+    let mut total_clusters: u32 = 0;
+    let fs_ok = unsafe {
+        GetDiskFreeSpaceW(
+            vol_root_buf.as_ptr(),
+            &mut sectors_per_cluster,
+            &mut bytes_per_sector,
+            &mut free_clusters,
+            &mut total_clusters,
+        )
+    };
+    if fs_ok == 0 || bytes_per_sector == 0 || sectors_per_cluster == 0 {
+        return (None, Vec::new(), Some("클러스터/섹터 기하학 조회 실패".to_string()));
+    }
+
+    let root_len = vol_root_buf.iter().position(|&c| c == 0).unwrap_or(vol_root_buf.len());
+    let root_str = String::from_utf16_lossy(&vol_root_buf[..root_len]);
+    let trimmed_vol = root_str.trim_end_matches('\\');
+    let vol_dev_path = if trimmed_vol.starts_with("\\\\.\\") {
+        format!("{}\0", trimmed_vol)
+    } else {
+        format!("\\\\.\\{}\0", trimmed_vol)
+    };
+    let vol_dev_w: Vec<u16> = vol_dev_path.encode_utf16().collect();
+
+    let h_vol = unsafe {
+        CreateFileW(
+            vol_dev_w.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            0,
+        )
+    };
+    if h_vol == INVALID_HANDLE_VALUE {
+        return (None, Vec::new(), Some("볼륨 디바이스 핸들 열기 실패".to_string()));
+    }
+
+    let mut vol_ext_buf = [0u8; 256];
+    let mut vol_bytes_ret: u32 = 0;
+    let vol_ok = unsafe {
+        DeviceIoControl(
+            h_vol as _,
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            std::ptr::null(),
+            0,
+            vol_ext_buf.as_mut_ptr() as _,
+            vol_ext_buf.len() as u32,
+            &mut vol_bytes_ret,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { CloseHandle(h_vol) };
+
+    if vol_ok == 0 {
+        return (None, Vec::new(), Some("볼륨 물리 디스크 오프셋 조회 실패".to_string()));
+    }
+
+    let vde = unsafe { &*(vol_ext_buf.as_ptr() as *const VolumeDiskExtents) };
+    if vde.number_of_disk_extents == 0 {
+        return (None, Vec::new(), Some("물리 디스크 익스텐트 없음".to_string()));
+    }
+    let disk_number = vde.extents[0].disk_number;
+    let part_start_lba = (vde.extents[0].starting_offset.max(0) as u64) / (bytes_per_sector as u64);
+
+    let h_file = unsafe {
+        CreateFileW(
+            path_w.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            0,
+        )
+    };
+    if h_file == INVALID_HANDLE_VALUE {
+        return (Some(disk_number), Vec::new(), Some("파일 FSCTL 속성 핸들 열기 실패".to_string()));
+    }
+
+    let mut raw_spans: Vec<(u64, u64)> = Vec::new();
+    let mut next_vcn: i64 = 0;
+    let mut rp_buf = vec![0u8; 16384];
+
+    loop {
+        let in_buf = StartingVcnInputBuffer { starting_vcn: next_vcn };
+        let mut bytes_ret: u32 = 0;
+        let ok = unsafe {
+            DeviceIoControl(
+                h_file as _,
+                FSCTL_GET_RETRIEVAL_POINTERS,
+                &in_buf as *const _ as _,
+                std::mem::size_of::<StartingVcnInputBuffer>() as u32,
+                rp_buf.as_mut_ptr() as _,
+                rp_buf.len() as u32,
+                &mut bytes_ret,
+                std::ptr::null_mut(),
+            )
+        };
+        let err = if ok == 0 { unsafe { GetLastError() } } else { 0 };
+        if ok != 0 || err == ERROR_MORE_DATA {
+            let header = unsafe { &*(rp_buf.as_ptr() as *const RetrievalPointersBuffer) };
+            let cnt = header.extent_count as usize;
+            let extents_ptr = unsafe {
+                rp_buf.as_ptr().add(std::mem::offset_of!(RetrievalPointersBuffer, extents))
+                    as *const RetrievalExtent
+            };
+            let mut prev_vcn = header.starting_vcn;
+            for idx in 0..cnt {
+                let ext = unsafe { *extents_ptr.add(idx) };
+                if ext.lcn >= 0 && ext.next_vcn > prev_vcn {
+                    let cluster_count = (ext.next_vcn - prev_vcn) as u64;
+                    let start_lba = part_start_lba
+                        .saturating_add((ext.lcn as u64).saturating_mul(sectors_per_cluster as u64));
+                    let sector_count = cluster_count.saturating_mul(sectors_per_cluster as u64);
+                    let end_lba = start_lba.saturating_add(sector_count.saturating_sub(1));
+                    if let Some(last) = raw_spans.last_mut() {
+                        if last.1.saturating_add(1) == start_lba {
+                            last.1 = end_lba;
+                        } else {
+                            raw_spans.push((start_lba, end_lba));
+                        }
+                    } else {
+                        raw_spans.push((start_lba, end_lba));
+                    }
+                }
+                prev_vcn = ext.next_vcn;
+                next_vcn = ext.next_vcn;
+            }
+            if ok != 0 {
+                break;
+            }
+            continue;
+        }
+        if err == ERROR_HANDLE_EOF {
+            // Resident small NTFS file (data embedded inside $MFT record)
+            return (Some(disk_number), Vec::new(), Some("NTFS Resident 파일 (MFT 내부 직접 저장)".to_string()));
+        }
+        unsafe { CloseHandle(h_file) };
+        return (Some(disk_number), raw_spans, Some(format!("FSCTL_GET_RETRIEVAL_POINTERS 실패 (Win32 {})", err)));
+    }
+
+    unsafe { CloseHandle(h_file) };
+    (Some(disk_number), raw_spans, None)
+}
+
+#[cfg(not(windows))]
+fn get_file_physical_lba_extents(_path: &std::path::Path) -> (Option<u32>, Vec<(u64, u64)>, Option<String>) {
+    (None, Vec::new(), Some("Windows NTFS/exFAT LBA 익스텐트 조회는 Windows 호스트에서만 지원됩니다.".to_string()))
+}
+
+fn collect_target_files(input_paths: &[String], max_files: usize) -> Vec<(String, bool)> {
+    let mut files: Vec<(String, bool)> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = input_paths.iter().map(std::path::PathBuf::from).collect();
+
+    while let Some(cur) = stack.pop() {
+        if files.len() >= max_files {
+            break;
+        }
+        if !cur.exists() {
+            files.push((cur.to_string_lossy().to_string(), false));
+            continue;
+        }
+        if cur.is_file() {
+            files.push((cur.to_string_lossy().to_string(), true));
+        } else if cur.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&cur) {
+                for entry in entries.flatten() {
+                    if files.len() >= max_files {
+                        break;
+                    }
+                    let p = entry.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if p.is_file() {
+                        files.push((p.to_string_lossy().to_string(), true));
+                    }
+                }
+            }
+        }
+    }
+
+    files
+}
+
+#[tauri::command]
+fn probe_paths_lba_integrity(
+    paths: Vec<String>,
+    max_files: Option<u32>,
+    max_file_bytes: Option<u64>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let limit_files = max_files.unwrap_or(200).clamp(1, 1000) as usize;
+    let limit_bytes = max_file_bytes.unwrap_or(512 * 1024 * 1024);
+    let candidates = collect_target_files(&paths, limit_files);
+    let mut out = Vec::with_capacity(candidates.len());
+
+    for (path_str, exists) in candidates {
+        let path = std::path::Path::new(&path_str);
+        if !exists {
+            out.push(serde_json::json!({
+                "filePath": path_str,
+                "status": "missing",
+                "sizeBytes": 0,
+                "modifiedMs": null,
+                "sha256": null,
+                "driveIndex": null,
+                "extents": [],
+                "note": "경로가 존재하지 않거나 삭제되었습니다."
+            }));
+            continue;
+        }
+
+        let modified_ms = std::fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
+
+        let (drive_index, spans, ext_note) = get_file_physical_lba_extents(path);
+        let extents_json: Vec<serde_json::Value> = spans
+            .iter()
+            .take(64)
+            .map(|(s, e)| {
+                serde_json::json!({
+                    "startLba": s,
+                    "endLba": e,
+                    "sectorCount": e.saturating_sub(*s).saturating_add(1)
+                })
+            })
+            .collect();
+
+        match sha256_file_streaming(path, limit_bytes) {
+            Ok((digest, size_bytes)) => {
+                out.push(serde_json::json!({
+                    "filePath": path_str,
+                    "status": "ok",
+                    "sizeBytes": size_bytes,
+                    "modifiedMs": modified_ms,
+                    "sha256": digest,
+                    "driveIndex": drive_index,
+                    "extents": extents_json,
+                    "note": ext_note
+                }));
+            }
+            Err(err) => {
+                let status = if err.starts_with("SIZE_LIMIT_EXCEEDED") {
+                    "skipped_too_large"
+                } else {
+                    "unreadable"
+                };
+                out.push(serde_json::json!({
+                    "filePath": path_str,
+                    "status": status,
+                    "sizeBytes": std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+                    "modifiedMs": modified_ms,
+                    "sha256": null,
+                    "driveIndex": drive_index,
+                    "extents": extents_json,
+                    "note": err
+                }));
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+#[tauri::command]
+fn pick_integrity_paths(pick_folder: bool) -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+        let mut results = Vec::new();
+
+        if pick_folder {
+            #[repr(C)]
+            struct BrowseInfoW {
+                hwnd_owner: isize,
+                pidl_root: isize,
+                psz_display_name: *mut u16,
+                lpsz_title: *const u16,
+                ul_flags: u32,
+                lpfn: isize,
+                l_param: isize,
+                i_image: i32,
+            }
+            let shell_w: Vec<u16> = "shell32.dll\0".encode_utf16().collect();
+            let ole_w: Vec<u16> = "ole32.dll\0".encode_utf16().collect();
+            let h_shell = unsafe { LoadLibraryW(shell_w.as_ptr()) };
+            let h_ole = unsafe { LoadLibraryW(ole_w.as_ptr()) };
+            if h_shell != 0 {
+                let p_browse = unsafe { GetProcAddress(h_shell, b"SHBrowseForFolderW\0".as_ptr()) };
+                let p_get_path = unsafe { GetProcAddress(h_shell, b"SHGetPathFromIDListW\0".as_ptr()) };
+                let p_co_free = if h_ole != 0 {
+                    unsafe { GetProcAddress(h_ole, b"CoTaskMemFree\0".as_ptr()) }
+                } else {
+                    None
+                };
+
+                if let (Some(f_browse), Some(f_get_path)) = (p_browse, p_get_path) {
+                    type FnBrowse = unsafe extern "system" fn(*mut BrowseInfoW) -> isize;
+                    type FnGetPath = unsafe extern "system" fn(isize, *mut u16) -> i32;
+                    let sh_browse: FnBrowse = unsafe { std::mem::transmute(f_browse) };
+                    let sh_get_path: FnGetPath = unsafe { std::mem::transmute(f_get_path) };
+
+                    let title_w: Vec<u16> = "LBA 무결성 감시 폴더 선택\0".encode_utf16().collect();
+                    let mut disp = [0u16; 260];
+                    let mut bi = BrowseInfoW {
+                        hwnd_owner: 0,
+                        pidl_root: 0,
+                        psz_display_name: disp.as_mut_ptr(),
+                        lpsz_title: title_w.as_ptr(),
+                        ul_flags: 0x0001 | 0x0040, // BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
+                        lpfn: 0,
+                        l_param: 0,
+                        i_image: 0,
+                    };
+                    let pidl = unsafe { sh_browse(&mut bi) };
+                    if pidl != 0 {
+                        let mut out_buf = [0u16; 1024];
+                        if unsafe { sh_get_path(pidl, out_buf.as_mut_ptr()) } != 0 {
+                            let len = out_buf.iter().position(|&c| c == 0).unwrap_or(out_buf.len());
+                            let s = String::from_utf16_lossy(&out_buf[..len]);
+                            if !s.is_empty() {
+                                results.push(s);
+                            }
+                        }
+                        if let Some(f_free) = p_co_free {
+                            type FnFree = unsafe extern "system" fn(isize);
+                            let co_free: FnFree = unsafe { std::mem::transmute(f_free) };
+                            unsafe { co_free(pidl) };
+                        }
+                    }
+                }
+                unsafe { FreeLibrary(h_shell) };
+            }
+            if h_ole != 0 {
+                unsafe { FreeLibrary(h_ole) };
+            }
+            return Ok(results);
+        }
+
+        #[repr(C)]
+        struct OpenFileNameW {
+            l_struct_size: u32,
+            hwnd_owner: isize,
+            h_instance: isize,
+            lpstr_filter: *const u16,
+            lpstr_custom_filter: *mut u16,
+            n_max_cust_filter: u32,
+            n_filter_index: u32,
+            lpstr_file: *mut u16,
+            n_max_file: u32,
+            lpstr_file_title: *mut u16,
+            n_max_file_title: u32,
+            lpstr_initial_dir: *const u16,
+            lpstr_title: *const u16,
+            flags: u32,
+            n_file_offset: u16,
+            n_file_extension: u16,
+            lpstr_def_ext: *const u16,
+            l_cust_data: isize,
+            lpfn_hook: isize,
+            lp_template_name: *const u16,
+            pv_reserved: isize,
+            dw_reserved: u32,
+            flags_ex: u32,
+        }
+
+        let comdlg_w: Vec<u16> = "comdlg32.dll\0".encode_utf16().collect();
+        let h_com = unsafe { LoadLibraryW(comdlg_w.as_ptr()) };
+        if h_com != 0 {
+            if let Some(f_open) = unsafe { GetProcAddress(h_com, b"GetOpenFileNameW\0".as_ptr()) } {
+                type FnGetOpen = unsafe extern "system" fn(*mut OpenFileNameW) -> i32;
+                let get_open: FnGetOpen = unsafe { std::mem::transmute(f_open) };
+                let filter_w: Vec<u16> = "All Files (*.*)\0*.*\0\0".encode_utf16().collect();
+                let title_w: Vec<u16> = "LBA 무결성 감시 파일 선택\0".encode_utf16().collect();
+                let mut file_buf = vec![0u16; 8192];
+                let mut ofn: OpenFileNameW = unsafe { std::mem::zeroed() };
+                ofn.l_struct_size = std::mem::size_of::<OpenFileNameW>() as u32;
+                ofn.lpstr_filter = filter_w.as_ptr();
+                ofn.lpstr_file = file_buf.as_mut_ptr();
+                ofn.n_max_file = file_buf.len() as u32;
+                ofn.lpstr_title = title_w.as_ptr();
+                // OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR
+                ofn.flags = 0x0000_0200 | 0x0008_0000 | 0x0000_1000 | 0x0000_0008;
+
+                if unsafe { get_open(&mut ofn) } != 0 {
+                    let mut parts = Vec::new();
+                    let mut start = 0;
+                    for (i, &ch) in file_buf.iter().enumerate() {
+                        if ch == 0 {
+                            if i == start {
+                                break;
+                            }
+                            parts.push(String::from_utf16_lossy(&file_buf[start..i]));
+                            start = i + 1;
+                        }
+                    }
+                    if parts.len() == 1 {
+                        results.push(parts[0].clone());
+                    } else if parts.len() > 1 {
+                        let dir = parts[0].trim_end_matches('\\');
+                        for f in &parts[1..] {
+                            results.push(format!("{}\\{}", dir, f));
+                        }
+                    }
+                }
+            }
+            unsafe { FreeLibrary(h_com) };
+        }
+        return Ok(results);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = pick_folder;
+        Ok(Vec::new())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System Tray Guardian & Native OS Notifications
+// ---------------------------------------------------------------------------
+static MINIMIZE_TO_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TRAY_ICON_HANDLE: std::sync::OnceLock<std::sync::Mutex<Option<tauri::tray::TrayIcon>>> =
+    std::sync::OnceLock::new();
+
+#[tauri::command]
+fn sync_tray_guardian_state(tooltip: String, minimize_on_close: bool) -> Result<bool, String> {
+    MINIMIZE_TO_TRAY.store(minimize_on_close, std::sync::atomic::Ordering::Relaxed);
+    if let Some(lock) = TRAY_ICON_HANDLE.get() {
+        if let Ok(guard) = lock.lock() {
+            if let Some(tray) = guard.as_ref() {
+                let _ = tray.set_tooltip(Some(tooltip));
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[tauri::command]
+fn send_native_os_notification(title: String, body: String, severity: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let clean = |s: &str| -> String {
+            s.chars()
+                .filter(|c| !matches!(c, '\0' | '\r' | '\n'))
+                .take(240)
+                .collect::<String>()
+                .replace('\'', "''")
+        };
+        let safe_title = clean(&title);
+        let safe_body = clean(&body);
+        let icon_name = if severity == "critical" {
+            "Error"
+        } else if severity == "warning" {
+            "Warning"
+        } else {
+            "Info"
+        };
+
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+            $n = New-Object System.Windows.Forms.NotifyIcon; \
+            $n.Icon = [System.Drawing.SystemIcons]::Information; \
+            $n.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::{}; \
+            $n.BalloonTipTitle = '{}'; \
+            $n.BalloonTipText = '{}'; \
+            $n.Visible = $true; \
+            $n.ShowBalloonTip(5000); \
+            Start-Sleep -Milliseconds 1200; \
+            $n.Dispose()",
+            icon_name, safe_title, safe_body
+        );
+
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+            .spawn();
+        return Ok(true);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (title, body, severity);
+        Ok(false)
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--batch") {
@@ -2817,6 +7762,71 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .setup(|app| {
+            use tauri::Manager;
+            use tauri::menu::{MenuBuilder, MenuItemBuilder};
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+            let show_item = MenuItemBuilder::with_id("tray_show", "DiskSentinel 창 열기").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("tray_quit", "완전 종료 (Exit)").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&show_item, &quit_item])
+                .build()?;
+
+            let mut builder = TrayIconBuilder::with_id("disk-guardian-tray")
+                .menu(&menu)
+                .tooltip("Disk Bad Sector Scanner · Guardian Monitor")
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "tray_show" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.unminimize();
+                                let _ = win.set_focus();
+                            }
+                        }
+                        "tray_quit" => {
+                            MINIMIZE_TO_TRAY.store(false, std::sync::atomic::Ordering::Relaxed);
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(win) = tray.app_handle().get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_focus();
+                        }
+                    }
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                builder = builder.icon(icon.clone());
+            }
+
+            if let Ok(tray_icon) = builder.build(app) {
+                let lock = TRAY_ICON_HANDLE.get_or_init(|| std::sync::Mutex::new(None));
+                if let Ok(mut guard) = lock.lock() {
+                    *guard = Some(tray_icon);
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_native_engine_version,
             scan_lba_block,
@@ -2850,7 +7860,31 @@ fn main() {
             set_drive_read_look_ahead,
             set_drive_standby_timer,
             spindown_drive_now,
-            get_smart_extended_logs
+            get_smart_extended_logs,
+            inspect_predictive_dll_status,
+            compute_predictive_weibull_rul,
+            analyze_acoustic_seek_profile,
+            evaluate_thermal_wear_stress,
+            project_smart_degradation_trend,
+            inspect_forensics_dll_status,
+            analyze_forensics_sector_zscore,
+            compute_forensics_extent_heatmap,
+            compute_forensics_sector_entropy,
+            inspect_forensics_partition_table,
+            inspect_forensics_vbr_sector,
+            inspect_recovery_dll_status,
+            analyze_recovery_carve_buffer,
+            parse_recovery_mft_batch,
+            generate_recovery_wipe_pattern,
+            verify_recovery_wipe_buffer,
+            plan_recovery_ddrescue_intervals,
+            probe_usb_topology_all,
+            probe_fake_capacity_checkpoints,
+            eject_physical_drive,
+            probe_paths_lba_integrity,
+            pick_integrity_paths,
+            sync_tray_guardian_state,
+            send_native_os_notification
         ])
         .run(tauri::generate_context!())
         .expect("error while running Disk Bad Sector Scanner tauri application");
