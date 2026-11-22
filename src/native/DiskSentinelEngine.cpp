@@ -12,6 +12,8 @@
 #endif
 #include "DiskSentinelEngine.h"
 #include <stddef.h>
+#include <math.h>
+#include <cmath>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
