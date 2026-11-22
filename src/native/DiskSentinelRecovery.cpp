@@ -456,13 +456,47 @@ DSR_API bool DSR_CALL DSR_InspectRecoveryCarveBuffer(
     uint64_t zeroAcc = 0ULL;
     uint64_t galoisParity = 0ULL;
 
-    for (uint32_t i = 0; i < bufferLength; ++i) {
+    uint32_t i = 0;
+    while (i < bufferLength) {
         uint8_t b = pBuffer[i];
         hist[b]++;
         zeroAcc |= (uint64_t)b;
         galoisParity ^= ((uint64_t)b << ((i & 7U) * 8U));
         if ((b >= 32U && b <= 126U) || b == '\t' || b == '\r' || b == '\n') {
             printable++;
+            i++;
+        } else if (b >= 0xC2U && b <= 0xDFU && (i + 1U) < bufferLength &&
+                   (pBuffer[i + 1U] & 0xC0U) == 0x80U) {
+            hist[pBuffer[i + 1U]]++;
+            zeroAcc |= (uint64_t)pBuffer[i + 1U];
+            galoisParity ^= ((uint64_t)pBuffer[i + 1U] << (((i + 1U) & 7U) * 8U));
+            printable += 2U;
+            i += 2U;
+        } else if (b >= 0xE0U && b <= 0xEFU && (i + 2U) < bufferLength &&
+                   (pBuffer[i + 1U] & 0xC0U) == 0x80U &&
+                   (pBuffer[i + 2U] & 0xC0U) == 0x80U) {
+            for (uint32_t k = 1U; k <= 2U; ++k) {
+                uint8_t cb = pBuffer[i + k];
+                hist[cb]++;
+                zeroAcc |= (uint64_t)cb;
+                galoisParity ^= ((uint64_t)cb << (((i + k) & 7U) * 8U));
+            }
+            printable += 3U;
+            i += 3U;
+        } else if (b >= 0xF0U && b <= 0xF4U && (i + 3U) < bufferLength &&
+                   (pBuffer[i + 1U] & 0xC0U) == 0x80U &&
+                   (pBuffer[i + 2U] & 0xC0U) == 0x80U &&
+                   (pBuffer[i + 3U] & 0xC0U) == 0x80U) {
+            for (uint32_t k = 1U; k <= 3U; ++k) {
+                uint8_t cb = pBuffer[i + k];
+                hist[cb]++;
+                zeroAcc |= (uint64_t)cb;
+                galoisParity ^= ((uint64_t)cb << (((i + k) & 7U) * 8U));
+            }
+            printable += 4U;
+            i += 4U;
+        } else {
+            i++;
         }
     }
 
@@ -767,7 +801,8 @@ DSR_API bool DSR_CALL DSR_ScanMftBufferForCluster(
 
         uint64_t recLbaStart = batchStartLba + (uint64_t)(recByteStart / sectorSize);
         uint64_t recLbaEnd = batchStartLba + (uint64_t)((recByteStart + mftRecordSize - 1U) / sectorSize);
-        bool hitsResidentRecord = (targetLba >= recLbaStart && targetLba <= recLbaEnd);
+        // LBA 0 is never a valid NTFS $MFT record (reserved for MBR/GPT); treat 0 or UINT64_MAX as "disabled"
+        bool hitsResidentRecord = (targetLba > 0ULL && targetLba != UINT64_MAX && targetLba >= recLbaStart && targetLba <= recLbaEnd);
 
         if (hitsExtent || hitsResidentRecord) {
             if (outMatchedRecords && matchedTotal < maxMatched) {

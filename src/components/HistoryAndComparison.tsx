@@ -2,6 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { SavedScanRecord } from '../types';
 import { History, GitCompare, Trash2, ArrowUpRight, ArrowDownRight, Minus, FileText, Share2, Printer } from 'lucide-react';
 import { computeSmartSnapshotDiff } from '../utils/scanDiff';
+import {
+  computeScanSmartDiffWithVelocity,
+  computeScanSmartDiffWithVelocitySync,
+  ScanSmartVelocityReport
+} from '../utils/integrityDllBridge';
 
 interface HistoryAndComparisonProps {
   records: SavedScanRecord[];
@@ -51,6 +56,22 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
     [scanA, scanB]
   );
 
+  const [velocityReport, setVelocityReport] = useState<ScanSmartVelocityReport | null>(null);
+  useEffect(() => {
+    if (!scanA || !scanB) {
+      setVelocityReport(null);
+      return;
+    }
+    setVelocityReport(computeScanSmartDiffWithVelocitySync(scanA, scanB));
+    let active = true;
+    void computeScanSmartDiffWithVelocity(scanA, scanB).then(res => {
+      if (active) setVelocityReport(res);
+    });
+    return () => {
+      active = false;
+    };
+  }, [scanA, scanB]);
+
   return (
     <div className="space-y-3 sm:space-y-4">
       {/* Comparison Section */}
@@ -58,7 +79,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 mb-3 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-              <GitCompare className="w-3.5 h-3.5 text-indigo-500" />
+              <GitCompare className="w-3.5 h-3.5 text-blue-500" />
               Scan Comparison & Degradation Trends
             </h3>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
@@ -124,7 +145,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
           <div className="p-4 bg-slate-50 dark:bg-slate-950 rounded-lg border border-slate-200 dark:border-slate-800 text-xs space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">
+                <div className="w-7 h-7 rounded-md bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
                   1
                 </div>
                 <div>
@@ -138,7 +159,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
               </div>
               <button
                 onClick={() => onViewRecordReport(records[0])}
-                className="px-2.5 py-1 text-[11px] font-semibold rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors cursor-pointer shadow-2xs"
+                className="px-2.5 py-1 text-[11px] font-semibold rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors cursor-pointer shadow-2xs"
               >
                 1차 검사 상세 보고서 열기
               </button>
@@ -240,6 +261,54 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                 </div>
               </div>
             </div>
+
+            {velocityReport && (
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-[11px] font-mono tabular-nums">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="font-sans font-semibold text-slate-700 dark:text-slate-300">
+                    일일 열화 속도 (Integrity Velocity):
+                  </span>
+                  <span>
+                    경과 {velocityReport.elapsedDays.toFixed(2)}일
+                  </span>
+                  <span>
+                    배드 {velocityReport.badSectorsPerDay >= 0 ? '+' : ''}
+                    {velocityReport.badSectorsPerDay.toFixed(2)}/일
+                  </span>
+                  <span>
+                    건강도 손실 {velocityReport.healthLossPerDay >= 0 ? '-' : '+'}
+                    {Math.abs(velocityReport.healthLossPerDay).toFixed(2)}%/일
+                  </span>
+                  <span>
+                    Regression {velocityReport.regressionScore.toFixed(0)}/100
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`px-1.5 py-0.5 rounded font-sans font-bold text-[10px] ${
+                      velocityReport.regressionGradeCode === 3
+                        ? 'bg-red-500/15 text-red-500'
+                        : velocityReport.regressionGradeCode === 2
+                        ? 'bg-amber-500/15 text-amber-500'
+                        : velocityReport.regressionGradeCode === 0
+                        ? 'bg-emerald-500/15 text-emerald-500'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {velocityReport.regressionGradeCode === 3
+                      ? 'CRITICAL REGRESSION'
+                      : velocityReport.regressionGradeCode === 2
+                      ? 'DEGRADING'
+                      : velocityReport.regressionGradeCode === 0
+                      ? 'IMPROVED'
+                      : 'STABLE'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    ({velocityReport.engineSource === 'native-cpp-dll' ? 'DSI DLL' : velocityReport.engineSource === 'rust-parity-fallback' ? 'Rust Parity' : 'TS Parity'})
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Side-by-side Table Comparison */}
             <div className="overflow-x-auto">
@@ -378,7 +447,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4 shadow-xs transition-colors">
         <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-2">
-            <History className="w-3.5 h-3.5 text-indigo-500" />
+            <History className="w-3.5 h-3.5 text-blue-500" />
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">
               Saved Scan Records
             </h3>
@@ -476,7 +545,7 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
                           )}
                           <button
                             onClick={() => onViewRecordReport(r)}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-indigo-600 dark:text-indigo-400 transition-colors border border-indigo-200 dark:border-indigo-800/60 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 text-blue-600 dark:text-blue-400 transition-colors border border-blue-200 dark:border-blue-800/60 cursor-pointer"
                           >
                             <FileText className="w-3 h-3" />
                             보고서

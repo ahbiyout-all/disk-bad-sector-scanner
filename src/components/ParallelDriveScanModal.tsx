@@ -28,12 +28,14 @@ interface ParallelDriveScanModalProps {
   isOpen: boolean;
   onClose: () => void;
   drives: DiskDrive[];
+  isInline?: boolean;
 }
 
 export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   isOpen,
   onClose,
   drives,
+  isInline = false,
 }) => {
   const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>(() =>
     drives.map(d => d.id)
@@ -360,13 +362,25 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-5xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-5xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans'
+        }
+      >
 
         {/* Top Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-orange-600 flex items-center justify-center text-white font-bold text-xs shadow-xs">
+            <div className="w-8 h-8 rounded-md bg-orange-600 flex items-center justify-center text-white font-bold text-xs">
               <Layers className="w-4 h-4" />
             </div>
             <div>
@@ -374,8 +388,8 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   다중 디스크 병렬 스캐너 &amp; Fleet 건강 매트릭스
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-400 border border-orange-500/30">
-                  {drives.length} Drives
+                <span className="text-[10px] font-mono font-semibold text-orange-600 dark:text-orange-400 tabular-nums">
+                  · {drives.length} Drives
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -385,13 +399,13 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2 self-end sm:self-auto">
-            <div className="inline-flex p-0.5 rounded-lg bg-slate-200/80 dark:bg-slate-800 border border-slate-300/70 dark:border-slate-700 text-[11px] font-bold">
+            <div className="inline-flex p-0.5 rounded-md bg-slate-200/80 dark:bg-slate-800 border border-slate-300/70 dark:border-slate-700 text-[11px] font-bold">
               <button
                 type="button"
                 onClick={() => setActiveView('scan')}
-                className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                className={`px-2.5 py-1 rounded transition-colors cursor-pointer whitespace-nowrap ${
                   activeView === 'scan'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
@@ -400,9 +414,9 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveView('fleet')}
-                className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
+                className={`px-2.5 py-1 rounded transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap ${
                   activeView === 'fleet'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                    ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
@@ -411,12 +425,14 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
               </button>
             </div>
 
-            <button
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            {!isInline && (
+              <button
+                onClick={onClose}
+                className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 

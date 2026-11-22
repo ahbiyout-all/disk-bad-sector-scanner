@@ -352,7 +352,7 @@ DS_API bool DS_CALL DS_ScanLbaBlock(void* hDrive, uint64_t lba, uint32_t count, 
         }
     }
 
-    return true;
+    return readSuccess ? true : false;
 }
 
 DS_API bool DS_CALL DS_ScanLbaBlockWithPolicy(
@@ -744,6 +744,8 @@ DS_API bool DS_CALL DS_EvaluateDriveReliability(
     double score = 100.0;
     outReport->estimatedRemainingDays = 1825; // 5 years baseline
 
+    uint32_t validTempC = 0;
+
     for (int32_t i = 0; i < entryCount; ++i) {
         const DSSmartEntry* e = &entries[i];
 
@@ -782,12 +784,22 @@ DS_API bool DS_CALL DS_EvaluateDriveReliability(
 
             case 0xC2: // Temperature
             case 0xBE: // Airflow Temperature
-                outReport->temperatureCelsius = (uint32_t)(e->rawValue & 0xFF);
-                if (outReport->temperatureCelsius > 55) {
-                    score -= (outReport->temperatureCelsius - 55) * 2.0;
+            {
+                uint32_t rawTemp = (uint32_t)(e->rawValue & 0xFF);
+                if (rawTemp > 0U && rawTemp < 150U) {
+                    // Prefer primary attribute 0xC2 over 0xBE if both are present
+                    if (e->attributeId == 0xC2 || validTempC == 0U) {
+                        validTempC = rawTemp;
+                    }
                 }
                 break;
+            }
         }
+    }
+
+    outReport->temperatureCelsius = validTempC;
+    if (validTempC > 55U) {
+        score -= (double)(validTempC - 55U) * 2.0;
     }
 
     if (score < 0.0) score = 0.0;
@@ -875,7 +887,9 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
     );
 
     if (smartVerOk) {
-        // First read attribute thresholds (command 0xD1) so we have real manufacturer thresholds
+        // First read attribute thresholds (command 0xD1) so we have real manufacturer thresholds.
+        // Use 0xA0 primary (modern SATA/AHCI/USB-SATA bridges reject PATA Slave bit 0xB0 on odd physical indices),
+        // and only retry with 0xB0 if 0xA0 fails on an odd driveIndex for legacy IDE compatibility.
         uint8_t thresholds[256];
         memset(thresholds, 0, sizeof(thresholds));
         {
@@ -887,16 +901,23 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
             threshIn.irDriveRegs.bSectorNumberReg = 1;
             threshIn.irDriveRegs.bCylLowReg = SMART_CYL_LOW;
             threshIn.irDriveRegs.bCylHighReg = SMART_CYL_HI;
-            threshIn.irDriveRegs.bDriveHeadReg = (uint8_t)(0xA0 | ((ctx->driveIndex & 1) << 4));
+            threshIn.irDriveRegs.bDriveHeadReg = 0xA0;
             threshIn.irDriveRegs.bCommandReg = SMART_CMD;
 
             uint8_t threshOutBuf[sizeof(SENDCMDOUTPARAMS) + READ_THRESHOLD_BUFFER_SIZE];
             memset(threshOutBuf, 0, sizeof(threshOutBuf));
             DWORD threshBytes = 0;
             const DWORD minSmartPayloadBytes = (DWORD)(FIELD_OFFSET(SENDCMDOUTPARAMS, bBuffer) + 362U);
-            if (DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &threshIn, sizeof(threshIn),
-                                threshOutBuf, sizeof(threshOutBuf), &threshBytes, NULL) &&
-                threshBytes >= minSmartPayloadBytes) {
+            BOOL threshOk = DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &threshIn, sizeof(threshIn),
+                                            threshOutBuf, sizeof(threshOutBuf), &threshBytes, NULL);
+            if ((!threshOk || threshBytes < minSmartPayloadBytes) && (ctx->driveIndex & 1U) != 0U) {
+                memset(threshOutBuf, 0, sizeof(threshOutBuf));
+                threshBytes = 0;
+                threshIn.irDriveRegs.bDriveHeadReg = 0xB0;
+                threshOk = DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &threshIn, sizeof(threshIn),
+                                           threshOutBuf, sizeof(threshOutBuf), &threshBytes, NULL);
+            }
+            if (threshOk && threshBytes >= minSmartPayloadBytes) {
                 SENDCMDOUTPARAMS* pThreshOut = (SENDCMDOUTPARAMS*)threshOutBuf;
                 const uint8_t* tData = pThreshOut->bBuffer;
                 for (int i = 0; i < 30; ++i) {
@@ -918,7 +939,7 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
         attrIn.irDriveRegs.bSectorNumberReg = 1;
         attrIn.irDriveRegs.bCylLowReg = SMART_CYL_LOW;
         attrIn.irDriveRegs.bCylHighReg = SMART_CYL_HI;
-        attrIn.irDriveRegs.bDriveHeadReg = (uint8_t)(0xA0 | ((ctx->driveIndex & 1) << 4));
+        attrIn.irDriveRegs.bDriveHeadReg = 0xA0;
         attrIn.irDriveRegs.bCommandReg = SMART_CMD;
 
         uint8_t attrOutBuf[sizeof(SENDCMDOUTPARAMS) + READ_ATTRIBUTE_BUFFER_SIZE];
@@ -926,9 +947,17 @@ DS_API int32_t DS_CALL DS_GetSmartTelemetry(void* hDrive, DSSmartEntry* outEntri
         DWORD attrBytes = 0;
         const DWORD minAttrPayloadBytes = (DWORD)(FIELD_OFFSET(SENDCMDOUTPARAMS, bBuffer) + 362U);
 
-        if (DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &attrIn, sizeof(attrIn),
-                            attrOutBuf, sizeof(attrOutBuf), &attrBytes, NULL) &&
-            attrBytes >= minAttrPayloadBytes) {
+        BOOL attrOk = DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &attrIn, sizeof(attrIn),
+                                      attrOutBuf, sizeof(attrOutBuf), &attrBytes, NULL);
+        if ((!attrOk || attrBytes < minAttrPayloadBytes) && (ctx->driveIndex & 1U) != 0U) {
+            memset(attrOutBuf, 0, sizeof(attrOutBuf));
+            attrBytes = 0;
+            attrIn.irDriveRegs.bDriveHeadReg = 0xB0;
+            attrOk = DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &attrIn, sizeof(attrIn),
+                                     attrOutBuf, sizeof(attrOutBuf), &attrBytes, NULL);
+        }
+
+        if (attrOk && attrBytes >= minAttrPayloadBytes) {
             SENDCMDOUTPARAMS* pAttrOut = (SENDCMDOUTPARAMS*)attrOutBuf;
             const uint8_t* pData = pAttrOut->bBuffer;
 
@@ -2006,13 +2035,13 @@ DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode) {
     scip.irDriveRegs.bSectorNumberReg = (BYTE)(testTypeCode & 0xFF); // 1=Short, 2=Extended, 3=Conveyance, 127=Abort
     scip.irDriveRegs.bCylLowReg = SMART_CYL_LOW;
     scip.irDriveRegs.bCylHighReg = SMART_CYL_HI;
-    scip.irDriveRegs.bDriveHeadReg = (BYTE)(0xA0 | ((ctx->driveIndex & 1) << 4));
+    scip.irDriveRegs.bDriveHeadReg = 0xA0;
     scip.irDriveRegs.bCommandReg = SMART_CMD;
 
     SENDCMDOUTPARAMS outParams;
     memset(&outParams, 0, sizeof(outParams));
     DWORD bytesReturned = 0;
-    return DeviceIoControl(
+    BOOL ok = DeviceIoControl(
         ctx->hDevice,
         SMART_SEND_DRIVE_COMMAND,
         &scip,
@@ -2021,7 +2050,23 @@ DS_API bool DS_CALL DS_StartSmartSelfTest(void* hDrive, uint32_t testTypeCode) {
         sizeof(outParams),
         &bytesReturned,
         NULL
-    ) != 0;
+    );
+    if (!ok && (ctx->driveIndex & 1U) != 0U) {
+        memset(&outParams, 0, sizeof(outParams));
+        bytesReturned = 0;
+        scip.irDriveRegs.bDriveHeadReg = 0xB0;
+        ok = DeviceIoControl(
+            ctx->hDevice,
+            SMART_SEND_DRIVE_COMMAND,
+            &scip,
+            sizeof(scip),
+            &outParams,
+            sizeof(outParams),
+            &bytesReturned,
+            NULL
+        );
+    }
+    return ok != 0;
 }
 
 DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCode, uint32_t* outProgressPct) {
@@ -2036,16 +2081,23 @@ DS_API bool DS_CALL DS_GetSmartSelfTestStatus(void* hDrive, uint32_t* outExecCod
     scip.irDriveRegs.bSectorNumberReg = 1;
     scip.irDriveRegs.bCylLowReg = SMART_CYL_LOW;
     scip.irDriveRegs.bCylHighReg = SMART_CYL_HI;
-    scip.irDriveRegs.bDriveHeadReg = (BYTE)(0xA0 | ((ctx->driveIndex & 1) << 4));
+    scip.irDriveRegs.bDriveHeadReg = 0xA0;
     scip.irDriveRegs.bCommandReg = SMART_CMD;
 
     uint8_t outBuf[sizeof(SENDCMDOUTPARAMS) + READ_ATTRIBUTE_BUFFER_SIZE];
     memset(outBuf, 0, sizeof(outBuf));
     DWORD bytesReturned = 0;
     const DWORD minSelfTestBytes = (DWORD)(FIELD_OFFSET(SENDCMDOUTPARAMS, bBuffer) + 364U);
-    if (!DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &scip, sizeof(scip),
-                         outBuf, sizeof(outBuf), &bytesReturned, NULL) ||
-        bytesReturned < minSelfTestBytes) {
+    BOOL ok = DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &scip, sizeof(scip),
+                              outBuf, sizeof(outBuf), &bytesReturned, NULL);
+    if ((!ok || bytesReturned < minSelfTestBytes) && (ctx->driveIndex & 1U) != 0U) {
+        memset(outBuf, 0, sizeof(outBuf));
+        bytesReturned = 0;
+        scip.irDriveRegs.bDriveHeadReg = 0xB0;
+        ok = DeviceIoControl(ctx->hDevice, SMART_RCV_DRIVE_DATA, &scip, sizeof(scip),
+                             outBuf, sizeof(outBuf), &bytesReturned, NULL);
+    }
+    if (!ok || bytesReturned < minSelfTestBytes) {
         return false;
     }
 
@@ -2681,7 +2733,8 @@ DS_API bool DS_CALL DS_ProbeUsbTopology(
 
                         uint8_t detailBuf[1024];
                         memset(detailBuf, 0, sizeof(detailBuf));
-                        *(DWORD*)detailBuf = (sizeof(void*) == 8) ? 8U : 6U;
+                        DWORD detailCbSize = (sizeof(void*) == 8) ? 8U : 6U;
+                        memcpy(detailBuf, &detailCbSize, sizeof(detailCbSize));
                         DWORD reqSize = 0;
                         if (!pGetDetail(hDevInfo, &ifData, detailBuf, sizeof(detailBuf), &reqSize, NULL)) {
                             continue;
@@ -2706,7 +2759,8 @@ DS_API bool DS_CALL DS_ProbeUsbTopology(
                         for (uint8_t p = 1; p <= numPorts; ++p) {
                             uint8_t connEx[512];
                             memset(connEx, 0, sizeof(connEx));
-                            *(uint32_t*)connEx = (uint32_t)p;
+                            uint32_t connPort = (uint32_t)p;
+                            memcpy(connEx, &connPort, sizeof(connPort));
                             DWORD exRet = 0;
                             if (!DeviceIoControl(hHub, 0x00220448U /* IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX */,
                                                  connEx, sizeof(connEx), connEx, sizeof(connEx), &exRet, NULL) || exRet < 35) {
@@ -2717,7 +2771,8 @@ DS_API bool DS_CALL DS_ProbeUsbTopology(
                             uint16_t pid = (uint16_t)(connEx[14] | ((uint16_t)connEx[15] << 8));
                             uint8_t speedByte = connEx[23];
                             uint8_t isHub = connEx[24];
-                            uint32_t connStatus = *(const uint32_t*)(connEx + 31);
+                            uint32_t connStatus = 0;
+                            memcpy(&connStatus, connEx + 31, sizeof(connStatus));
 
                             if (connStatus == 1 && isHub == 0 && vid == outInfo->vendorId && pid == outInfo->productId) {
                                 outInfo->bcdUsb = bcdUsb;

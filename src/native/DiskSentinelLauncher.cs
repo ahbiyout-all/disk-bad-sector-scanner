@@ -30,6 +30,7 @@ namespace DiskSentinel
 
         private static bool _dllLoaded = false;
         private static bool _forensicsDllLoaded = false;
+        private static bool _integrityDllLoaded = false;
         private static bool _isElevated = false;
         private static long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
         private static bool _keepRunning = true;
@@ -408,6 +409,12 @@ namespace DiskSentinel
                 IntPtr hFor = LoadLibraryW(forensicsDllPath);
                 _forensicsDllLoaded = (hFor != IntPtr.Zero);
             }
+            string integrityDllPath = Path.Combine(baseDir, "DiskSentinelIntegrity.dll");
+            if (File.Exists(integrityDllPath))
+            {
+                IntPtr hInt = LoadLibraryW(integrityDllPath);
+                _integrityDllLoaded = (hInt != IntPtr.Zero);
+            }
 
             string htmlPath = FindHtmlEntry(baseDir);
             if (string.IsNullOrEmpty(htmlPath))
@@ -709,11 +716,12 @@ namespace DiskSentinel
                 {
                     string json = string.Format(
                         CultureInfo.InvariantCulture,
-                        "{{\"available\":true,\"host\":\"win32-native-bridge\",\"version\":\"{0}\",\"elevated\":{1},\"dllLoaded\":{2},\"forensicsDllLoaded\":{3}}}",
+                        "{{\"available\":true,\"host\":\"win32-native-bridge\",\"version\":\"{0}\",\"elevated\":{1},\"dllLoaded\":{2},\"forensicsDllLoaded\":{3},\"integrityDllLoaded\":{4}}}",
                         AppVersion,
                         _isElevated ? "true" : "false",
                         _dllLoaded ? "true" : "false",
-                        _forensicsDllLoaded ? "true" : "false"
+                        _forensicsDllLoaded ? "true" : "false",
+                        _integrityDllLoaded ? "true" : "false"
                     );
                     WriteJsonResponse(res, json);
                 }

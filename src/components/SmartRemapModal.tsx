@@ -72,6 +72,7 @@ interface SmartRemapModalProps {
   initialTargetLba?: number | null;
   onSyncRepairQueue?: (blockIds: number[]) => void;
   onRepairSectors: (driveId: string, repairedBlockIds: number[], latencyByBlockId?: Record<number, number>) => void;
+  isInline?: boolean;
 }
 
 export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
@@ -82,7 +83,8 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   initialQueuedBlockIds = [],
   initialTargetLba = null,
   onSyncRepairQueue,
-  onRepairSectors
+  onRepairSectors,
+  isInline = false
 }) => {
   const [selectedBlockIds, setSelectedBlockIds] = useState<number[]>([]);
   const [isRepairing, setIsRepairing] = useState<boolean>(false);
@@ -687,21 +689,33 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden text-slate-100">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'bg-slate-900 border border-slate-800 rounded-md w-full flex flex-col overflow-hidden text-slate-100'
+            : 'bg-slate-900 border border-slate-800 rounded-md max-w-3xl w-full max-h-[90vh] flex flex-col shadow-xl overflow-hidden text-slate-100'
+        }
+      >
         {/* Header */}
-        <div className="px-4 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+        <div className="px-4 py-3 bg-[#090D16] border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400">
-              <Wrench className="w-5 h-5 animate-pulse" />
+            <div className="p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-400">
+              <Wrench className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-white tracking-wide">
                   S.M.A.R.T. 섹터 제로필 수복 &amp; 재할당 엔진
                 </h2>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  REAL DIRECT WRITE VERIFY
+                <span className="text-[10px] font-mono text-emerald-400">
+                  · REAL DIRECT WRITE VERIFY
                 </span>
               </div>
               <p className="text-xs text-slate-400">
@@ -710,46 +724,48 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             </div>
           </div>
 
-          <button
-            disabled={isRepairing}
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isInline && (
+            <button
+              disabled={isRepairing}
+              onClick={onClose}
+              className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Content Body */}
-        <div className="p-4 sm:p-5 flex-1 overflow-y-auto space-y-4">
+        <div className={`p-4 sm:p-5 flex-1 space-y-4 ${isInline ? '' : 'overflow-y-auto'}`}>
           {/* Safety Lock Control Card */}
           <div
-            className={`p-3.5 rounded-lg border transition-all duration-300 ${
-              showLockWarning ? 'ring-2 ring-rose-500 animate-pulse bg-rose-950/70 border-rose-500 shadow-lg shadow-rose-950/50' :
+            className={`p-3.5 rounded-md border transition-colors ${
+              showLockWarning ? 'ring-2 ring-rose-500 bg-rose-950/70 border-rose-500' :
               isSafetyLocked
-                ? 'bg-rose-950/40 border-rose-800/80 shadow-md'
-                : 'bg-emerald-950/40 border-emerald-700/80 shadow-md'
+                ? 'bg-rose-950/40 border-rose-800/80'
+                : 'bg-emerald-950/40 border-emerald-700/80'
             }`}
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">
-                <div className={`p-2 rounded-lg flex-shrink-0 ${
+                <div className={`p-2 rounded-md flex-shrink-0 ${
                   isSafetyLocked
                     ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                     : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                 }`}>
-                  {isSafetyLocked ? <Lock className="w-5 h-5 text-rose-400" /> : <Unlock className="w-5 h-5 text-emerald-400 animate-bounce" />}
+                  {isSafetyLocked ? <Lock className="w-5 h-5 text-rose-400" /> : <Unlock className="w-5 h-5 text-emerald-400" />}
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs font-bold uppercase tracking-wider text-white">
-                      {isSafetyLocked ? '🔒 데이터 안전 잠금 (Safety Lock) : 활성화됨' : '🔓 안전 잠금 해제됨 : 쓰기/수복 허용'}
+                      {isSafetyLocked ? '데이터 안전 잠금 (Safety Lock) : 활성화됨' : '안전 잠금 해제됨 : 쓰기/수복 허용'}
                     </span>
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                       isSafetyLocked
                         ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                     }`}>
-                      {isSafetyLocked ? '실수 데이터 소실 방지' : '⚠️ 데이터 소실 주의 (0x00 덮어쓰기)'}
+                      {isSafetyLocked ? '실수 데이터 소실 방지' : '데이터 소실 주의 (0x00 덮어쓰기)'}
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">

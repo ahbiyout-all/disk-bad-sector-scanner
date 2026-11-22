@@ -25,6 +25,7 @@ interface DiskBenchmarkProfilerModalProps {
   onClose: () => void;
   drive: DiskDrive;
   onBenchmarkComplete?: (driveId: string, specsPatch: Partial<DiskHardwareSpecs>) => void;
+  isInline?: boolean;
 }
 
 const BENCHMARK_HISTORY_KEY = 'disksentinel_benchmark_history_v1';
@@ -55,7 +56,8 @@ export const DiskBenchmarkProfilerModal: React.FC<DiskBenchmarkProfilerModalProp
   isOpen,
   onClose,
   drive,
-  onBenchmarkComplete
+  onBenchmarkComplete,
+  isInline = false
 }) => {
   const [preset, setPreset] = useState<BenchmarkProfilePreset>('combined');
   const [sampleCount, setSampleCount] = useState<10 | 16 | 24>(16);
@@ -311,46 +313,58 @@ export const DiskBenchmarkProfilerModal: React.FC<DiskBenchmarkProfilerModalProp
     .join(' ');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-xs font-sans animate-in fade-in duration-150">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-xs font-sans animate-in fade-in duration-150'
+      }
+    >
       <div
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden"
-        role="dialog"
-        aria-modal="true"
+        className={
+          isInline
+            ? 'bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md w-full flex flex-col overflow-hidden'
+            : 'bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md w-full max-w-5xl shadow-xl flex flex-col max-h-[92vh] overflow-hidden'
+        }
+        role={isInline ? undefined : 'dialog'}
+        aria-modal={isInline ? undefined : true}
         aria-label="LBA 구간 I/O 성능 벤치마크 프로파일러"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-emerald-600/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/20">
-              <Gauge className="w-4.5 h-4.5" />
+            <div className="w-8 h-8 rounded-md bg-emerald-600/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/20">
+              <Gauge className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
                   LBA 구간 순차/랜덤 I/O 벤치마크 프로파일러
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  SAFE READ-ONLY
+                <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                  · SAFE READ-ONLY
                 </span>
               </div>
-              <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+              <p className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 truncate">
                 {drive.model} ({drive.hardwareSpecs?.busType || drive.type}) · Total LBA {drive.totalSectors.toLocaleString()}
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="닫기"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isInline && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="닫기"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs">
+        <div className={`flex-1 p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
           {/* Control Strip */}
           <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-center gap-3 flex-wrap">

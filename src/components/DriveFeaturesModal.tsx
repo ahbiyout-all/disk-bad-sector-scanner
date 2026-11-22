@@ -31,6 +31,7 @@ interface DriveFeaturesModalProps {
   onClose: () => void;
   drive: DiskDrive;
   onOpenSanitizeTrim?: () => void;
+  isInline?: boolean;
 }
 
 const STANDBY_PRESETS: { code: number; label: string }[] = [
@@ -49,7 +50,8 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
   isOpen,
   onClose,
   drive,
-  onOpenSanitizeTrim
+  onOpenSanitizeTrim,
+  isInline = false
 }) => {
   const [status, setStatus] = useState<DriveFeatureStatus | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -172,17 +174,27 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
   const ataAvailable = Boolean(status?.isAtaPassthroughAvailable);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs font-sans'
+      }
+    >
       <div
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden"
-        role="dialog"
-        aria-modal="true"
+        className={
+          isInline
+            ? 'bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md w-full flex flex-col overflow-hidden'
+            : 'bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md w-full max-w-3xl shadow-xl flex flex-col max-h-[92vh] overflow-hidden'
+        }
+        role={isInline ? undefined : 'dialog'}
+        aria-modal={isInline ? undefined : true}
         aria-label="ATA/NVMe 하드웨어 기능 제어"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-indigo-600/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-500/30">
+            <div className="w-8 h-8 rounded-md bg-blue-600/10 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-500/25">
               <Sliders className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -190,8 +202,8 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
                   ATA / NVMe 하드웨어 기능 제어 (Features)
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
-                  {status?.protocol || drive.hardwareSpecs?.busType || drive.type}
+                <span className="text-[10px] font-mono font-bold text-blue-600 dark:text-blue-400">
+                  · {status?.protocol || drive.hardwareSpecs?.busType || drive.type}
                 </span>
                 <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border ${pmBadge.cls}`}>
                   {pmBadge.text}
@@ -208,24 +220,26 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
               type="button"
               onClick={() => void loadFeatures()}
               disabled={loading || executing !== null}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-50 whitespace-nowrap"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               <span>새로고침</span>
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
-              aria-label="닫기"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            {!isInline && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md cursor-pointer"
+                aria-label="닫기"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3.5 text-xs">
+        <div className={`flex-1 p-4 sm:p-5 space-y-3.5 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
           {/* OS System Drive Warning */}
           {isBootDrive && (
             <div className="p-3 rounded-lg border border-amber-400/50 bg-amber-50/70 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 flex items-start gap-2.5">

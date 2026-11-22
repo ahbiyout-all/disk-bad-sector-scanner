@@ -96,13 +96,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
       aria-label={t(locale, 'nav.commandPalette')}
     >
       <div
-        className="w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        className="w-full max-w-2xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
         {/* Search Input Row */}
-        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
-          <Search className="w-4 h-4 text-indigo-500 shrink-0" />
+        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
+          <Search className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -122,7 +122,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         </div>
 
         {/* Results List */}
-        <div className="max-h-[58vh] overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80">
+        <div className="max-h-[58vh] overflow-y-auto scrollbar-thin divide-y divide-slate-100 dark:divide-slate-800/80">
           {filtered.length === 0 ? (
             <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
               {t(locale, 'cmd.empty')}
@@ -143,7 +143,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                   }}
                   className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                     isSelected
-                      ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-900 dark:text-indigo-100'
+                      ? 'bg-blue-600/10 dark:bg-blue-500/15 text-blue-800 dark:text-blue-200'
                       : 'hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-800 dark:text-slate-200'
                   }`}
                 >
@@ -162,13 +162,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
+                  <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px] tabular-nums">
                     {action.shortcut && (
                       <span className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300">
                         {action.shortcut}
                       </span>
                     )}
-                    {isSelected && <CornerDownLeft className="w-3.5 h-3.5 text-indigo-500" />}
+                    {isSelected && <CornerDownLeft className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />}
                   </div>
                 </button>
               );
@@ -177,9 +177,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         </div>
 
         {/* Footer Hint */}
-        <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
+        <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16] flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
           <div className="flex items-center gap-2">
-            <Command className="w-3.5 h-3.5 text-indigo-500" />
+            <Command className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
             <span>↑↓ Navigate · Enter Execute · Esc Close</span>
           </div>
           <span>{filtered.length} commands</span>

@@ -1418,7 +1418,7 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
         );
 
         if smart_ver_ok != 0 {
-            // Read thresholds (ATA SMART subcommand 0xD1)
+            // Read thresholds (ATA SMART subcommand 0xD1) using 0xA0 primary (AHCI/USB-SATA compliant)
             let mut thresholds = [0u8; 256];
             let mut thresh_scip: SENDCMDINPARAMS = std::mem::zeroed();
             thresh_scip.cBufferSize = 512;
@@ -1427,13 +1427,13 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
             thresh_scip.irDriveRegs.bSectorNumberReg = 1;
             thresh_scip.irDriveRegs.bCylLowReg = 0x4F;
             thresh_scip.irDriveRegs.bCylHighReg = 0xC2;
-            thresh_scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+            thresh_scip.irDriveRegs.bDriveHeadReg = 0xA0;
             thresh_scip.irDriveRegs.bCommandReg = 0xB0;
 
             let thresh_out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
             let mut thresh_out_buf = vec![0u8; thresh_out_size];
             let mut thresh_bytes: u32 = 0;
-            if DeviceIoControl(
+            let mut thresh_ok = DeviceIoControl(
                 h_device as _,
                 SMART_RCV_DRIVE_DATA,
                 &thresh_scip as *const _ as _,
@@ -1442,7 +1442,23 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
                 thresh_out_size as u32,
                 &mut thresh_bytes,
                 std::ptr::null_mut(),
-            ) != 0 && thresh_bytes >= 528 {
+            );
+            if (thresh_ok == 0 || thresh_bytes < 528) && (ctx.drive_index & 1) != 0 {
+                thresh_out_buf.fill(0);
+                thresh_bytes = 0;
+                thresh_scip.irDriveRegs.bDriveHeadReg = 0xB0;
+                thresh_ok = DeviceIoControl(
+                    h_device as _,
+                    SMART_RCV_DRIVE_DATA,
+                    &thresh_scip as *const _ as _,
+                    std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                    thresh_out_buf.as_mut_ptr() as _,
+                    thresh_out_size as u32,
+                    &mut thresh_bytes,
+                    std::ptr::null_mut(),
+                );
+            }
+            if thresh_ok != 0 && thresh_bytes >= 528 {
                 let p_tout = thresh_out_buf.as_ptr() as *const SENDCMDOUTPARAMS;
                 let p_tdata = (*p_tout).bBuffer.as_ptr();
                 for i in 0..30 {
@@ -1462,13 +1478,13 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
             scip.irDriveRegs.bSectorNumberReg = 1;
             scip.irDriveRegs.bCylLowReg = 0x4F;
             scip.irDriveRegs.bCylHighReg = 0xC2;
-            scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+            scip.irDriveRegs.bDriveHeadReg = 0xA0;
             scip.irDriveRegs.bCommandReg = 0xB0; // SMART_CMD
 
             let out_buffer_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
             let mut out_buffer = vec![0u8; out_buffer_size];
 
-            let ok = DeviceIoControl(
+            let mut ok = DeviceIoControl(
                 h_device as _,
                 SMART_RCV_DRIVE_DATA,
                 &scip as *const _ as _,
@@ -1478,6 +1494,21 @@ pub unsafe extern "system" fn DS_GetSmartTelemetry(
                 &mut bytes_returned,
                 std::ptr::null_mut(),
             );
+            if (ok == 0 || bytes_returned < 528) && (ctx.drive_index & 1) != 0 {
+                out_buffer.fill(0);
+                bytes_returned = 0;
+                scip.irDriveRegs.bDriveHeadReg = 0xB0;
+                ok = DeviceIoControl(
+                    h_device as _,
+                    SMART_RCV_DRIVE_DATA,
+                    &scip as *const _ as _,
+                    std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                    out_buffer.as_mut_ptr() as _,
+                    out_buffer_size as u32,
+                    &mut bytes_returned,
+                    std::ptr::null_mut(),
+                );
+            }
 
             if ok != 0 && bytes_returned >= 528 {
                 let p_out = out_buffer.as_ptr() as *const SENDCMDOUTPARAMS;
@@ -1608,6 +1639,8 @@ pub unsafe extern "system" fn DS_EvaluateDriveReliability(
     report.uncorrectable_errors = 0;
     report.temperature_celsius = 0; // 0 = temperature sensor unavailable
 
+    let mut valid_temp_c: u32 = 0;
+
     for i in 0..(entry_count as usize) {
         let e = &*entries.add(i);
         if e.threshold_value > 0 && e.current_value <= e.threshold_value {
@@ -1631,15 +1664,17 @@ pub unsafe extern "system" fn DS_EvaluateDriveReliability(
             }
             0xC2 | 0xBE => {
                 let t = (e.raw_value as u32) & 0xFF;
-                if t > 0 && t < 150 {
-                    report.temperature_celsius = t;
-                    if t > 55 {
-                        report.reliability_score -= ((t - 55) as f64) * 2.0;
-                    }
+                if t > 0 && t < 150 && (e.attribute_id == 0xC2 || valid_temp_c == 0) {
+                    valid_temp_c = t;
                 }
             }
             _ => {}
         }
+    }
+
+    report.temperature_celsius = valid_temp_c;
+    if valid_temp_c > 55 {
+        report.reliability_score -= ((valid_temp_c - 55) as f64) * 2.0;
     }
 
     report.reliability_score = report.reliability_score.clamp(0.0, 100.0);
@@ -2633,12 +2668,12 @@ pub unsafe extern "system" fn DS_StartSmartSelfTest(
         scip.irDriveRegs.bSectorNumberReg = (test_type_code & 0xFF) as u8;
         scip.irDriveRegs.bCylLowReg = 0x4F;
         scip.irDriveRegs.bCylHighReg = 0xC2;
-        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bDriveHeadReg = 0xA0;
         scip.irDriveRegs.bCommandReg = 0xB0; // SMART_CMD
 
         let mut out_params: SENDCMDOUTPARAMS = std::mem::zeroed();
         let mut bytes_returned: u32 = 0;
-        DeviceIoControl(
+        let mut ok = DeviceIoControl(
             ctx.raw_handle as _,
             SMART_SEND_DRIVE_COMMAND,
             &scip as *const _ as _,
@@ -2647,7 +2682,23 @@ pub unsafe extern "system" fn DS_StartSmartSelfTest(
             std::mem::size_of::<SENDCMDOUTPARAMS>() as u32,
             &mut bytes_returned,
             std::ptr::null_mut(),
-        ) != 0
+        );
+        if ok == 0 && (ctx.drive_index & 1) != 0 {
+            out_params = std::mem::zeroed();
+            bytes_returned = 0;
+            scip.irDriveRegs.bDriveHeadReg = 0xB0;
+            ok = DeviceIoControl(
+                ctx.raw_handle as _,
+                SMART_SEND_DRIVE_COMMAND,
+                &scip as *const _ as _,
+                std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                &mut out_params as *mut _ as _,
+                std::mem::size_of::<SENDCMDOUTPARAMS>() as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            );
+        }
+        ok != 0
     }
 
     #[cfg(not(windows))]
@@ -2686,25 +2737,42 @@ pub unsafe extern "system" fn DS_GetSmartSelfTestStatus(
         scip.irDriveRegs.bSectorNumberReg = 1;
         scip.irDriveRegs.bCylLowReg = 0x4F;
         scip.irDriveRegs.bCylHighReg = 0xC2;
-        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bDriveHeadReg = 0xA0;
         scip.irDriveRegs.bCommandReg = 0xB0;
 
         let out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
-        let mut out_buf = vec![0u8; out_size];
+        let mut out_vec_or_buf = vec![0u8; out_size];
         let mut bytes_returned: u32 = 0;
 
-        if DeviceIoControl(
+        let mut ok = DeviceIoControl(
             ctx.raw_handle as _,
             SMART_RCV_DRIVE_DATA,
             &scip as *const _ as _,
             std::mem::size_of::<SENDCMDINPARAMS>() as u32,
-            out_buf.as_mut_ptr() as _,
+            out_vec_or_buf.as_mut_ptr() as _,
             out_size as u32,
             &mut bytes_returned,
             std::ptr::null_mut(),
-        ) == 0 || bytes_returned < 528 {
+        );
+        if (ok == 0 || bytes_returned < 528) && (ctx.drive_index & 1) != 0 {
+            out_vec_or_buf.fill(0);
+            bytes_returned = 0;
+            scip.irDriveRegs.bDriveHeadReg = 0xB0;
+            ok = DeviceIoControl(
+                ctx.raw_handle as _,
+                SMART_RCV_DRIVE_DATA,
+                &scip as *const _ as _,
+                std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                out_vec_or_buf.as_mut_ptr() as _,
+                out_size as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            );
+        }
+        if ok == 0 || bytes_returned < 528 {
             return false;
         }
+        let out_buf = out_vec_or_buf;
 
         let p_out = out_buf.as_ptr() as *const SENDCMDOUTPARAMS;
         let exec_byte = *(*p_out).bBuffer.as_ptr().add(363);
@@ -2850,7 +2918,7 @@ pub unsafe extern "system" fn DS_AtaIdentifyDevice(
 
         // 1. Primary: IOCTL_ATA_PASS_THROUGH with IDENTIFY DEVICE (0xEC)
         let mut data_buf = [0u8; 512];
-        let tf = [0, 0, 0, 0, 0, 0xA0 | (((ctx.drive_index & 1) << 4) as u8), 0xEC, 0];
+        let tf = [0, 0, 0, 0, 0, 0xA0, 0xEC, 0];
         if ds_exec_ata_passthrough(
             ctx.raw_handle,
             DS_ATA_FLAGS_DRDY_REQUIRED | DS_ATA_FLAGS_DATA_IN,
@@ -2868,14 +2936,14 @@ pub unsafe extern "system" fn DS_AtaIdentifyDevice(
         scip.cBufferSize = 512;
         scip.irDriveRegs.bSectorCountReg = 1;
         scip.irDriveRegs.bSectorNumberReg = 1;
-        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bDriveHeadReg = 0xA0;
         scip.irDriveRegs.bCommandReg = 0xEC; // ID_CMD
 
         let out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;
         let mut out_vec = vec![0u8; out_size];
         let mut bytes_returned: u32 = 0;
 
-        if DeviceIoControl(
+        let mut ok = DeviceIoControl(
             ctx.raw_handle as _,
             SMART_RCV_DRIVE_DATA,
             &scip as *const _ as _,
@@ -2884,7 +2952,23 @@ pub unsafe extern "system" fn DS_AtaIdentifyDevice(
             out_size as u32,
             &mut bytes_returned,
             std::ptr::null_mut(),
-        ) != 0 && bytes_returned >= 528 {
+        );
+        if (ok == 0 || bytes_returned < 528) && (ctx.drive_index & 1) != 0 {
+            out_vec.fill(0);
+            bytes_returned = 0;
+            scip.irDriveRegs.bDriveHeadReg = 0xB0;
+            ok = DeviceIoControl(
+                ctx.raw_handle as _,
+                SMART_RCV_DRIVE_DATA,
+                &scip as *const _ as _,
+                std::mem::size_of::<SENDCMDINPARAMS>() as u32,
+                out_vec.as_mut_ptr() as _,
+                out_size as u32,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            );
+        }
+        if ok != 0 && bytes_returned >= 528 {
             let p_out = out_vec.as_ptr() as *const SENDCMDOUTPARAMS;
             std::ptr::copy_nonoverlapping((*p_out).bBuffer.as_ptr(), out_512_buf, 512);
             return true;
@@ -3122,7 +3206,7 @@ pub unsafe extern "system" fn DS_GetSmartLogPage(
         scip.irDriveRegs.bSectorNumberReg = log_address;
         scip.irDriveRegs.bCylLowReg = 0x4F;
         scip.irDriveRegs.bCylHighReg = 0xC2;
-        scip.irDriveRegs.bDriveHeadReg = 0xA0 | (((ctx.drive_index & 1) << 4) as u8);
+        scip.irDriveRegs.bDriveHeadReg = 0xA0;
         scip.irDriveRegs.bCommandReg = 0xB0;
 
         let out_size = std::mem::size_of::<SENDCMDOUTPARAMS>() + 512;

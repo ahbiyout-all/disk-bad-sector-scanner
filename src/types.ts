@@ -1,6 +1,30 @@
 export type SectorState = 'unscanned' | 'good' | 'normal' | 'slow' | 'critical' | 'bad';
 
-export type MainAppTab = 'fleet' | 'scan' | 'logs' | 'integrity' | 'health' | 'smart' | 'history';
+export type MainAppTab =
+  | 'fleet'
+  | 'scan'
+  | 'logs'
+  | 'integrity'
+  | 'health'
+  | 'smart'
+  | 'history'
+  | 'recovery'
+  | 'tools'
+  | 'settings';
+
+export type RecoveryToolTab = 'hex' | 'carving' | 'tracer' | 'remap' | 'cloner' | 'sanitize';
+
+export type HardwareToolTab =
+  | 'specs'
+  | 'benchmark'
+  | 'usb'
+  | 'parallel'
+  | 'watchdog'
+  | 'features'
+  | 'vendor'
+  | 'catalog';
+
+export type SettingsPanelTab = 'options' | 'dlldocs' | 'guide' | 'about';
 
 export type AppLocale = 'ko' | 'en';
 

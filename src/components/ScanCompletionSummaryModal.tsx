@@ -34,37 +34,37 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-xs overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
-      <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col font-sans">
+      <div className="relative w-full max-w-lg bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-2xl overflow-hidden flex flex-col font-sans">
         
         {/* Header Banner */}
-        <div className={`p-5 text-white flex items-center justify-between ${
-          hasBadSectors 
-            ? 'bg-gradient-to-r from-red-600 to-amber-600' 
-            : 'bg-gradient-to-r from-emerald-600 to-indigo-600'
+        <div className={`px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between ${
+          hasBadSectors
+            ? 'bg-red-600 text-white'
+            : 'bg-blue-600 text-white'
         }`}>
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 shadow-inner">
+            <div className="w-10 h-10 rounded-md bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
               {hasBadSectors ? (
-                <ShieldAlert className="w-7 h-7 text-white animate-pulse" />
+                <ShieldAlert className="w-5 h-5 text-white" />
               ) : (
-                <ShieldCheck className="w-7 h-7 text-white" />
+                <ShieldCheck className="w-5 h-5 text-white" />
               )}
             </div>
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-wider opacity-90">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-white/80">
                 Disk Bad Sector Scanner Scan Completed
               </div>
-              <h2 className="text-base sm:text-lg font-extrabold tracking-tight">
-                {hasBadSectors ? '⚠️ 배드섹터 검출 경고' : '🎉 디스크 표면 검사 정상 완료'}
+              <h2 className="text-base font-bold tracking-tight">
+                {hasBadSectors ? '배드섹터 검출 경고' : '디스크 표면 검사 정상 완료'}
               </h2>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+            className="p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -97,30 +97,30 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
           </div>
 
           {/* Quick Metrics Grid */}
-          <div className="grid grid-cols-2 gap-2.5 font-mono text-[11px]">
-            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
+          <div className="grid grid-cols-2 gap-2.5 font-mono text-[11px] tabular-nums">
+            <div className="p-3 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
               <div className="text-slate-400 text-[10px]">대상 드라이브</div>
               <div className="font-bold text-slate-800 dark:text-slate-200 truncate" title={record.driveModel}>
                 {record.driveModel}
               </div>
             </div>
 
-            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
+            <div className="p-3 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
               <div className="text-slate-400 text-[10px]">검사 모드</div>
               <div className="font-bold text-slate-800 dark:text-slate-200">
                 {record.scanMode === 'full' ? '전체 정밀 표면 검사 (Full)' : '고속 샘플링 검사 (Quick)'}
               </div>
             </div>
 
-            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
+            <div className="p-3 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
               <div className="text-slate-400 text-[10px]">총 소요 시간</div>
               <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                <Clock className="w-3.5 h-3.5 text-blue-500" />
                 <span>{Math.floor(record.durationSeconds / 60)}분 {Math.floor(record.durationSeconds % 60)}초</span>
               </div>
             </div>
 
-            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
+            <div className="p-3 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-0.5">
               <div className="text-slate-400 text-[10px]">
                 {typeof record.avgSpeedMbSec === 'number' && record.avgSpeedMbSec > 0 ? '평균 전송 속도' : '평균 응답 지연'}
               </div>
@@ -142,7 +142,7 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
                 onClose();
                 onOpenFullReport(record);
               }}
-              className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full sm:flex-1 py-2 px-4 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <FileText className="w-4 h-4" />
               <span>정밀 검사 보고서 보기</span>
@@ -154,7 +154,7 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
                   onClose();
                   onOpenRepair();
                 }}
-                className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-md transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full sm:flex-1 py-2 px-4 rounded-md bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Wrench className="w-4 h-4" />
                 <span>배드섹터 수복 센터</span>
@@ -163,7 +163,7 @@ export const ScanCompletionSummaryModal: React.FC<ScanCompletionSummaryModalProp
 
             <button
               onClick={onClose}
-              className="w-full sm:w-auto py-2.5 px-4 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors cursor-pointer"
+              className="w-full sm:w-auto py-2 px-4 rounded-md border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors cursor-pointer"
             >
               확인
             </button>

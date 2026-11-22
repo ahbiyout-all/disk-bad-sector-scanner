@@ -4,6 +4,55 @@ All notable changes to this project will be documented in this file. This projec
 
 ---
 
+## [v4.6.3] - 2026-11-22
+### Added
+- **제5 순수 창작 네이티브 DLL `DiskSentinelIntegrity.dll` (Penta-DLL 아키텍처 완성 & 공식 기술 명세서 등록)**:
+  - 커널 디바이스 핸들 없이 고속 무결성·LBA 익스텐트 상관·시점 비교 Diff·플릿 Watchdog SLA를 전담하는 독립 C ABI 라이브러리(`src/native/DiskSentinelIntegrity.h/.cpp`) 신규 구현 및 **8대 익스포트 API**(`DSI_GetIntegrityEngineInfo`, `DSI_Sha256Init`, `DSI_Sha256Update`, `DSI_Sha256Final`, `DSI_ComputeIntegrityDigest`, `DSI_EvaluateExtentIntegrity`, `DSI_ComputeScanSmartDiff`, `DSI_EvaluateWatchdogMatrix`) 탑재.
+  - 엔진 로드 시 SHA-256(`"abc"`), Slicing-by-8 CRC32(`"123456789"` == `0xCBF43926`), 익스텐트 중첩 이진 탐색, 스캔 Diff 열화 4종 **KAT(Known-Answer Test)** 자가진단 수행.
+  - **`docs/DiskSentinel_Integrity_DLL_Specification.md` & `DllDocsModal.tsx` 등록**: C ABI `#pragma pack(push, 8)` 메모리 레이아웃, 수식/알고리즘 동작 원리, Tauri FFI 및 Python `ctypes` 예제까지 통합 문서화(총 5-DLL 51개 익스포트 체계).
+- **Tauri · Win32 Launcher · React UI 실시간 연동 (`src-tauri/src/main.rs`, `DiskSentinelLauncher.cs`, `integrityDllBridge.ts`)**:
+  - `src-tauri/src/main.rs`가 Windows에서 `LoadLibraryW`로 `DiskSentinelIntegrity.dll`을 동적 로드하고, `sha256_file_streaming` 파일 스트리밍 해시를 C++ DLL(`DSI_Sha256Init/Update/Final`, 64KB 청크)로 가속(미로드 시 순수 Rust 폴백)하며 5대 신규 IPC 커맨드 제공.
+  - `FolderLbaIntegrityPanel.tsx`(파일별 LBA 생존성 점수 & `DSI` 엔진 배지), `HistoryAndComparison.tsx`(일일 열화 속도·회귀 등급 스트립), `TrayGuardianModal.tsx`(플릿 종합 건강 지수 & Watchdog 매트릭스 평가) 연동 및 Slate + Cobalt Blue 테마 정리.
+  - `build-dll.bat`, `setup.iss`, `src-tauri/tauri.conf.json`, `.github/workflows/tauri-desktop.yml`에 `DiskSentinelIntegrity.dll` 5종 빌드·번들·배포 스테이징 반영.
+
+### Fixed (기존 4종 DLL + Rust/TS 전 계층 심층 감사 수정)
+- **`DiskSentinelForensics.dll` GPT 헤더 LBA1 단독(512B 미만 배열) 입력 시 CRC32 검증 누락 수정**:
+  - `DSF_InspectBootAndPartitionTable`에서 512B 단일 GPT 헤더(`bufLen >= 92`)만 전달된 경우에도 92B 헤더 IEEE 802.3 CRC32를 즉시 계산·검증하고, `totalBufLen`이 파티션 배열 끝까지 충분할 때만 배열 CRC32를 추가 검증하도록 분기 정비.
+- **`DiskSentinelPredictive.dll` / `main.rs` / `predictiveAnalyticsBridge.ts` 초단기(<1시간) OLS 추세 과대 외삽 교정**:
+  - 관측 기간이 `1시간(1/24일)` 미만인 스냅샷 쌍에서 `slopePerDay`가 비정상적으로 폭증하던 문제를 C++ DLL, Rust `eval_smart_trend_rust`, TypeScript `projectSmartDegradationTrendSync` 3계층 모두에서 `0.0` 안전 가드로 통일.
+- **`DiskSentinelRecovery.dll` / `main.rs` / `recoveryDllBridge.ts` UTF-8 다중바이트 로그 오탐 & `$MFT` `targetLba == 0` 가드 보완**:
+  - `DSR_InspectRecoveryCarveBuffer` 및 Rust/TS 폴백에서 2/3/4바이트 유효 UTF-8 시퀀스(한글·일본어 등 비ASCII 텍스트 로그)를 인쇄 가능 문자로 정당 계수해 바이너리 오분류(`signatureType == 6` 누락) 제거.
+  - `DSR_ScanMftBufferForCluster` 및 Rust `parse_recovery_mft_batch` 폴백에서 `targetLba == 0` 전달 시 `$MFT` 상주 파일이 무조건 충돌(`hits_resident_record`)로 판정되던 경계 결함에 `targetLba > 0 && targetLba != UINT64_MAX` 조건 추가.
+
+---
+
+## [v4.6.2] - 2026-11-22
+### Added & Improved
+- **PCIe / SATA / NVMe 링크 실측 확장 & 컨트롤러 다운그레이드 탐지 (`src-tauri/src/main.rs`, `DiskHardwareDetailsModal.tsx`, `TelemetryPanel.tsx`)**:
+  - `DEVPKEY_PciDevice_*` DevNode 탐색 및 SATA/NVMe 프로토콜 프로브를 확장해 현재 링크 속도·레인 폭(Current vs Max) 및 대역폭 병목(Link Downgrade) 여부를 실시간 판별.
+- **전체 디스크 플릿 비교 대시보드 · 체크포인트 중단/재개 · `Ctrl+K` 커맨드 팔레트 & KO/EN 다국어 (`FleetOverviewDashboard.tsx`, `scanCheckpoint.ts`, `CommandPaletteModal.tsx`, `i18n.ts`)**:
+  - 장착된 모든 물리 드라이브의 건강 점수, 온도, 가동 시간, 링크 상태, 스마트 핵심 카운터를 한 화면에서 비교하고 CSV/JSON 일괄 내보내기 지원.
+  - 스캔 진행 상태를 자동 체크포인트로 보존해 중단/앱 재실행 후 이어하기를 지원하며, 통합 커맨드 팔레트(`Ctrl+K`)와 한국어/영어 전환 토글 제공.
+- **중요 폴더 물리 LBA 매핑 · SHA-256 Bit-Rot 무결성 감시 · OS Watchdog & S.M.A.R.T. Diff (`FolderLbaIntegrityPanel.tsx`, `lbaIntegrityStore.ts`, `watchdogEngine.ts`, `scanDiff.ts`, `HistoryAndComparison.tsx`)**:
+  - `FSCTL_GET_RETRIEVAL_POINTERS` IOCTL로 대상 폴더·파일의 물리 LBA 익스텐트 목록을 조회해 배드섹터/고지연 LBA 구간과의 중첩을 교차 검증하고, SHA-256 기준 해시와 비교해 비트 부패(Bit-Rot)를 즉시 감지.
+  - S.M.A.R.T.·온도·링크 다운그레이드·Bit-Rot 임계 규칙을 감시하는 백그라운드 Watchdog과 Windows 네이티브 토스트 알림, 검사 이력 시점 간 Diff 비교 뷰어 및 인쇄용 진단서 탑재.
+
+### Fixed (MSVC Compile & Self-Reflection Deep Audit)
+- **MSVC C++ 컴파일 오류 `C3861 ('pow', 'fmax')` 수정 (`src/native/DiskSentinelEngine.cpp`)**:
+  - `<math.h>` 및 `<cmath>` 헤더를 포함해 Visual Studio MSVC 19.x (`cl.exe`) x64 Release 빌드 시 `build-dll.bat --no-pause`가 경고·오류 없이 통과하도록 교정하고, USB Hub IOCTL 버퍼 내 비정렬 `DWORD`/`uint32_t` 역참조를 `memcpy` 기반 안전 복사로 전환.
+- **Win32 PCIe DevNode 속성 ID 매핑 및 부모 트리 탐색 깊이 보완 (`src-tauri/src/main.rs`)**:
+  - `DEVPKEY_PciDevice_*` 속성 ID `10`(`CurrentLinkWidth`)과 `11`(`MaxLinkSpeed`)이 뒤바뀌어 읽히던 결함을 교정하고, 다계층 스토리지 미니포트/브리지 환경에서 루트 PCIe 컨트롤러를 놓치지 않도록 부모 DevNode 탐색 깊이를 `4`→`6`단계로 확장.
+- **Win32 핸들 누수·IOCTL 버퍼 경계 검사·심볼릭 링크 순환 차단 & OS 알림 명령 보간 제거 (`src-tauri/src/main.rs`)**:
+  - `get_file_physical_lba_extents`에서 `ERROR_HANDLE_EOF`(NTFS MFT Resident 파일) 분기 반환 전 `CloseHandle(h_file)` 호출 누락을 수정하고, `RetrievalPointersBuffer.extent_count`를 실제 `rp_buf` 유효 바이트 범위로 클램핑해 과다 읽기 가능성을 차단.
+  - `collect_target_files` 디렉터리 순회 시 `symlink_metadata`로 심볼릭 링크·NTFS 정션 포인트를 건너뛰고 정규화된 방문 경로 `HashSet`으로 순환 루프를 원천 차단.
+  - `send_native_os_notification`의 PowerShell `-Command` 문자열 보간(`format!`)을 제거하고 환경 변수(`DS_NOTIF_ICON`, `DS_NOTIF_TITLE`, `DS_NOTIF_BODY`) + `CREATE_NO_WINDOW(0x08000000)` 플래그로 분리해 제어문자·따옴표 구문 간섭 및 콘솔 깜빡임을 방지.
+- **프론트엔드 상태 정합성 · 경로 접두어 충돌 · CSV 수식 주입 방어 & 미사용 의존성 정리 (`App.tsx`, `FolderLbaIntegrityPanel.tsx`, `scanDiff.ts`, `reportGenerator.ts`, `package.json`)**:
+  - `handleResumeFromCheckpoint` 훅 의존성(`scanSpeedMultiplier`) 보완, 라이브 진단서/내보내기 시 `activeTask` 실제 모드(`scanMode`/`methodId`) 반영, `rangeStartPct`/`rangeEndPct` 역전 방지 클램핑, `fleet` 탭 백그라운드 텔레메트리 자동 갱신 추가.
+  - `FolderLbaIntegrityPanel`의 감시 루트 매칭 및 제거 시 경로 구분자/후행 역슬래시 정규화 경계 비교를 적용해 유사 경로(`C:\Data` vs `C:\DataBackup`) 오매칭 방지.
+  - 플릿/개별 검사 CSV 내보내기(`scanDiff.ts`, `reportGenerator.ts`) 시 선행 수식 문자(`=`, `+`, `-`, `@`, `\t`, `\r`) 중화 처리 및 `package.json`에서 미사용 `express` / `@types/express` 의존성 제거.
+
+---
+
 ## [v4.6.1] - 2026-11-14
 ### Changed & Removed
 - **브라우저 기반 디스크 인식 방식 전면 제거 및 Tauri 데스크톱 네이티브 IPC 전용 전환**:

@@ -9,6 +9,9 @@ import {
   SavedScanRecord,
   SpecializedScanMethodId,
   MainAppTab,
+  RecoveryToolTab,
+  HardwareToolTab,
+  SettingsPanelTab,
   SurfaceScanCheckpoint,
   SurfaceTestType,
   DiagnosticTask,
@@ -37,6 +40,7 @@ import {
 import type { OptionsModalSubTab } from './components/OptionsModal';
 import type { ExternalDeviceModalTab } from './components/ExternalDeviceModal';
 import { resolveUsbSurfaceScanPolicy } from './utils/usbScanMatrix';
+import { Sidebar } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { SectorGrid } from './components/SectorGrid';
 import { TelemetryPanel } from './components/TelemetryPanel';
@@ -54,28 +58,14 @@ import { ThermalMonitorWidget } from './components/ThermalMonitorWidget';
 const ReportModal = React.lazy(() => import('./components/ReportModal').then(m => ({ default: m.ReportModal })));
 const ExportModal = React.lazy(() => import('./components/ExportModal').then(m => ({ default: m.ExportModal })));
 const UpdateModal = React.lazy(() => import('./components/UpdateModal').then(m => ({ default: m.UpdateModal })));
-const AboutModal = React.lazy(() => import('./components/AboutModal').then(m => ({ default: m.AboutModal })));
-const DllDocsModal = React.lazy(() => import('./components/DllDocsModal').then(m => ({ default: m.DllDocsModal })));
-const ExternalDeviceModal = React.lazy(() => import('./components/ExternalDeviceModal').then(m => ({ default: m.ExternalDeviceModal })));
-const VendorDiagnosticsModal = React.lazy(() => import('./components/VendorDiagnosticsModal').then(m => ({ default: m.VendorDiagnosticsModal })));
-const SupportedProductsCatalogModal = React.lazy(() => import('./components/SupportedProductsCatalogModal').then(m => ({ default: m.SupportedProductsCatalogModal })));
-const ParallelDriveScanModal = React.lazy(() => import('./components/ParallelDriveScanModal').then(m => ({ default: m.ParallelDriveScanModal })));
-const TrayGuardianModal = React.lazy(() => import('./components/TrayGuardianModal').then(m => ({ default: m.TrayGuardianModal })));
-const BitCarvingRecoveryModal = React.lazy(() => import('./components/BitCarvingRecoveryModal').then(m => ({ default: m.BitCarvingRecoveryModal })));
-const DiskHardwareDetailsModal = React.lazy(() => import('./components/DiskHardwareDetailsModal').then(m => ({ default: m.DiskHardwareDetailsModal })));
-const DriveFeaturesModal = React.lazy(() => import('./components/DriveFeaturesModal').then(m => ({ default: m.DriveFeaturesModal })));
-const SectorHexPartitionModal = React.lazy(() => import('./components/SectorHexPartitionModal').then(m => ({ default: m.SectorHexPartitionModal })));
-const DiskBenchmarkProfilerModal = React.lazy(() => import('./components/DiskBenchmarkProfilerModal').then(m => ({ default: m.DiskBenchmarkProfilerModal })));
-const LbaImageClonerModal = React.lazy(() => import('./components/LbaImageClonerModal').then(m => ({ default: m.LbaImageClonerModal })));
-const LbaFileTracerModal = React.lazy(() => import('./components/LbaFileTracerModal').then(m => ({ default: m.LbaFileTracerModal })));
-const SanitizeTrimModal = React.lazy(() => import('./components/SanitizeTrimModal').then(m => ({ default: m.SanitizeTrimModal })));
 const ScanCompletionSummaryModal = React.lazy(() => import('./components/ScanCompletionSummaryModal').then(m => ({ default: m.ScanCompletionSummaryModal })));
-const OptionsModal = React.lazy(() => import('./components/OptionsModal').then(m => ({ default: m.OptionsModal })));
-const HelpGuideModal = React.lazy(() => import('./components/HelpGuideModal').then(m => ({ default: m.HelpGuideModal })));
-const SmartRemapModal = React.lazy(() => import('./components/SmartRemapModal').then(m => ({ default: m.SmartRemapModal })));
 const FleetOverviewDashboard = React.lazy(() => import('./components/FleetOverviewDashboard').then(m => ({ default: m.FleetOverviewDashboard })));
 const FolderLbaIntegrityPanel = React.lazy(() => import('./components/FolderLbaIntegrityPanel').then(m => ({ default: m.FolderLbaIntegrityPanel })));
 const CommandPaletteModal = React.lazy(() => import('./components/CommandPaletteModal').then(m => ({ default: m.CommandPaletteModal })));
+const RecoveryWorkbench = React.lazy(() => import('./components/RecoveryWorkbench').then(m => ({ default: m.RecoveryWorkbench })));
+const HardwareToolsWorkbench = React.lazy(() => import('./components/HardwareToolsWorkbench').then(m => ({ default: m.HardwareToolsWorkbench })));
+const SettingsWorkbench = React.lazy(() => import('./components/SettingsWorkbench').then(m => ({ default: m.SettingsWorkbench })));
+
 import { loadSavedLocale, saveLocale, t } from './utils/i18n';
 import {
   buildCheckpointFromTask,
@@ -125,12 +115,7 @@ import {
   BookOpen,
   Building2,
   Sparkles,
-  ShieldCheck,
   Usb,
-  HardDrive,
-  Activity,
-  Terminal,
-  GitCompare,
   ArrowRight,
   ShieldAlert,
   Play,
@@ -138,8 +123,6 @@ import {
   SlidersHorizontal,
   RefreshCw,
   Zap,
-  LayoutGrid,
-  FolderLock,
   RotateCcw
 } from 'lucide-react';
 
@@ -262,7 +245,6 @@ export default function App() {
   const [drives, setDrives] = useState<DiskDrive[]>([]);
   const [selectedDriveId, setSelectedDriveId] = useState<string>('');
   const [isInitialProbing, setIsInitialProbing] = useState<boolean>(true);
-  const [isExternalModalOpen, setIsExternalModalOpen] = useState<boolean>(false);
   const [externalModalTab, setExternalModalTab] = useState<ExternalDeviceModalTab>('connected');
   const [usbPolicyOverrides, setUsbPolicyOverrides] = useState<Record<string, string>>({});
   const [bridgeDiagnostics, setBridgeDiagnostics] = useState<{
@@ -281,14 +263,23 @@ export default function App() {
 
   const activeDrive: DiskDrive | undefined = drives.find(d => d.id === selectedDriveId) || drives[0];
 
-  // Hardware Details, Features Control & Live Rescan State
-  const [isHardwareDetailsOpen, setIsHardwareDetailsOpen] = useState<boolean>(false);
-  const [isFeaturesModalOpen, setIsFeaturesModalOpen] = useState<boolean>(false);
+  // Sidebar & Workbench Navigation State
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
+    () => safeStorage.getItem('disk_scanner_sidebar_collapsed') === 'true'
+  );
+  useEffect(() => {
+    safeStorage.setItem('disk_scanner_sidebar_collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
+
   const [smartLogRefreshSignal, setSmartLogRefreshSignal] = useState<number>(0);
   const [isRescanningDrives, setIsRescanningDrives] = useState<boolean>(false);
 
-  // Active Tab: 'scan' | 'logs' | 'health' | 'smart' | 'history'
+  // Active Primary Workspace / Telemetry / Workbench Tab
   const [activeTab, setActiveTab] = useState<MainAppTab>('scan');
+  const [activeRecoveryTool, setActiveRecoveryTool] = useState<RecoveryToolTab>('hex');
+  const [activeHardwareTool, setActiveHardwareTool] = useState<HardwareToolTab>('specs');
+  const [activeSettingsPanel, setActiveSettingsPanel] = useState<SettingsPanelTab>('options');
 
   // Storage Media Tailored Inspection Method State
   const [selectedMethodId, setSelectedMethodId] = useState<SpecializedScanMethodId>('nvme_multiqueue_direct');
@@ -304,7 +295,8 @@ export default function App() {
 
   const openExternalDeviceModal = useCallback((tab: ExternalDeviceModalTab = 'connected') => {
     setExternalModalTab(tab);
-    setIsExternalModalOpen(true);
+    setActiveHardwareTool('usb');
+    setActiveTab('tools');
   }, []);
 
   const handleApplyUsbMatrixPolicy = useCallback(
@@ -771,29 +763,19 @@ export default function App() {
   const [exportTargetRecord, setExportTargetRecord] = useState<SavedScanRecord | null>(null);
   const [completedSummaryRecord, setCompletedSummaryRecord] = useState<SavedScanRecord | null>(null);
 
-  // GitHub Real-time Update System State
+  // GitHub Real-time Update System State & Remaining Transient Overlays
   const [updateRelease, setUpdateRelease] = useState<ReleaseInfo | null>(null);
   const [hasUpdate, setHasUpdate] = useState<boolean>(false);
   const [updateSource, setUpdateSource] = useState<'github-live' | 'error'>('error');
   const [updateErrorMessage, setUpdateErrorMessage] = useState<string | undefined>(undefined);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
-  const [isAboutModalOpen, setIsAboutModalOpen] = useState<boolean>(false);
-  const [isDllDocsOpen, setIsDllDocsOpen] = useState<boolean>(false);
-  const [isVendorModalOpen, setIsVendorModalOpen] = useState<boolean>(false);
-  const [isCatalogModalOpen, setIsCatalogModalOpen] = useState<boolean>(false);
-  const [isParallelScanOpen, setIsParallelScanOpen] = useState<boolean>(false);
-  const [isTrayGuardianOpen, setIsTrayGuardianOpen] = useState<boolean>(false);
-  const [isBitCarvingOpen, setIsBitCarvingOpen] = useState<boolean>(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
+
+  // Workbench Tool Target Parameters
   const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(0);
-  const [isHexInspectorOpen, setIsHexInspectorOpen] = useState<boolean>(false);
   const [hexInspectorTargetLba, setHexInspectorTargetLba] = useState<number>(0);
-  const [isBenchmarkProfilerOpen, setIsBenchmarkProfilerOpen] = useState<boolean>(false);
-  const [isLbaClonerOpen, setIsLbaClonerOpen] = useState<boolean>(false);
   const [lbaClonerRange, setLbaClonerRange] = useState<{ startLba: number; endLba: number } | null>(null);
-  const [isFileTracerOpen, setIsFileTracerOpen] = useState<boolean>(false);
   const [fileTracerTargetLba, setFileTracerTargetLba] = useState<number>(0);
-  const [isSanitizeTrimOpen, setIsSanitizeTrimOpen] = useState<boolean>(false);
-  const [isOptionsModalOpen, setIsOptionsModalOpen] = useState<boolean>(false);
   const [optionsModalInitialTab, setOptionsModalInitialTab] = useState<OptionsModalSubTab>('general');
   const [customSmartThresholds, setCustomSmartThresholds] = useState<CustomSmartThresholdRule[]>(() =>
     loadCustomSmartThresholds()
@@ -802,12 +784,60 @@ export default function App() {
     setCustomSmartThresholds(nextRules);
     saveCustomSmartThresholds(nextRules);
   }, []);
-  const [isHelpGuideModalOpen, setIsHelpGuideModalOpen] = useState<boolean>(false);
-  const [isSmartRemapOpen, setIsSmartRemapOpen] = useState<boolean>(false);
   const [smartRemapTargetLba, setSmartRemapTargetLba] = useState<number | null>(null);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
   const [resumableCheckpoint, setResumableCheckpoint] = useState<SurfaceScanCheckpoint | null>(null);
   const abortedTaskIdsRef = useRef<Set<string>>(new Set());
+
+  const openRecoveryTool = useCallback(
+    (
+      tool: RecoveryToolTab,
+      opts?: {
+        targetLba?: number;
+        range?: { startLba: number; endLba: number } | null;
+      }
+    ) => {
+      if (tool === 'hex' && typeof opts?.targetLba === 'number') {
+        setHexInspectorTargetLba(opts.targetLba);
+      }
+      if (tool === 'carving' && typeof opts?.targetLba === 'number') {
+        setBitCarvingTargetLba(opts.targetLba);
+      }
+      if (tool === 'tracer' && typeof opts?.targetLba === 'number') {
+        setFileTracerTargetLba(opts.targetLba);
+      }
+      if (tool === 'remap') {
+        setSmartRemapTargetLba(typeof opts?.targetLba === 'number' ? opts.targetLba : null);
+      }
+      if (tool === 'cloner' && opts && 'range' in opts) {
+        setLbaClonerRange(opts.range ?? null);
+      }
+      setActiveRecoveryTool(tool);
+      setActiveTab('recovery');
+    },
+    []
+  );
+
+  const openHardwareTool = useCallback(
+    (tool: HardwareToolTab, extTab?: ExternalDeviceModalTab) => {
+      if (tool === 'usb' && extTab) {
+        setExternalModalTab(extTab);
+      }
+      setActiveHardwareTool(tool);
+      setActiveTab('tools');
+    },
+    []
+  );
+
+  const openSettingsPanel = useCallback(
+    (panel: SettingsPanelTab, optionsSubTab?: OptionsModalSubTab) => {
+      if (panel === 'options' && optionsSubTab) {
+        setOptionsModalInitialTab(optionsSubTab);
+      }
+      setActiveSettingsPanel(panel);
+      setActiveTab('settings');
+    },
+    []
+  );
 
   // Persistent Background Watchdog Rules, SMART Baselines & Event Feed
   const [watchdogRules, setWatchdogRules] = useState<WatchdogRule[]>(() => loadWatchdogRules());
@@ -1766,7 +1796,7 @@ export default function App() {
     setActiveTaskId(restoredTask.id);
     setResumableCheckpoint(null);
     setTasks(prev => [restoredTask, ...prev.filter(t => t.driveId !== activeDrive.id || t.status === 'completed')]);
-  }, [activeDrive, resumableCheckpoint]);
+  }, [activeDrive, resumableCheckpoint, scanSpeedMultiplier]);
 
   const handleDiscardCheckpoint = useCallback(() => {
     if (!activeDrive) return;
@@ -1839,7 +1869,9 @@ export default function App() {
   // Open Current Live Diagnostic Report
   const handleOpenCurrentReport = () => {
     if (!activeDrive) return;
-    const record = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
+    const effMode = activeTask ? activeTask.scanMode : scanMode;
+    const effMethod = activeTask ? activeTask.methodId : selectedMethodId;
+    const record = createScanRecordFromSession(activeDrive, effMode, blocks, elapsedSeconds, effMethod);
     setActiveReportRecord(record);
   };
 
@@ -1849,7 +1881,9 @@ export default function App() {
       setExportTargetRecord(record);
     } else {
       if (!activeDrive) return;
-      const current = createScanRecordFromSession(activeDrive, scanMode, blocks, elapsedSeconds, selectedMethodId);
+      const effMode = activeTask ? activeTask.scanMode : scanMode;
+      const effMethod = activeTask ? activeTask.methodId : selectedMethodId;
+      const current = createScanRecordFromSession(activeDrive, effMode, blocks, elapsedSeconds, effMethod);
       setExportTargetRecord(current);
     }
   };
@@ -1876,10 +1910,10 @@ export default function App() {
         return;
       }
 
-      // F1: Help Guide
+      // F1: Help Guide Panel
       if (e.key === 'F1') {
         e.preventDefault();
-        setIsHelpGuideModalOpen(prev => !prev);
+        openSettingsPanel('guide');
         return;
       }
 
@@ -1903,10 +1937,10 @@ export default function App() {
         return;
       }
 
-      // Ctrl + , : Options Modal
+      // Ctrl + , : Preferences Panel
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
         e.preventDefault();
-        setIsOptionsModalOpen(prev => !prev);
+        openSettingsPanel('options', 'general');
         return;
       }
 
@@ -1932,49 +1966,56 @@ export default function App() {
         return;
       }
 
-      // 1 ~ 7: Tab Switching
-      if (e.key === '1') setActiveTab('scan');
-      if (e.key === '2') setActiveTab('logs');
-      if (e.key === '3') setActiveTab('health');
-      if (e.key === '4') setActiveTab('smart');
-      if (e.key === '5') setActiveTab('history');
-      if (e.key === '6') setActiveTab('fleet');
+      // 1 ~ 0: Sidebar Section Switching
+      if (e.key === '1') setActiveTab('fleet');
+      if (e.key === '2') setActiveTab('scan');
+      if (e.key === '3') setActiveTab('logs');
+      if (e.key === '4') setActiveTab('health');
+      if (e.key === '5') setActiveTab('smart');
+      if (e.key === '6') setActiveTab('history');
       if (e.key === '7') setActiveTab('integrity');
+      if (e.key === '8') setActiveTab('recovery');
+      if (e.key === '9') setActiveTab('tools');
+      if (e.key === '0') setActiveTab('settings');
     };
 
     window.addEventListener('keydown', handleDesktopKeyDown);
     return () => window.removeEventListener('keydown', handleDesktopKeyDown);
-  }, [scanStatus, handleRescanDrives, isCommandPaletteOpen]);
+  }, [scanStatus, handleRescanDrives, isCommandPaletteOpen, openSettingsPanel]);
 
   const commandPaletteActions = useMemo<CommandPaletteAction[]>(() => {
     const en = locale === 'en';
     const actions: CommandPaletteAction[] = [
-      { id: 'tab-scan', label: t(locale, 'tab.scan'), description: en ? 'Surface scan & LBA map' : '실시간 표면 검사 및 LBA 맵', category: 'navigation', shortcut: '1', keywords: ['surface', 'lba', 'verify', 'read'], execute: () => setActiveTab('scan') },
-      { id: 'tab-logs', label: t(locale, 'tab.logs'), description: en ? 'Real-time error & delay stream' : '결함 및 지연 이벤트 로그', category: 'navigation', shortcut: '2', keywords: ['log', 'error', 'unc'], execute: () => setActiveTab('logs') },
-      { id: 'tab-health', label: t(locale, 'tab.health'), description: en ? 'Health score & thermal chart' : '종합 건강도 및 발열 추이', category: 'navigation', shortcut: '3', keywords: ['temp', 'thermal', 'health'], execute: () => setActiveTab('health') },
-      { id: 'tab-smart', label: t(locale, 'tab.smart'), description: en ? 'S.M.A.R.T. attributes & self-test' : 'S.M.A.R.T. 속성 및 자가진단', category: 'navigation', shortcut: '4', keywords: ['smart', 'attribute', 'nvme'], execute: () => setActiveTab('smart') },
-      { id: 'tab-history', label: t(locale, 'tab.history'), description: en ? 'Scan history & SMART attribute diff' : '검사 기록 및 SMART 변화 대조', category: 'navigation', shortcut: '5', keywords: ['history', 'diff', 'compare'], execute: () => setActiveTab('history') },
-      { id: 'tab-fleet', label: t(locale, 'tab.fleet'), description: en ? 'Multi-drive fleet dashboard & audit' : '전체 디스크 플릿 비교 대시보드', category: 'navigation', shortcut: '6', keywords: ['fleet', 'all', 'disks'], execute: () => setActiveTab('fleet') },
+      { id: 'tab-fleet', label: t(locale, 'tab.fleet'), description: en ? 'Multi-drive fleet dashboard & audit' : '전체 디스크 플릿 비교 대시보드', category: 'navigation', shortcut: '1', keywords: ['fleet', 'all', 'disks'], execute: () => setActiveTab('fleet') },
+      { id: 'tab-scan', label: t(locale, 'tab.scan'), description: en ? 'Surface scan & LBA map' : '실시간 표면 검사 및 LBA 맵', category: 'navigation', shortcut: '2', keywords: ['surface', 'lba', 'verify', 'read'], execute: () => setActiveTab('scan') },
+      { id: 'tab-logs', label: t(locale, 'tab.logs'), description: en ? 'Real-time error & delay stream' : '결함 및 지연 이벤트 로그', category: 'navigation', shortcut: '3', keywords: ['log', 'error', 'unc'], execute: () => setActiveTab('logs') },
+      { id: 'tab-health', label: t(locale, 'tab.health'), description: en ? 'Health score & thermal chart' : '종합 건강도 및 발열 추이', category: 'navigation', shortcut: '4', keywords: ['temp', 'thermal', 'health'], execute: () => setActiveTab('health') },
+      { id: 'tab-smart', label: t(locale, 'tab.smart'), description: en ? 'S.M.A.R.T. attributes & self-test' : 'S.M.A.R.T. 속성 및 자가진단', category: 'navigation', shortcut: '5', keywords: ['smart', 'attribute', 'nvme'], execute: () => setActiveTab('smart') },
+      { id: 'tab-history', label: t(locale, 'tab.history'), description: en ? 'Scan history & SMART attribute diff' : '검사 기록 및 SMART 변화 대조', category: 'navigation', shortcut: '6', keywords: ['history', 'diff', 'compare'], execute: () => setActiveTab('history') },
       { id: 'tab-integrity', label: t(locale, 'tab.integrity'), description: en ? 'Folder LBA mapping & SHA-256 bit-rot' : '중요 폴더 LBA 매핑 및 비트 부패 감시', category: 'navigation', shortcut: '7', keywords: ['integrity', 'sha256', 'bitrot', 'folder'], execute: () => setActiveTab('integrity') },
-      { id: 'tool-hw', label: en ? 'Hardware Architecture & Link Speed' : '하드웨어 상세 스펙 및 링크 속도', category: 'tools', keywords: ['pcie', 'sata', 'controller', 'identify'], disabled: !activeDrive, execute: () => setIsHardwareDetailsOpen(true) },
-      { id: 'tool-features', label: en ? 'ATA/NVMe Hardware Features (AAM/APM)' : 'ATA/NVMe 기능 제어 (AAM/APM)', category: 'tools', keywords: ['aam', 'apm', 'cache'], disabled: !activeDrive, execute: () => setIsFeaturesModalOpen(true) },
-      { id: 'tool-hex', label: en ? 'Raw LBA Hex & MBR/GPT Inspector' : 'LBA 헥스 뷰어 & MBR/GPT 파티션', category: 'tools', keywords: ['hex', 'mbr', 'gpt', 'sector'], disabled: !activeDrive, execute: () => { setHexInspectorTargetLba(selectedBlock?.lba ?? 0); setIsHexInspectorOpen(true); } },
-      { id: 'tool-bench', label: en ? 'LBA Zone I/O Benchmark Profiler' : '실측 스토리지 I/O 벤치마크 프로파일러', category: 'tools', keywords: ['benchmark', 'iops', 'throughput'], disabled: !activeDrive, execute: () => setIsBenchmarkProfilerOpen(true) },
-      { id: 'tool-cloner', label: en ? 'ddrescue LBA Image Cloner' : 'ddrescue LBA 구간 안전 이미지 백업', category: 'tools', keywords: ['clone', 'ddrescue', 'backup'], disabled: !activeDrive, execute: () => { setLbaClonerRange(selectedBlock ? { startLba: selectedBlock.lba, endLba: selectedBlock.endLba } : null); setIsLbaClonerOpen(true); } },
-      { id: 'tool-tracer', label: en ? 'Affected File Tracer (MFT/FAT)' : '손상 LBA 영향 파일 추적기', category: 'tools', keywords: ['file', 'mft', 'ntfs', 'tracer'], disabled: !activeDrive, execute: () => { setFileTracerTargetLba(selectedBlock?.lba ?? latestBadLba ?? 0); setIsFileTracerOpen(true); } },
-      { id: 'tool-carving', label: en ? 'Bit Carving & ECC Recovery' : '비트 카빙 & ECC 패리티 수복', category: 'tools', keywords: ['carving', 'recovery', 'ecc'], disabled: !activeDrive, execute: () => { setBitCarvingTargetLba(latestBadLba ?? selectedBlock?.lba ?? 0); setIsBitCarvingOpen(true); } },
-      { id: 'tool-remap', label: en ? 'S.M.A.R.T. Remap & Zero-Fill Repair' : 'S.M.A.R.T. 섹터 재매핑 & 제로필 수복', category: 'tools', keywords: ['remap', 'zerofill', 'repair'], disabled: !activeDrive, execute: () => setIsSmartRemapOpen(true) },
-      { id: 'tool-sanitize', label: en ? 'NVMe/ATA Sanitize & TRIM' : 'NVMe/ATA 보안 삭제 & SSD TRIM', category: 'tools', keywords: ['trim', 'sanitize', 'erase'], disabled: !activeDrive, execute: () => setIsSanitizeTrimOpen(true) },
+      { id: 'tab-recovery', label: t(locale, 'tab.recovery'), description: en ? 'Hex, Carving, File Tracer, Remap, Cloner & Sanitize' : 'Hex, 카빙, 파일 추적, 리맵, ddrescue 클로닝', category: 'navigation', shortcut: '8', keywords: ['recovery', 'forensics', 'repair'], execute: () => setActiveTab('recovery') },
+      { id: 'tab-tools', label: t(locale, 'tab.tools'), description: en ? 'Hardware specs, benchmark, USB matrix & watchdog' : '하드웨어 스펙, 벤치마크, USB 매트릭스, 워치독', category: 'navigation', shortcut: '9', keywords: ['hardware', 'tools', 'watchdog'], execute: () => setActiveTab('tools') },
+      { id: 'tab-settings', label: t(locale, 'tab.settings'), description: en ? 'Preferences, SMART thresholds, DLL docs & help' : '환경설정, SMART 임계치, DLL 명세 및 도움말', category: 'navigation', shortcut: '0', keywords: ['settings', 'options', 'docs', 'help'], execute: () => setActiveTab('settings') },
+      { id: 'tool-hw', label: en ? 'Hardware Architecture & Link Speed' : '하드웨어 상세 스펙 및 링크 속도', category: 'tools', keywords: ['pcie', 'sata', 'controller', 'identify'], disabled: !activeDrive, execute: () => openHardwareTool('specs') },
+      { id: 'tool-features', label: en ? 'ATA/NVMe Hardware Features (AAM/APM)' : 'ATA/NVMe 기능 제어 (AAM/APM)', category: 'tools', keywords: ['aam', 'apm', 'cache'], disabled: !activeDrive, execute: () => openHardwareTool('features') },
+      { id: 'tool-hex', label: en ? 'Raw LBA Hex & MBR/GPT Inspector' : 'LBA 헥스 뷰어 & MBR/GPT 파티션', category: 'tools', keywords: ['hex', 'mbr', 'gpt', 'sector'], disabled: !activeDrive, execute: () => openRecoveryTool('hex', { targetLba: selectedBlock?.lba ?? 0 }) },
+      { id: 'tool-bench', label: en ? 'LBA Zone I/O Benchmark Profiler' : '실측 스토리지 I/O 벤치마크 프로파일러', category: 'tools', keywords: ['benchmark', 'iops', 'throughput'], disabled: !activeDrive, execute: () => openHardwareTool('benchmark') },
+      { id: 'tool-cloner', label: en ? 'ddrescue LBA Image Cloner' : 'ddrescue LBA 구간 안전 이미지 백업', category: 'tools', keywords: ['clone', 'ddrescue', 'backup'], disabled: !activeDrive, execute: () => openRecoveryTool('cloner', { range: selectedBlock ? { startLba: selectedBlock.lba, endLba: selectedBlock.endLba } : null }) },
+      { id: 'tool-tracer', label: en ? 'Affected File Tracer (MFT/FAT)' : '손상 LBA 영향 파일 추적기', category: 'tools', keywords: ['file', 'mft', 'ntfs', 'tracer'], disabled: !activeDrive, execute: () => openRecoveryTool('tracer', { targetLba: selectedBlock?.lba ?? latestBadLba ?? 0 }) },
+      { id: 'tool-carving', label: en ? 'Bit Carving & ECC Recovery' : '비트 카빙 & ECC 패리티 수복', category: 'tools', keywords: ['carving', 'recovery', 'ecc'], disabled: !activeDrive, execute: () => openRecoveryTool('carving', { targetLba: latestBadLba ?? selectedBlock?.lba ?? 0 }) },
+      { id: 'tool-remap', label: en ? 'S.M.A.R.T. Remap & Zero-Fill Repair' : 'S.M.A.R.T. 섹터 재매핑 & 제로필 수복', category: 'tools', keywords: ['remap', 'zerofill', 'repair'], disabled: !activeDrive, execute: () => openRecoveryTool('remap') },
+      { id: 'tool-sanitize', label: en ? 'NVMe/ATA Sanitize & TRIM' : 'NVMe/ATA 보안 삭제 & SSD TRIM', category: 'tools', keywords: ['trim', 'sanitize', 'erase'], disabled: !activeDrive, execute: () => openRecoveryTool('sanitize') },
       { id: 'tool-usb', label: en ? 'External Storage & USB Scan Matrix' : '외장 장치 및 USB 표면검사 매트릭스', category: 'tools', keywords: ['usb', 'uasp', 'bot', 'external'], execute: () => openExternalDeviceModal('matrix') },
-      { id: 'tool-parallel', label: en ? 'Parallel Multi-Drive Scanner' : '병렬 다중 드라이브 스캐너', category: 'tools', keywords: ['parallel', 'rayon', 'multi'], execute: () => setIsParallelScanOpen(true) },
-      { id: 'tool-tray', label: en ? 'Background Watchdog & Tray Guardian' : '백그라운드 워치독 & 트레이 가디언', category: 'tools', keywords: ['watchdog', 'tray', 'alert'], execute: () => setIsTrayGuardianOpen(true) },
-      { id: 'tool-vendor', label: en ? 'Vendor Specific Diagnostics' : '제조사 특화 펌웨어 진단', category: 'tools', keywords: ['vendor', 'samsung', 'wd'], disabled: !activeDrive, execute: () => setIsVendorModalOpen(true) },
-      { id: 'tool-catalog', label: en ? 'Supported Hardware Catalog' : '지원 하드웨어 카탈로그', category: 'tools', keywords: ['catalog', 'hardware'], execute: () => setIsCatalogModalOpen(true) },
-      { id: 'tool-dlldoc', label: en ? 'Native Core & DLL Technical Docs' : '네이티브 코어 & DLL 기술 명세', category: 'tools', keywords: ['dll', 'api', 'docs'], execute: () => setIsDllDocsOpen(true) },
+      { id: 'tool-parallel', label: en ? 'Parallel Multi-Drive Scanner' : '병렬 다중 드라이브 스캐너', category: 'tools', keywords: ['parallel', 'rayon', 'multi'], execute: () => openHardwareTool('parallel') },
+      { id: 'tool-tray', label: en ? 'Background Watchdog & Tray Guardian' : '백그라운드 워치독 & 트레이 가디언', category: 'tools', keywords: ['watchdog', 'tray', 'alert'], execute: () => openHardwareTool('watchdog') },
+      { id: 'tool-vendor', label: en ? 'Vendor Specific Diagnostics' : '제조사 특화 펌웨어 진단', category: 'tools', keywords: ['vendor', 'samsung', 'wd'], disabled: !activeDrive, execute: () => openHardwareTool('vendor') },
+      { id: 'tool-catalog', label: en ? 'Supported Hardware Catalog' : '지원 하드웨어 카탈로그', category: 'tools', keywords: ['catalog', 'hardware'], execute: () => openHardwareTool('catalog') },
+      { id: 'tool-dlldoc', label: en ? 'Native Core & DLL Technical Docs' : '네이티브 코어 & DLL 기술 명세', category: 'tools', keywords: ['dll', 'api', 'docs'], execute: () => openSettingsPanel('dlldocs') },
       { id: 'act-rescan', label: en ? 'Rescan Physical Drives' : '물리 드라이브 전체 재검색', category: 'actions', shortcut: 'F5', keywords: ['rescan', 'refresh'], execute: () => { void handleRescanDrives(); } },
       { id: 'act-report', label: en ? 'Open Diagnostic Report' : '현재 세션 진단 보고서 열기', category: 'actions', keywords: ['report', 'pdf', 'print'], disabled: !activeDrive, execute: handleOpenCurrentReport },
       { id: 'act-export', label: en ? 'Export Results (CSV/JSON/PDF)' : '진단 결과 내보내기 (CSV/JSON/PDF)', category: 'actions', keywords: ['export', 'csv'], disabled: !activeDrive, execute: () => handleOpenExportModal() },
-      { id: 'act-options', label: en ? 'Preferences & Thresholds' : '환경설정 및 SMART 임계치', category: 'actions', shortcut: 'Ctrl+,', keywords: ['options', 'settings', 'threshold'], execute: () => { setOptionsModalInitialTab('general'); setIsOptionsModalOpen(true); } },
+      { id: 'act-options', label: en ? 'Preferences & Thresholds' : '환경설정 및 SMART 임계치', category: 'actions', shortcut: 'Ctrl+,', keywords: ['options', 'settings', 'threshold'], execute: () => openSettingsPanel('options', 'general') },
+      { id: 'act-guide', label: en ? 'Diagnostic & Recovery Guide' : '도움말 및 단축키 가이드', category: 'actions', shortcut: 'F1', keywords: ['help', 'guide', 'manual'], execute: () => openSettingsPanel('guide') },
       { id: 'act-theme', label: isDarkMode ? (en ? 'Switch to Light Mode' : '라이트 모드로 전환') : (en ? 'Switch to Dark Mode' : '다크 모드로 전환'), category: 'actions', keywords: ['theme', 'dark', 'light'], execute: () => setIsDarkMode(p => !p) },
       { id: 'act-locale', label: locale === 'ko' ? 'Switch UI Language to English (EN)' : '인터페이스 언어를 한국어(KO)로 전환', category: 'actions', keywords: ['language', 'english', 'korean'], execute: () => handleChangeLocale(locale === 'ko' ? 'en' : 'ko') }
     ];
@@ -1991,222 +2032,80 @@ export default function App() {
     });
 
     return actions;
-  }, [locale, activeDrive, drives, selectedBlock, latestBadLba, isDarkMode, handleRescanDrives, handleChangeLocale]);
+  }, [locale, activeDrive, drives, selectedBlock, latestBadLba, isDarkMode, handleRescanDrives, handleChangeLocale, openRecoveryTool, openHardwareTool, openSettingsPanel, openExternalDeviceModal]);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-150">
-      {/* Top Navigation */}
-      <Navbar
-        drives={drives}
-        selectedDriveId={selectedDriveId}
-        onSelectDrive={handleDriveChange}
+    <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#090D16] text-slate-900 dark:text-slate-100 flex font-sans transition-colors duration-150">
+      {/* Left Collapsible Navigation Rail + Mobile Drawer */}
+      <Sidebar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        isDarkMode={isDarkMode}
-        onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-        isMuted={isMuted}
-        onToggleMute={handleToggleMute}
-        notificationPermission={notificationPermission}
-        notificationsEnabled={notificationsEnabled}
-        onRequestNotification={handleRequestNotification}
-        onToggleNotificationsEnabled={handleToggleNotificationsEnabled}
-        currentHealthScore={calculatedHealth}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(p => !p)}
+        mobileOpen={mobileSidebarOpen}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
+        locale={locale}
+        drivesCount={drives.length}
         badCount={badCount}
+        errorLogCount={errorLogs.length}
+        scanRecordsCount={scanRecords.length}
+        isScanning={telemetry.status === 'scanning'}
+        healthScore={calculatedHealth}
+        isNativeReady={bridgeDiagnostics.tauriAvailable || bridgeDiagnostics.bridgeReachable}
+        watchdogRuleCount={watchdogRules.filter(r => r.enabled).length}
+        watchdogAlertCount={watchdogEvents.length}
         hasUpdate={hasUpdate}
         latestVersion={updateRelease?.version}
+        onOpenWatchdog={() => openHardwareTool('watchdog')}
         onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
-        onOpenAboutModal={() => setIsAboutModalOpen(true)}
-        onOpenDllDocs={() => setIsDllDocsOpen(true)}
-        onOpenExternalDevicesModal={() => openExternalDeviceModal('connected')}
-        onOpenVendorDiagnostics={() => { if (activeDrive) setIsVendorModalOpen(true); }}
-        onOpenSupportedCatalog={() => setIsCatalogModalOpen(true)}
-        onOpenParallelScanModal={() => setIsParallelScanOpen(true)}
-        onOpenTrayGuardianModal={() => setIsTrayGuardianOpen(true)}
-        onOpenBitCarvingModal={() => {
-          if (!activeDrive) return;
-          const badLba = latestBadLba ?? (blocks.find(b => b.status === 'bad')?.lba) ?? (blocks[0]?.lba ?? 0);
-          setBitCarvingTargetLba(badLba);
-          setIsBitCarvingOpen(true);
-        }}
-        onOpenHardwareDetails={() => { if (activeDrive) setIsHardwareDetailsOpen(true); }}
-        onOpenFeaturesModal={() => { if (activeDrive) setIsFeaturesModalOpen(true); }}
-        onOpenHexInspector={() => {
-          if (!activeDrive) return;
-          setHexInspectorTargetLba(selectedBlock?.lba ?? 0);
-          setIsHexInspectorOpen(true);
-        }}
-        onOpenBenchmarkProfiler={() => { if (activeDrive) setIsBenchmarkProfilerOpen(true); }}
-        onOpenLbaCloner={() => {
-          if (!activeDrive) return;
-          setLbaClonerRange(selectedBlock ? { startLba: selectedBlock.lba, endLba: selectedBlock.endLba } : null);
-          setIsLbaClonerOpen(true);
-        }}
-        onOpenFileTracer={() => {
-          if (!activeDrive) return;
-          const targetLba = selectedBlock?.lba ?? latestBadLba ?? (blocks.find(b => b.status === 'bad')?.lba) ?? 0;
-          setFileTracerTargetLba(targetLba);
-          setIsFileTracerOpen(true);
-        }}
-        onOpenSanitizeTrim={() => { if (activeDrive) setIsSanitizeTrimOpen(true); }}
-        onRescanDrives={handleRescanDrives}
-        isRescanning={isRescanningDrives}
-        onOpenOptionsModal={() => {
-          setOptionsModalInitialTab('general');
-          setIsOptionsModalOpen(true);
-        }}
-        onOpenHelpGuideModal={() => setIsHelpGuideModalOpen(true)}
-        onExportResults={() => handleOpenExportModal()}
-        onResetScan={handleResetScan}
-        onOpenReport={handleOpenCurrentReport}
-        isAutoRepairMode={isAutoRepairMode}
-        onToggleAutoRepairMode={handleToggleAutoRepairMode}
-        locale={locale}
-        onChangeLocale={handleChangeLocale}
-        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
       />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-4 py-2.5 sm:py-3">
-        {/* Real-time Alert Banner when Bad Sectors are detected */}
-        <AlertBanner
-          badCount={badCount}
-          latestBadLba={latestBadLba}
-          visible={alertBannerVisible}
-          onOpenReport={handleOpenCurrentReport}
-          onDismiss={() => setAlertBannerVisible(false)}
+      {/* Right Main Shell Column */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Streamlined 1-Row 3-Zone Top Context Bar */}
+        <Navbar
+          drives={drives}
+          selectedDriveId={selectedDriveId}
+          onSelectDrive={handleDriveChange}
+          activeTab={activeTab}
+          onToggleMobileMenu={() => setMobileSidebarOpen(true)}
+          isDarkMode={isDarkMode}
+          onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+          isMuted={isMuted}
+          onToggleMute={handleToggleMute}
           notificationPermission={notificationPermission}
+          notificationsEnabled={notificationsEnabled}
           onRequestNotification={handleRequestNotification}
+          onToggleNotificationsEnabled={handleToggleNotificationsEnabled}
+          currentHealthScore={calculatedHealth}
+          onRescanDrives={handleRescanDrives}
+          isRescanning={isRescanningDrives}
+          onExportResults={() => handleOpenExportModal()}
+          onOpenReport={handleOpenCurrentReport}
+          locale={locale}
+          onChangeLocale={handleChangeLocale}
+          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
         />
 
-        {/* Sleek In-Page Segmented Tab Navigation Bar (7 Modular Views) */}
-        <div className="flex items-center gap-1.5 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl mb-3 overflow-x-auto shadow-2xs">
-          <button
-            onClick={() => setActiveTab('scan')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'scan'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="실시간 표면 검사 및 블록 그리드 뷰어"
-          >
-            <Activity className="w-4 h-4" />
-            <span>{t(locale, 'tab.scan')}</span>
-            {telemetry.status === 'scanning' && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-            )}
-          </button>
+        {/* Main Workspace Viewport */}
+        <main className="flex-1 w-full max-w-[1440px] mx-auto px-3 sm:px-5 py-3.5 sm:py-4 space-y-3">
+          {/* Real-time Alert Banner when Bad Sectors are detected */}
+          <AlertBanner
+            badCount={badCount}
+            latestBadLba={latestBadLba}
+            visible={alertBannerVisible}
+            onOpenReport={handleOpenCurrentReport}
+            onDismiss={() => setAlertBannerVisible(false)}
+            notificationPermission={notificationPermission}
+            onRequestNotification={handleRequestNotification}
+          />
 
-          <button
-            onClick={() => setActiveTab('logs')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'logs'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="실시간 결함 감지 및 I/O 이벤트 로그 스트림"
-          >
-            <Terminal className="w-4 h-4" />
-            <span>{t(locale, 'tab.logs')}</span>
-            {badCount > 0 ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-red-600 text-white">
-                {badCount} BAD
-              </span>
-            ) : errorLogs.length > 0 ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                {errorLogs.length}
-              </span>
-            ) : null}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('health')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'health'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="종합 건강 점수, 응답 속도 분포 및 10분 온도 추이 차트"
-          >
-            <ShieldCheck className="w-4 h-4" />
-            <span>{t(locale, 'tab.health')}</span>
-            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
-              calculatedHealth === null
-                ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-                : calculatedHealth >= 80
-                ? 'bg-emerald-500/20 text-emerald-500'
-                : 'bg-red-500/20 text-red-500'
-            }`}>
-              {calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('smart')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'smart'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="S.M.A.R.T. 하드웨어 속성 원시 데이터 및 임계치 검증"
-          >
-            <HardDrive className="w-4 h-4" />
-            <span>{t(locale, 'tab.smart')}</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'history'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="이전 검사와 최신 검사 간 대조 및 저장된 진단 이력"
-          >
-            <GitCompare className="w-4 h-4" />
-            <span>{t(locale, 'tab.history')}</span>
-            {scanRecords.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                {scanRecords.length}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('fleet')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'fleet'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="연결된 모든 디스크 상태 비교 및 일괄 감사"
-          >
-            <LayoutGrid className="w-4 h-4" />
-            <span>{t(locale, 'tab.fleet')}</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-              {drives.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('integrity')}
-            className={`min-h-[40px] flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer whitespace-nowrap ${
-              activeTab === 'integrity'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-            }`}
-            title="중요 폴더·파일 물리 LBA 매핑 및 SHA-256 비트 부패 감시"
-          >
-            <FolderLock className="w-4 h-4" />
-            <span>{t(locale, 'tab.integrity')}</span>
-          </button>
-        </div>
-
-        {/* Browser Empty State & Native Tauri / Local Bridge Launch Guide when no physical disk is attached */}
-        {activeTab !== 'history' && activeTab !== 'fleet' && activeTab !== 'integrity' && !activeDrive && (
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-7 space-y-5">
-            {isInitialProbing ? (
-              <div className="py-10 flex flex-col items-center justify-center text-center space-y-2.5">
-                <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin" />
+          {/* Browser Empty State & Native Tauri / Local Bridge Launch Guide when no physical disk is attached */}
+          {!['history', 'fleet', 'integrity', 'recovery', 'tools', 'settings'].includes(activeTab) && !activeDrive && (
+            <section className="bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md p-5 sm:p-7 space-y-5">
+              {isInitialProbing ? (
+                <div className="py-10 flex flex-col items-center justify-center text-center space-y-2.5">
+                  <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
                 <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
                   물리 드라이브 확인 중...
                 </div>
@@ -2228,7 +2127,7 @@ export default function App() {
                       type="button"
                       onClick={() => void checkNativeEngineConnection()}
                       disabled={bridgeDiagnostics.checking}
-                      className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-50"
+                      className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-50"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${bridgeDiagnostics.checking ? 'animate-spin' : ''}`} />
                       <span>연결 재확인</span>
@@ -2236,7 +2135,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => openExternalDeviceModal('connected')}
-                      className="px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                      className="px-3.5 py-2 rounded-md border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                     >
                       <Layers className="w-3.5 h-3.5" />
                       <span>장치 슬롯 보기</span>
@@ -2245,7 +2144,7 @@ export default function App() {
                 </div>
 
                 {/* Live Runtime Connection Diagnostic Strip */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 border border-slate-200 dark:border-slate-800 rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-slate-200 dark:divide-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
+                <div className="grid grid-cols-1 sm:grid-cols-3 border border-slate-200 dark:border-slate-800 rounded-md divide-y sm:divide-y-0 sm:divide-x divide-slate-200 dark:divide-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
                   <div className="p-3 space-y-0.5">
                     <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Tauri 데스크톱 IPC</div>
                     <div className="text-sm font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
@@ -2270,7 +2169,7 @@ export default function App() {
 
                 {/* Concise Native Launch Instructions */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                  <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1">
+                  <div className="p-3.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1">
                     <div className="font-bold text-slate-900 dark:text-slate-100">
                       1. Tauri 데스크톱 앱 실행
                     </div>
@@ -2279,7 +2178,7 @@ export default function App() {
                     </p>
                   </div>
 
-                  <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1">
+                  <div className="p-3.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 space-y-1">
                     <div className="font-bold text-slate-900 dark:text-slate-100">
                       2. 개발 환경 실행
                     </div>
@@ -2297,7 +2196,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setActiveTab('history')}
-                      className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      className="inline-flex items-center gap-1 font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
                     >
                       <span>기록 보기</span>
                       <ArrowRight className="w-3.5 h-3.5" />
@@ -2315,10 +2214,10 @@ export default function App() {
             {/* Left Instrument Config & Queue Rail (~330px on lg+) */}
             <aside className="w-full lg:w-[330px] shrink-0 space-y-2.5">
               {/* Surface Test Configurator */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md p-2.5 space-y-2.5">
+              <div className="bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md p-2.5 space-y-2.5">
                 <div className="flex items-center justify-between pb-1.5 border-b border-slate-200 dark:border-slate-800">
                   <div className="flex items-center gap-1.5">
-                    <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" />
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-blue-500" />
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
                       표면 검사
                     </span>
@@ -2349,7 +2248,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => openExternalDeviceModal('connected')}
-                            className="px-1.5 py-0.5 rounded border border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-[10px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            className="px-1.5 py-0.5 rounded border border-blue-500/30 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-[10px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap"
                             title="외부 장치 & 32채널 탐색 진단 열기"
                           >
                             <Usb className="w-2.5 h-2.5" />
@@ -2361,7 +2260,7 @@ export default function App() {
                         value={selectedDriveId}
                         onChange={e => handleDriveChange(e.target.value)}
                         aria-label="표면 검사 대상 디스크 선택"
-                        className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-[11px] font-mono font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                        className="w-full px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-[11px] font-mono font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 cursor-pointer"
                       >
                         {drives.map(d => (
                           <option key={d.id} value={d.id}>
@@ -2373,7 +2272,7 @@ export default function App() {
                         <span className="truncate" title={stdClass.adaptiveNote}>
                           {stdClass.vendorDisplayName} · {stdClass.protocolStandard}
                         </span>
-                        <span className="shrink-0 text-indigo-600 dark:text-indigo-400 font-semibold">
+                        <span className="shrink-0 text-blue-600 dark:text-blue-400 font-semibold">
                           {stdClass.recognitionSource === 'Standard Protocol Classifier' ? '표준 추론' : '모델 인식'}
                         </span>
                       </div>
@@ -2399,7 +2298,7 @@ export default function App() {
                         onClick={() => setSelectedTestType(mode.id)}
                         className={`text-left px-2 py-1.5 rounded border transition-colors cursor-pointer ${
                           selected
-                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/45 text-indigo-700 dark:text-indigo-300'
+                            ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/45 text-blue-700 dark:text-blue-300'
                             : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                         }`}
                       >
@@ -2455,7 +2354,14 @@ export default function App() {
                         min={0}
                         max={95}
                         value={rangeStartPct}
-                        onChange={e => setRangeStartPct(Math.max(0, Math.min(95, Number(e.target.value) || 0)))}
+                        onChange={e => {
+                          const parsed = Number(e.target.value);
+                          const nextStart = Number.isFinite(parsed) ? Math.max(0, Math.min(95, Math.round(parsed))) : 0;
+                          setRangeStartPct(nextStart);
+                          if (rangeEndPct <= nextStart) {
+                            setRangeEndPct(Math.min(100, nextStart + 5));
+                          }
+                        }}
                         className="w-12 bg-transparent text-right font-bold text-slate-900 dark:text-slate-100 focus:outline-none"
                       />
                     </label>
@@ -2466,7 +2372,14 @@ export default function App() {
                         min={5}
                         max={100}
                         value={rangeEndPct}
-                        onChange={e => setRangeEndPct(Math.max(5, Math.min(100, Number(e.target.value) || 100)))}
+                        onChange={e => {
+                          const parsed = Number(e.target.value);
+                          const nextEnd = Number.isFinite(parsed) ? Math.max(5, Math.min(100, Math.round(parsed))) : 100;
+                          setRangeEndPct(nextEnd);
+                          if (rangeStartPct >= nextEnd) {
+                            setRangeStartPct(Math.max(0, nextEnd - 5));
+                          }
+                        }}
                         className="w-12 bg-transparent text-right font-bold text-slate-900 dark:text-slate-100 focus:outline-none"
                       />
                     </label>
@@ -2495,14 +2408,14 @@ export default function App() {
                         onClick={() => setScanMode(prev => (prev === 'quick' ? 'full' : 'quick'))}
                         className={`w-full px-2.5 py-2 rounded border text-left transition-colors cursor-pointer flex items-center justify-between gap-2 ${
                           isQuick
-                            ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/45'
+                            ? 'border-blue-600 bg-blue-50/80 dark:bg-blue-950/45'
                             : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                         }`}
                       >
                         <div className="min-w-0 space-y-0.5">
                           <div className="flex items-center gap-1.5">
-                            <Zap className={`w-3.5 h-3.5 shrink-0 ${isQuick ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`} />
-                            <span className={`text-[11px] font-bold ${isQuick ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-800 dark:text-slate-200'}`}>
+                            <Zap className={`w-3.5 h-3.5 shrink-0 ${isQuick ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`} />
+                            <span className={`text-[11px] font-bold ${isQuick ? 'text-blue-700 dark:text-blue-300' : 'text-slate-800 dark:text-slate-200'}`}>
                               Quick Scan
                             </span>
                           </div>
@@ -2516,7 +2429,7 @@ export default function App() {
                         <span
                           aria-hidden="true"
                           className={`relative inline-flex h-4 w-8 shrink-0 items-center rounded-full transition-colors ${
-                            isQuick ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'
+                            isQuick ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
                           }`}
                         >
                           <span
@@ -2567,7 +2480,7 @@ export default function App() {
                     type="button"
                     disabled={selectedTestType === 'erase' && !isSafeEraseTarget(activeDrive).allowed}
                     onClick={() => createAndEnqueueTask(false)}
-                    className="py-1.5 px-2.5 rounded border border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="py-1.5 px-2.5 rounded border border-blue-500/40 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Layers className="w-3 h-3" />
                     <span>큐에 추가</span>
@@ -2615,7 +2528,7 @@ export default function App() {
                 isScanning={scanStatus === 'scanning'}
                 blocks={blocks}
                 onRepairSectors={handleRepairSectors}
-                onOpenRemapModal={() => setIsSmartRemapOpen(true)}
+                onOpenRemapModal={() => openRecoveryTool('remap')}
                 activeUsbPolicy={activeUsbPolicy}
                 isUsbPolicyManual={Boolean(usbPolicyOverrides[activeDrive.id])}
                 onOpenUsbMatrix={() => openExternalDeviceModal('matrix')}
@@ -2647,17 +2560,19 @@ export default function App() {
               />
 
               {/* Viewport Mode Bar */}
-              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md text-[11px]">
+              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md text-[11px]">
                 <div className="flex items-center gap-2 font-mono text-slate-600 dark:text-slate-300">
                   <span className="font-bold text-slate-800 dark:text-slate-100">
                     {activeTask ? activeTask.testType.toUpperCase() : selectedTestType.toUpperCase()}
                   </span>
                   <span className="text-slate-300 dark:text-slate-700">·</span>
-                  <span>{rangeStartPct}~{rangeEndPct}%</span>
+                  <span>
+                    {Math.max(0, Math.min(95, rangeStartPct))}~{Math.max(Math.max(0, Math.min(95, rangeStartPct)) + 1, Math.min(100, rangeEndPct))}%
+                  </span>
                   {activeBucketFilter && (
                     <>
                       <span className="text-slate-300 dark:text-slate-700">·</span>
-                      <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                      <span className="text-blue-600 dark:text-blue-400 font-bold">
                         {activeBucketFilter}
                       </span>
                     </>
@@ -2678,7 +2593,7 @@ export default function App() {
                       onClick={() => setScanViewMode(v.id)}
                       className={`px-2 py-0.5 text-[10px] font-semibold cursor-pointer ${
                         scanViewMode === v.id
-                          ? 'bg-indigo-600 text-white'
+                          ? 'bg-blue-600 text-white'
                           : 'bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                       }`}
                     >
@@ -2690,13 +2605,13 @@ export default function App() {
 
               {/* Resumable Scan Checkpoint Banner */}
               {!activeTask && resumableCheckpoint && (
-                <div className="p-3 rounded-lg border border-indigo-300 dark:border-indigo-700/70 bg-indigo-50/70 dark:bg-indigo-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                <div className="p-3 rounded-md border border-blue-500/40 bg-blue-50/70 dark:bg-blue-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
                   <div className="space-y-0.5">
-                    <div className="font-bold text-indigo-800 dark:text-indigo-200 flex items-center gap-1.5">
-                      <RotateCcw className="w-3.5 h-3.5 text-indigo-500" />
+                    <div className="font-bold text-blue-800 dark:text-blue-200 flex items-center gap-1.5">
+                      <RotateCcw className="w-3.5 h-3.5 text-blue-500" />
                       <span>{t(locale, 'checkpoint.found')}</span>
                     </div>
-                    <div className="text-[11px] font-mono text-indigo-700/80 dark:text-indigo-300/80 tabular-nums">
+                    <div className="text-[11px] font-mono text-blue-700/80 dark:text-blue-300/80 tabular-nums">
                       {resumableCheckpoint.testType.toUpperCase()} ({resumableCheckpoint.scanMode}) ·{' '}
                       {Math.round((resumableCheckpoint.completedSteps / Math.max(1, resumableCheckpoint.totalSteps)) * 100)}% ({resumableCheckpoint.completedSteps}/{resumableCheckpoint.totalSteps}) ·{' '}
                       {new Date(resumableCheckpoint.savedAt).toLocaleString()}
@@ -2706,14 +2621,14 @@ export default function App() {
                     <button
                       type="button"
                       onClick={handleResumeFromCheckpoint}
-                      className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer"
+                      className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold cursor-pointer"
                     >
                       {t(locale, 'checkpoint.resume')}
                     </button>
                     <button
                       type="button"
                       onClick={handleDiscardCheckpoint}
-                      className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer"
+                      className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer"
                     >
                       {t(locale, 'checkpoint.discard')}
                     </button>
@@ -2743,30 +2658,14 @@ export default function App() {
                   onToggleQueueBlock={handleToggleRepairQueueBlock}
                   onBulkSelectRepairBlocks={handleBulkSelectRepairBlocks}
                   onClearRepairQueue={handleClearRepairQueue}
-                  onOpenRemapWithQueue={() => {
-                    setSmartRemapTargetLba(null);
-                    setIsSmartRemapOpen(true);
-                  }}
-                  onTriggerBitCarving={lba => {
-                    setBitCarvingTargetLba(lba);
-                    setIsBitCarvingOpen(true);
-                  }}
-                  onOpenHexInspector={lba => {
-                    setHexInspectorTargetLba(lba);
-                    setIsHexInspectorOpen(true);
-                  }}
-                  onTraceLbaFile={lba => {
-                    setFileTracerTargetLba(lba);
-                    setIsFileTracerOpen(true);
-                  }}
-                  onCloneLbaRange={range => {
-                    setLbaClonerRange(range);
-                    setIsLbaClonerOpen(true);
-                  }}
+                  onOpenRemapWithQueue={() => openRecoveryTool('remap')}
+                  onTriggerBitCarving={lba => openRecoveryTool('carving', { targetLba: lba })}
+                  onOpenHexInspector={lba => openRecoveryTool('hex', { targetLba: lba })}
+                  onTraceLbaFile={lba => openRecoveryTool('tracer', { targetLba: lba })}
+                  onCloneLbaRange={range => openRecoveryTool('cloner', { range })}
                   onOpenRemapForBlock={(blockId, lba) => {
                     setQueuedRepairBlockIds(prev => (prev.includes(blockId) ? prev : [...prev, blockId]));
-                    setSmartRemapTargetLba(lba);
-                    setIsSmartRemapOpen(true);
+                    openRecoveryTool('remap', { targetLba: lba });
                   }}
                 />
               )}
@@ -2780,12 +2679,12 @@ export default function App() {
                 isScanning={scanStatus === 'scanning'}
                 onSelectBlock={b => setSelectedBlock(b)}
                 onStartScan={handleStartScan}
-                onOpenRemapModal={() => setIsSmartRemapOpen(true)}
+                onOpenRemapModal={() => openRecoveryTool('remap')}
                 onDegradationWarning={handleDegradationWarning}
               />
 
               {/* Quick Summary Strip & Link to Error Logs */}
-              <div className="p-2.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+              <div className="p-2.5 rounded-md bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <div className="flex items-center gap-2 flex-wrap font-mono tabular-nums">
                   <span className="font-sans font-semibold text-slate-700 dark:text-slate-300">요약:</span>
                   <span className={`font-bold ${badCount > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
@@ -2798,7 +2697,7 @@ export default function App() {
                 </div>
                 <button
                   onClick={() => setActiveTab('logs')}
-                  className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 cursor-pointer transition-colors"
+                  className="inline-flex items-center gap-1 font-bold text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 cursor-pointer transition-colors"
                 >
                   <span>오류 로그 보기</span>
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -2819,29 +2718,20 @@ export default function App() {
                 if (found) setSelectedBlock(found);
                 setActiveTab('scan');
               }}
-              onTraceLogLba={(lba) => {
-                setFileTracerTargetLba(lba);
-                setIsFileTracerOpen(true);
-              }}
-              onOpenHexLogLba={(lba) => {
-                setHexInspectorTargetLba(lba);
-                setIsHexInspectorOpen(true);
-              }}
-              onCloneLogLba={(lba) => {
-                setLbaClonerRange({ startLba: lba, endLba: lba + 2048 });
-                setIsLbaClonerOpen(true);
-              }}
+              onTraceLogLba={(lba) => openRecoveryTool('tracer', { targetLba: lba })}
+              onOpenHexLogLba={(lba) => openRecoveryTool('hex', { targetLba: lba })}
+              onCloneLogLba={(lba) => openRecoveryTool('cloner', { range: { startLba: lba, endLba: lba + 2048 } })}
             />
 
             {/* Action Card when errors exist */}
             {badCount > 0 && (
-              <div className="p-4 rounded-xl bg-gradient-to-r from-red-950/40 via-slate-900 to-slate-900 border border-red-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="p-4 rounded-md bg-white dark:bg-[#0F172A] border border-red-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                 <div className="space-y-1">
-                  <div className="font-bold text-red-400 flex items-center gap-1.5">
+                  <div className="font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5">
                     <ShieldAlert className="w-4 h-4 text-red-500" />
                     <span>배드섹터 {badCount}개 검출</span>
                   </div>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     제로필 수복 또는 비트 카빙 복구를 실행할 수 있습니다.
                   </p>
                 </div>
@@ -2849,16 +2739,15 @@ export default function App() {
                   <button
                     onClick={() => {
                       const badLba = latestBadLba ?? blocks.find(b => b.status === 'bad')?.lba ?? blocks[0]?.lba ?? 0;
-                      setBitCarvingTargetLba(badLba);
-                      setIsBitCarvingOpen(true);
+                      openRecoveryTool('carving', { targetLba: badLba });
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-colors cursor-pointer"
+                    className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer"
                   >
                     비트 카빙 수복
                   </button>
                   <button
-                    onClick={() => setIsSmartRemapOpen(true)}
-                    className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold transition-colors cursor-pointer"
+                    onClick={() => openRecoveryTool('remap')}
+                    className="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-white font-bold transition-colors cursor-pointer"
                   >
                     S.M.A.R.T. 제로필 재할당
                   </button>
@@ -2881,10 +2770,7 @@ export default function App() {
             smartSnapshots={smartSnapshots}
             customSmartThresholds={customSmartThresholds}
             onRecordSmartSnapshot={handleRecordSmartSnapshot}
-            onOpenThresholdSettings={() => {
-              setOptionsModalInitialTab('smart_thresholds');
-              setIsOptionsModalOpen(true);
-            }}
+            onOpenThresholdSettings={() => openSettingsPanel('options', 'smart_thresholds')}
             onSelectBlock={(b) => {
               setSelectedBlock(b);
               setActiveTab('scan');
@@ -2896,9 +2782,9 @@ export default function App() {
             onRefreshSmart={() => {
               void handleRescanDrives();
             }}
-            onOpenVendorModal={() => setIsVendorModalOpen(true)}
-            onOpenRemapModal={() => setIsSmartRemapOpen(true)}
-            onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
+            onOpenVendorModal={() => openHardwareTool('vendor')}
+            onOpenRemapModal={() => openRecoveryTool('remap')}
+            onOpenHardwareDetails={() => openHardwareTool('specs')}
             viewMode="health_only"
           />
         )}
@@ -2914,10 +2800,7 @@ export default function App() {
               smartSnapshots={smartSnapshots}
               customSmartThresholds={customSmartThresholds}
               onRecordSmartSnapshot={handleRecordSmartSnapshot}
-              onOpenThresholdSettings={() => {
-                setOptionsModalInitialTab('smart_thresholds');
-                setIsOptionsModalOpen(true);
-              }}
+              onOpenThresholdSettings={() => openSettingsPanel('options', 'smart_thresholds')}
               onStartScan={() => {
                 setActiveTab('scan');
                 handleStartScan();
@@ -2926,10 +2809,10 @@ export default function App() {
                 void handleRescanDrives();
                 setSmartLogRefreshSignal(prev => prev + 1);
               }}
-              onOpenVendorModal={() => setIsVendorModalOpen(true)}
-              onOpenRemapModal={() => setIsSmartRemapOpen(true)}
-              onOpenHardwareDetails={() => setIsHardwareDetailsOpen(true)}
-              onOpenFeaturesModal={() => setIsFeaturesModalOpen(true)}
+              onOpenVendorModal={() => openHardwareTool('vendor')}
+              onOpenRemapModal={() => openRecoveryTool('remap')}
+              onOpenHardwareDetails={() => openHardwareTool('specs')}
+              onOpenFeaturesModal={() => openHardwareTool('features')}
               viewMode="smart_only"
               isTauriRuntime={isTauriRuntime}
               smartSelfTestState={smartSelfTestByDrive[activeDrive.id] || null}
@@ -2974,7 +2857,7 @@ export default function App() {
               }}
               onOpenHardwareDetails={(driveId) => {
                 handleDriveChange(driveId);
-                setIsHardwareDetailsOpen(true);
+                openHardwareTool('specs');
               }}
               onOpenUsbMatrix={(driveId) => {
                 handleDriveChange(driveId);
@@ -2986,7 +2869,7 @@ export default function App() {
                 });
                 setActiveTab('scan');
               }}
-              onOpenParallelScan={() => setIsParallelScanOpen(true)}
+              onOpenParallelScan={() => openHardwareTool('parallel')}
             />
           </Suspense>
         )}
@@ -3002,359 +2885,190 @@ export default function App() {
               badLbaHistory={scanRecords.flatMap(r => r.badLbaList || [])}
               locale={locale}
               onNotifyIntegrityAlert={(title, body, severity) => dispatchNotification(title, body, severity)}
-              onOpenHexInspector={(lba) => {
-                setHexInspectorTargetLba(lba);
-                setIsHexInspectorOpen(true);
+              onOpenHexInspector={(lba) => openRecoveryTool('hex', { targetLba: lba })}
+              onOpenLbaCloner={(range) => openRecoveryTool('cloner', { range })}
+              onOpenFileTracer={(lba) => openRecoveryTool('tracer', { targetLba: lba })}
+            />
+          </Suspense>
+        )}
+
+        {/* Tab 8: Inline Recovery & Forensics Workbench */}
+        {activeTab === 'recovery' && (
+          <Suspense fallback={null}>
+            <RecoveryWorkbench
+              activeTool={activeRecoveryTool}
+              onSelectTool={setActiveRecoveryTool}
+              activeDrive={activeDrive}
+              blocks={blocks}
+              errorLogs={errorLogs}
+              scanRecords={scanRecords}
+              locale={locale}
+              hexInspectorTargetLba={hexInspectorTargetLba}
+              bitCarvingTargetLba={bitCarvingTargetLba}
+              fileTracerTargetLba={fileTracerTargetLba}
+              smartRemapTargetLba={smartRemapTargetLba}
+              queuedRepairBlockIds={queuedRepairBlockIds}
+              lbaClonerRange={lbaClonerRange}
+              onSyncRepairQueue={setQueuedRepairBlockIds}
+              onRepairSectors={handleRepairSectors}
+              onOpenHexInspector={(lba) => openRecoveryTool('hex', { targetLba: lba })}
+              onOpenLbaCloner={(range) => openRecoveryTool('cloner', { range })}
+              onRefreshHardware={handleRescanDrives}
+              onRescanDrives={handleRescanDrives}
+              isRescanning={isRescanningDrives}
+            />
+          </Suspense>
+        )}
+
+        {/* Tab 9: Inline Hardware & Watchdog Tools Workbench */}
+        {activeTab === 'tools' && (
+          <Suspense fallback={null}>
+            <HardwareToolsWorkbench
+              activeTool={activeHardwareTool}
+              onSelectTool={setActiveHardwareTool}
+              drives={drives}
+              activeDrive={activeDrive}
+              selectedDriveId={selectedDriveId}
+              telemetry={telemetry}
+              locale={locale}
+              highestTemp={currentTemp}
+              hasBadSector={badCount > 0}
+              externalTab={externalModalTab}
+              usbPolicyOverrides={usbPolicyOverrides}
+              watchdogRules={watchdogRules}
+              watchdogEvents={watchdogEvents}
+              onSelectDrive={handleDriveChange}
+              onEjectDrive={handleEjectDrive}
+              onRescanDrives={handleRescanDrives}
+              isRescanning={isRescanningDrives}
+              onApplyUsbMatrixPolicy={handleApplyUsbMatrixPolicy}
+              onBenchmarkComplete={handleBenchmarkComplete}
+              onTriggerNotification={dispatchNotification}
+              onUpdateWatchdogRules={handleUpdateWatchdogRules}
+              onClearWatchdogEvents={handleClearWatchdogEvents}
+              onRunWatchdogNow={runWatchdogEvaluation}
+              onOpenHexInspector={(lba = 0) => openRecoveryTool('hex', { targetLba: lba })}
+              onOpenRemapModal={() => openRecoveryTool('remap')}
+              onOpenSanitizeTrim={() => openRecoveryTool('sanitize')}
+            />
+          </Suspense>
+        )}
+
+        {/* Tab 10: Inline Settings, Native DLL Specs, User Guide & About */}
+        {activeTab === 'settings' && (
+          <Suspense fallback={null}>
+            <SettingsWorkbench
+              activePanel={activeSettingsPanel}
+              onSelectPanel={setActiveSettingsPanel}
+              optionsInitialSubTab={optionsModalInitialTab}
+              locale={locale}
+              isDarkMode={isDarkMode}
+              onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+              isMuted={isMuted}
+              onToggleMute={handleToggleMute}
+              notificationPermission={notificationPermission}
+              notificationsEnabled={notificationsEnabled}
+              onRequestNotification={handleRequestNotification}
+              onToggleNotificationsEnabled={handleToggleNotificationsEnabled}
+              scanSpeedMultiplier={scanSpeedMultiplier}
+              onChangeSpeedMultiplier={setScanSpeedMultiplier}
+              isAutoRepairMode={isAutoRepairMode}
+              onToggleAutoRepairMode={handleToggleAutoRepairMode}
+              customSmartThresholds={customSmartThresholds}
+              onUpdateCustomSmartThresholds={handleUpdateCustomSmartThresholds}
+              activeDriveSmartAttributes={activeDrive?.smartAttributes || []}
+              scanRecords={scanRecords}
+              onImportMigration={handleImportMigration}
+              onChangeLocale={handleChangeLocale}
+              minimizeToTray={minimizeToTray}
+              onToggleMinimizeToTray={() => setMinimizeToTray(p => !p)}
+              nativeOsNotificationsEnabled={nativeOsNotificationsEnabled}
+              onToggleNativeOsNotifications={() => setNativeOsNotificationsEnabled(p => !p)}
+              onTestNativeOsNotification={() => {
+                void invokeTauriNativeNotification(
+                  'DiskSentinel Pro Test Alert',
+                  locale === 'en'
+                    ? 'Native OS Watchdog notification channel is active.'
+                    : '네이티브 OS 워치독 알림 채널이 정상 작동 중입니다.',
+                  'info'
+                );
               }}
-              onOpenLbaCloner={(range) => {
-                setLbaClonerRange(range);
-                setIsLbaClonerOpen(true);
-              }}
-              onOpenFileTracer={(lba) => {
-                setFileTracerTargetLba(lba);
-                setIsFileTracerOpen(true);
-              }}
+              onOpenVendorDiagnostics={() => openHardwareTool('vendor')}
+              onOpenSupportedCatalog={() => openHardwareTool('catalog')}
+              onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
             />
           </Suspense>
         )}
       </main>
 
-      <Suspense fallback={null}>
-      {/* Comprehensive Diagnostic Report Modal */}
-      {activeReportRecord && (
-        <ReportModal
-          record={activeReportRecord}
-          badBlocks={blocks.filter(b => b.status === 'bad')}
-          onClose={() => setActiveReportRecord(null)}
-        />
-      )}
-
-      {/* Scan Completion Summary Card Popup Modal */}
-      {completedSummaryRecord && (
-        <ScanCompletionSummaryModal
-          isOpen={!!completedSummaryRecord}
-          record={completedSummaryRecord}
-          onClose={() => setCompletedSummaryRecord(null)}
-          onOpenFullReport={(rec) => {
-            setActiveReportRecord(rec);
-          }}
-          onOpenRepair={() => {
-            setIsSmartRemapOpen(true);
-          }}
-        />
-      )}
-
-      {/* Export Diagnostic Results Modal (CSV / PDF / Print / JSON) */}
-      {exportTargetRecord && (
-        <ExportModal
-          isOpen={!!exportTargetRecord}
-          record={exportTargetRecord}
-          badBlocks={blocks.filter(b => b.status === 'bad')}
-          onClose={() => setExportTargetRecord(null)}
-        />
-      )}
-
-      {/* GitHub Releases Real-time Update Alert Popup */}
-      {isUpdateModalOpen && (
-        <UpdateModal
-          isOpen={isUpdateModalOpen}
-          release={updateRelease}
-          currentVersion={PROJECT_INFO.version}
-          source={updateSource}
-          errorMessage={updateErrorMessage}
-          onClose={() => setIsUpdateModalOpen(false)}
-          onCheckAgain={() => checkUpdates(true)}
-        />
-      )}
-
-      {/* Creator & Official Channels Guide Modal */}
-      {isAboutModalOpen && (
-        <AboutModal
-          isOpen={isAboutModalOpen}
-          onClose={() => setIsAboutModalOpen(false)}
-          onCheckUpdates={() => {
-            setIsAboutModalOpen(false);
-            setIsUpdateModalOpen(true);
-          }}
-        />
-      )}
-
-      {/* Pure Creative DLL Technical Documentation Modal */}
-      {isDllDocsOpen && (
-        <DllDocsModal
-          isOpen={isDllDocsOpen}
-          onClose={() => setIsDllDocsOpen(false)}
-        />
-      )}
-
-      {/* External Storage Device Management Modal */}
-      {isExternalModalOpen && (
-        <ExternalDeviceModal
-          isOpen={isExternalModalOpen}
-          onClose={() => setIsExternalModalOpen(false)}
-          drives={drives}
-          selectedDriveId={selectedDriveId}
-          onSelectDrive={handleDriveChange}
-          onEjectDrive={handleEjectDrive}
-          onRescanDrives={handleRescanDrives}
-          initialTab={externalModalTab}
-          usbPolicyOverrides={usbPolicyOverrides}
-          onApplyUsbMatrixPolicy={handleApplyUsbMatrixPolicy}
-        />
-      )}
-
-      {/* Vendor & Media Tailored Diagnostics Hub Modal */}
-      {isVendorModalOpen && activeDrive && (
-        <VendorDiagnosticsModal
-          isOpen={isVendorModalOpen}
-          onClose={() => setIsVendorModalOpen(false)}
-          activeDrive={activeDrive}
-          telemetry={telemetry}
-          onOpenUsbModal={() => openExternalDeviceModal('connected')}
-          onOpenCatalogModal={() => setIsCatalogModalOpen(true)}
-          onOpenRemapModal={() => {
-            setIsVendorModalOpen(false);
-            setIsSmartRemapOpen(true);
-          }}
-          onRefreshSmart={() => {
-            void handleRescanDrives();
-          }}
-        />
-      )}
-
-      {/* Supported Products & Manufacturers Precision Diagnostic Catalog Modal */}
-      {isCatalogModalOpen && (
-        <SupportedProductsCatalogModal
-          isOpen={isCatalogModalOpen}
-          onClose={() => setIsCatalogModalOpen(false)}
-          onSelectVendorForDiagnostic={(vendor) => {
-            setIsCatalogModalOpen(false);
-            setIsVendorModalOpen(true);
-          }}
-        />
-      )}
-
-      {/* Rayon Multi-Drive Parallel Scanner Modal */}
-      {isParallelScanOpen && (
-        <ParallelDriveScanModal
-          isOpen={isParallelScanOpen}
-          onClose={() => setIsParallelScanOpen(false)}
-          drives={drives}
-        />
-      )}
-
       {/* Background Telemetry Refresh for Tray Guardian & Dashboard */}
-      <BackgroundTelemetryRefresher 
-        drives={drives} 
-        onUpdateDrives={setDrives} 
-        isActive={isTrayGuardianOpen || activeTab === 'health' || activeTab === 'smart'} 
+      <BackgroundTelemetryRefresher
+        drives={drives}
+        onUpdateDrives={setDrives}
+        isActive={
+          (activeTab === 'tools' && activeHardwareTool === 'watchdog') ||
+          activeTab === 'health' ||
+          activeTab === 'smart' ||
+          activeTab === 'fleet'
+        }
       />
 
-      {/* System Tray Lightweight Guardian Daemon Modal */}
-      {isTrayGuardianOpen && (
-        <TrayGuardianModal
-          isOpen={isTrayGuardianOpen}
-          onClose={() => setIsTrayGuardianOpen(false)}
-          drives={drives}
-          highestTemp={currentTemp}
-          hasBadSector={badCount > 0}
-          onTriggerNotification={dispatchNotification}
-          watchdogRules={watchdogRules}
-          onUpdateWatchdogRules={handleUpdateWatchdogRules}
-          watchdogEvents={watchdogEvents}
-          onClearWatchdogEvents={handleClearWatchdogEvents}
-          onRunWatchdogNow={runWatchdogEvaluation}
-        />
-      )}
+      {/* Transient Dialogs Only (Report, Export, Completion Summary, Update, Command Palette) */}
+      <Suspense fallback={null}>
+        {activeReportRecord && (
+          <ReportModal
+            record={activeReportRecord}
+            badBlocks={blocks.filter(b => b.status === 'bad')}
+            onClose={() => setActiveReportRecord(null)}
+          />
+        )}
 
-      {/* Bit Carving & ECC Parity Recovery Engine Modal */}
-      {isBitCarvingOpen && activeDrive && (
-        <BitCarvingRecoveryModal
-          isOpen={isBitCarvingOpen}
-          onClose={() => setIsBitCarvingOpen(false)}
-          initialLba={bitCarvingTargetLba}
-          drive={activeDrive}
-          driveModel={activeDrive.model}
-        />
-      )}
+        {completedSummaryRecord && (
+          <ScanCompletionSummaryModal
+            isOpen={!!completedSummaryRecord}
+            record={completedSummaryRecord}
+            onClose={() => setCompletedSummaryRecord(null)}
+            onOpenFullReport={(rec) => {
+              setActiveReportRecord(rec);
+            }}
+            onOpenRepair={() => openRecoveryTool('remap')}
+          />
+        )}
 
-      {/* Advanced Disk Hardware Specification & Deep Diagnostics Modal */}
-      {isHardwareDetailsOpen && activeDrive && (
-        <DiskHardwareDetailsModal
-          isOpen={isHardwareDetailsOpen}
-          onClose={() => setIsHardwareDetailsOpen(false)}
-          drive={activeDrive}
-          onRescanHardware={handleRescanDrives}
-          onOpenBenchmarkProfiler={() => setIsBenchmarkProfilerOpen(true)}
-          onOpenHexInspector={(lba = 0) => {
-            setHexInspectorTargetLba(lba);
-            setIsHexInspectorOpen(true);
-          }}
-        />
-      )}
+        {exportTargetRecord && (
+          <ExportModal
+            isOpen={!!exportTargetRecord}
+            record={exportTargetRecord}
+            badBlocks={blocks.filter(b => b.status === 'bad')}
+            onClose={() => setExportTargetRecord(null)}
+          />
+        )}
 
-      {/* ATA / NVMe Hardware Features Control Modal (AAM, APM, Standby, Cache) */}
-      {isFeaturesModalOpen && activeDrive && (
-        <DriveFeaturesModal
-          isOpen={isFeaturesModalOpen}
-          onClose={() => setIsFeaturesModalOpen(false)}
-          drive={activeDrive}
-          onOpenSanitizeTrim={() => setIsSanitizeTrimOpen(true)}
-        />
-      )}
+        {isUpdateModalOpen && (
+          <UpdateModal
+            isOpen={isUpdateModalOpen}
+            release={updateRelease}
+            currentVersion={PROJECT_INFO.version}
+            source={updateSource}
+            errorMessage={updateErrorMessage}
+            onClose={() => setIsUpdateModalOpen(false)}
+            onCheckAgain={() => checkUpdates(true)}
+          />
+        )}
 
-      {/* Read-Only Raw Sector Hex Viewer & MBR/GPT Partition Table Modal */}
-      {isHexInspectorOpen && activeDrive && (
-        <SectorHexPartitionModal
-          isOpen={isHexInspectorOpen}
-          onClose={() => setIsHexInspectorOpen(false)}
-          drive={activeDrive}
-          initialLba={hexInspectorTargetLba}
-        />
-      )}
-
-      {/* Live LBA I/O Zone Benchmark & 4K IOPS Profiler Modal */}
-      {isBenchmarkProfilerOpen && activeDrive && (
-        <DiskBenchmarkProfilerModal
-          isOpen={isBenchmarkProfilerOpen}
-          onClose={() => setIsBenchmarkProfilerOpen(false)}
-          drive={activeDrive}
-          onBenchmarkComplete={handleBenchmarkComplete}
-        />
-      )}
-
-      {/* ddrescue-style Multi-Pass LBA Image Cloner & Bad Sector Recovery Modal */}
-      {isLbaClonerOpen && activeDrive && (
-        <LbaImageClonerModal
-          isOpen={isLbaClonerOpen}
-          onClose={() => setIsLbaClonerOpen(false)}
-          drive={activeDrive}
-          initialRange={lbaClonerRange}
-        />
-      )}
-
-      {/* Damaged LBA Affected File Tracer (NTFS MFT / FAT32 / exFAT) Modal */}
-      {isFileTracerOpen && activeDrive && (
-        <LbaFileTracerModal
-          isOpen={isFileTracerOpen}
-          onClose={() => setIsFileTracerOpen(false)}
-          drive={activeDrive}
-          initialLba={fileTracerTargetLba}
-          sectorBlocks={blocks}
-          errorLogs={errorLogs}
-          badLbaHistory={scanRecords
-            .filter(r => r.driveId === activeDrive.id)
-            .flatMap(r => r.badLbaList || [])}
-          onOpenHexInspector={(lba) => {
-            setIsFileTracerOpen(false);
-            setHexInspectorTargetLba(lba);
-            setIsHexInspectorOpen(true);
-          }}
-          onOpenLbaCloner={(range) => {
-            setIsFileTracerOpen(false);
-            setLbaClonerRange(range);
-            setIsLbaClonerOpen(true);
-          }}
-          onRepairSectors={handleRepairSectors}
-        />
-      )}
-
-      {/* NVMe/ATA Secure Erase (Sanitize/Format) & SSD TRIM Center Modal */}
-      {isSanitizeTrimOpen && activeDrive && (
-        <SanitizeTrimModal
-          isOpen={isSanitizeTrimOpen}
-          onClose={() => setIsSanitizeTrimOpen(false)}
-          drive={activeDrive}
-          onRefreshHardware={handleRescanDrives}
-        />
-      )}
-
-      {/* S.M.A.R.T. Sector Remapping & Zero-Fill Repair Center Modal (Root level so accessible from all tabs) */}
-      {isSmartRemapOpen && activeDrive && (
-        <SmartRemapModal
-          isOpen={isSmartRemapOpen}
-          onClose={() => {
-            setIsSmartRemapOpen(false);
-            setSmartRemapTargetLba(null);
-          }}
-          activeDrive={activeDrive}
-          blocks={blocks}
-          initialQueuedBlockIds={queuedRepairBlockIds}
-          initialTargetLba={smartRemapTargetLba}
-          onSyncRepairQueue={setQueuedRepairBlockIds}
-          onRepairSectors={handleRepairSectors}
-        />
-      )}
-
-      {/* Program Options & Preferences Modal */}
-      {isOptionsModalOpen && (
-        <OptionsModal
-          isOpen={isOptionsModalOpen}
-          onClose={() => setIsOptionsModalOpen(false)}
-          initialSubTab={optionsModalInitialTab}
-          isDarkMode={isDarkMode}
-          onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-          isMuted={isMuted}
-          onToggleMute={handleToggleMute}
-          notificationPermission={notificationPermission}
-          notificationsEnabled={notificationsEnabled}
-          onRequestNotification={handleRequestNotification}
-          onToggleNotificationsEnabled={handleToggleNotificationsEnabled}
-          scanSpeedMultiplier={scanSpeedMultiplier}
-          onChangeSpeedMultiplier={setScanSpeedMultiplier}
-          isAutoRepairMode={isAutoRepairMode}
-          onToggleAutoRepairMode={handleToggleAutoRepairMode}
-          customSmartThresholds={customSmartThresholds}
-          onUpdateCustomSmartThresholds={handleUpdateCustomSmartThresholds}
-          activeDriveSmartAttributes={activeDrive?.smartAttributes || []}
-          scanRecords={scanRecords}
-          onImportMigration={handleImportMigration}
-          locale={locale}
-          onChangeLocale={handleChangeLocale}
-          minimizeToTray={minimizeToTray}
-          onToggleMinimizeToTray={() => setMinimizeToTray(p => !p)}
-          nativeOsNotificationsEnabled={nativeOsNotificationsEnabled}
-          onToggleNativeOsNotifications={() => setNativeOsNotificationsEnabled(p => !p)}
-          onTestNativeOsNotification={() => {
-            void invokeTauriNativeNotification(
-              'DiskSentinel Pro Test Alert',
-              locale === 'en'
-                ? 'Native OS Watchdog notification channel is active.'
-                : '네이티브 OS 워치독 알림 채널이 정상 작동 중입니다.',
-              'info'
-            );
-          }}
-        />
-      )}
-
-      {/* Global Ctrl+K Command Palette */}
-      {isCommandPaletteOpen && (
-        <CommandPaletteModal
-          isOpen={isCommandPaletteOpen}
-          onClose={() => setIsCommandPaletteOpen(false)}
-          actions={commandPaletteActions}
-          locale={locale}
-        />
-      )}
-
-      {/* Comprehensive Diagnostic & User Guide Modal */}
-      {isHelpGuideModalOpen && (
-        <HelpGuideModal
-          isOpen={isHelpGuideModalOpen}
-          onClose={() => setIsHelpGuideModalOpen(false)}
-          onOpenVendorDiagnostics={() => setIsVendorModalOpen(true)}
-          onOpenSupportedCatalog={() => setIsCatalogModalOpen(true)}
-          onOpenDllDocs={() => setIsDllDocsOpen(true)}
-          onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
-          onOpenAboutModal={() => setIsAboutModalOpen(true)}
-        />
-      )}
+        {isCommandPaletteOpen && (
+          <CommandPaletteModal
+            isOpen={isCommandPaletteOpen}
+            onClose={() => setIsCommandPaletteOpen(false)}
+            actions={commandPaletteActions}
+            locale={locale}
+          />
+        )}
       </Suspense>
 
-
       {/* Compact Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-2 bg-slate-100/60 dark:bg-slate-900/60 text-xs text-slate-500 dark:text-slate-400">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-2 bg-white/70 dark:bg-[#0F172A]/70 text-xs text-slate-500 dark:text-slate-400">
+        <div className="max-w-[1440px] mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span className="font-mono text-[11px] font-medium text-slate-700 dark:text-slate-300">
             {PROJECT_INFO.appName} v{PROJECT_INFO.version}
           </span>
@@ -3364,7 +3078,7 @@ export default function App() {
               href={PROJECT_INFO.developer.githubProfileUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-mono transition-colors"
+              className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 font-mono transition-colors"
             >
               <Github className="w-3.5 h-3.5" />
               <span>{PROJECT_INFO.developer.githubUsername}</span>
@@ -3382,9 +3096,9 @@ export default function App() {
               href={PROJECT_INFO.developer.affiliation.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-cyan-500 dark:hover:text-cyan-400 font-mono transition-colors"
+              className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-blue-500 dark:hover:text-blue-400 font-mono transition-colors"
             >
-              <Building2 className="w-3.5 h-3.5 text-cyan-500" />
+              <Building2 className="w-3.5 h-3.5 text-blue-500" />
               <span>CISNet</span>
             </a>
           </div>
@@ -3392,13 +3106,13 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => checkUpdates(true)}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 hover:border-blue-500 text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
             >
-              <Sparkles className="w-3 h-3 text-indigo-500" />
+              <Sparkles className="w-3 h-3 text-blue-500" />
               <span>업데이트 확인</span>
             </button>
             <button
-              onClick={() => setIsAboutModalOpen(true)}
+              onClick={() => openSettingsPanel('about')}
               className="text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
             >
               정보
@@ -3408,12 +3122,12 @@ export default function App() {
       </footer>
 
       {/* Bottom Status Bar */}
-      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1 text-[11px] font-mono text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 overflow-x-auto select-none">
+      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0F172A] px-3 py-1 text-[11px] font-mono text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 overflow-x-auto select-none tabular-nums">
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${
               !activeDrive ? 'bg-amber-500' :
-              scanStatus === 'scanning' ? 'bg-indigo-500 animate-ping' :
+              scanStatus === 'scanning' ? 'bg-blue-500' :
               scanStatus === 'paused' ? 'bg-amber-500' :
               scanStatus === 'completed' ? 'bg-emerald-500' :
               'bg-slate-400'
@@ -3453,6 +3167,7 @@ export default function App() {
           <span className="text-slate-300 dark:text-slate-700">|</span>
           <span>온도: <strong>{currentTemp !== null ? `${currentTemp.toFixed(0)}°C` : 'N/A'}</strong></span>
         </div>
+      </div>
       </div>
     </div>
   );

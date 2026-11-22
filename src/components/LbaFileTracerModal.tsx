@@ -64,6 +64,7 @@ interface LbaFileTracerModalProps {
   onOpenHexInspector?: (lba: number) => void;
   onOpenLbaCloner?: (range: { startLba: number; endLba: number }) => void;
   onRepairSectors?: (driveId: string, repairedBlockIds: number[], latencyByBlockId?: Record<number, number>) => void;
+  isInline?: boolean;
 }
 
 interface DirTreeNode {
@@ -204,7 +205,8 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
   badLbaHistory = [],
   onOpenHexInspector,
   onOpenLbaCloner,
-  onRepairSectors
+  onRepairSectors,
+  isInline = false
 }) => {
   const maxLba = Math.max(0, (drive.totalSectors || 2048) - 1);
   const [lbaInput, setLbaInput] = useState<string>(String(Math.max(0, Math.floor(initialLba))));
@@ -1551,12 +1553,25 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
   };
 
   return (
-    <div id="LbaFileTracerModal" className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto">
-      <div className="relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
+    <div
+      id="LbaFileTracerModal"
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-4xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans'
+        }
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-amber-600 flex items-center justify-center text-white shrink-0">
+            <div className="w-8 h-8 rounded-md bg-amber-600 flex items-center justify-center text-white shrink-0">
               <FileSearch className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -1569,17 +1584,19 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isInline && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Body */}
-        <div className="p-5 overflow-y-auto space-y-4 text-xs">
+        <div className={`p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
           {/* Search Controls */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5 p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50">
             <div className="flex-1">

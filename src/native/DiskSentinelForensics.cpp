@@ -618,9 +618,37 @@ static void dsf_classify_gpt_guid(const uint8_t* g, char* outBuf, size_t bufSize
     else if (d1 == 0xDE94BBA4U && d2 == 0x06D1U && d3 == 0x4D40U) {
         dsf_safe_strncpy(outBuf, "Windows Recovery Environment", bufSize);
     }
+    // AF9B60A0-1431-4F62-BC68-3311714A69AD -> Windows LDM Data
+    else if (d1 == 0xAF9B60A0U && d2 == 0x1431U && d3 == 0x4F62U) {
+        dsf_safe_strncpy(outBuf, "Windows LDM Dynamic Data", bufSize);
+    }
+    // E75CAF8F-F680-4CEE-AFA3-B001E56EFC2D -> Windows Storage Spaces
+    else if (d1 == 0xE75CAF8FU && d2 == 0xF680U && d3 == 0x4CEEU) {
+        dsf_safe_strncpy(outBuf, "Microsoft Storage Spaces", bufSize);
+    }
     // 0FC63DAF-8483-4772-8E79-3D69D8477DE4 -> Linux Filesystem Data
     else if (d1 == 0x0FC63DAFU && d2 == 0x8483U && d3 == 0x4772U) {
         dsf_safe_strncpy(outBuf, "Linux Filesystem Data", bufSize);
+    }
+    // 0657FD6D-A4AB-43C4-84E5-0933C84B4F4F -> Linux Swap
+    else if (d1 == 0x0657FD6DU && d2 == 0xA4ABU && d3 == 0x43C4U) {
+        dsf_safe_strncpy(outBuf, "Linux Swap Partition", bufSize);
+    }
+    // E6D6D379-F507-44C2-A23C-238F2A3DF928 -> Linux LVM
+    else if (d1 == 0xE6D6D379U && d2 == 0xF507U && d3 == 0x44C2U) {
+        dsf_safe_strncpy(outBuf, "Linux LVM Physical Volume", bufSize);
+    }
+    // CA7D7CCB-63ED-4C53-861C-1742536059CC -> Linux LUKS
+    else if (d1 == 0xCA7D7CCBU && d2 == 0x63EDU && d3 == 0x4C53U) {
+        dsf_safe_strncpy(outBuf, "Linux LUKS Encrypted Volume", bufSize);
+    }
+    // 7C3457EF-0000-11AA-AA11-00306543ECAC -> Apple APFS
+    else if (d1 == 0x7C3457EFU && d2 == 0x0000U && d3 == 0x11AAU) {
+        dsf_safe_strncpy(outBuf, "Apple APFS Container", bufSize);
+    }
+    // 48465300-0000-11AA-AA11-00306543ECAC -> Apple HFS+
+    else if (d1 == 0x48465300U && d2 == 0x0000U && d3 == 0x11AAU) {
+        dsf_safe_strncpy(outBuf, "Apple HFS+ Filesystem", bufSize);
     } else {
         dsf_safe_strncpy(outBuf, "GPT Partition", bufSize);
     }
@@ -656,7 +684,7 @@ DSF_API bool DSF_CALL DSF_InspectBootAndPartitionTable(
         if (hdrSize < 92U || hdrSize > secBytes) hdrSize = 92U;
 
         uint32_t storedHdrCrc = dsf_read_u32_le(hdr + 16);
-        uint8_t hdrCopy[128];
+        uint8_t hdrCopy[512];
         uint32_t copyLen = (hdrSize <= sizeof(hdrCopy)) ? hdrSize : (uint32_t)sizeof(hdrCopy);
         memcpy(hdrCopy, hdr, copyLen);
         memset(hdrCopy + 16, 0, 4); // HeaderCRC32 field zeroed prior to CRC calculation

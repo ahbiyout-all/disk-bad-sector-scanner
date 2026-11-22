@@ -254,13 +254,55 @@ export function inspectCarveBufferSync(raw: Uint8Array | number[]): RecoveryCarv
   let printable = 0;
   let zeroAcc = 0;
   let parity64 = 0n;
-  for (let i = 0; i < n; i++) {
-    const b = bytes[i];
+  let idx = 0;
+  while (idx < n) {
+    const b = bytes[idx];
     hist[b]++;
     zeroAcc |= b;
-    parity64 ^= BigInt(b) << BigInt((i & 7) * 8);
+    parity64 ^= BigInt(b) << BigInt((idx & 7) * 8);
     if ((b >= 32 && b <= 126) || b === 9 || b === 10 || b === 13) {
       printable++;
+      idx++;
+    } else if (b >= 0xc2 && b <= 0xdf && idx + 1 < n && (bytes[idx + 1] & 0xc0) === 0x80) {
+      const cb1 = bytes[idx + 1];
+      hist[cb1]++;
+      zeroAcc |= cb1;
+      parity64 ^= BigInt(cb1) << BigInt(((idx + 1) & 7) * 8);
+      printable += 2;
+      idx += 2;
+    } else if (
+      b >= 0xe0 &&
+      b <= 0xef &&
+      idx + 2 < n &&
+      (bytes[idx + 1] & 0xc0) === 0x80 &&
+      (bytes[idx + 2] & 0xc0) === 0x80
+    ) {
+      for (let k = 1; k <= 2; k++) {
+        const cb = bytes[idx + k];
+        hist[cb]++;
+        zeroAcc |= cb;
+        parity64 ^= BigInt(cb) << BigInt(((idx + k) & 7) * 8);
+      }
+      printable += 3;
+      idx += 3;
+    } else if (
+      b >= 0xf0 &&
+      b <= 0xf4 &&
+      idx + 3 < n &&
+      (bytes[idx + 1] & 0xc0) === 0x80 &&
+      (bytes[idx + 2] & 0xc0) === 0x80 &&
+      (bytes[idx + 3] & 0xc0) === 0x80
+    ) {
+      for (let k = 1; k <= 3; k++) {
+        const cb = bytes[idx + k];
+        hist[cb]++;
+        zeroAcc |= cb;
+        parity64 ^= BigInt(cb) << BigInt(((idx + k) & 7) * 8);
+      }
+      printable += 4;
+      idx += 4;
+    } else {
+      idx++;
     }
   }
 

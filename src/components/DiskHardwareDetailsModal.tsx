@@ -29,6 +29,7 @@ interface DiskHardwareDetailsModalProps {
   onRescanHardware?: () => Promise<void>;
   onOpenBenchmarkProfiler?: () => void;
   onOpenHexInspector?: (lba?: number) => void;
+  isInline?: boolean;
 }
 
 export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> = ({
@@ -37,7 +38,8 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
   drive,
   onRescanHardware,
   onOpenBenchmarkProfiler,
-  onOpenHexInspector
+  onOpenHexInspector,
+  isInline = false
 }) => {
   const [activeTab, setActiveTab] = useState<'architecture' | 'geometry' | 'endurance' | 'benchmark' | 'identify'>('architecture');
   const [isRescanning, setIsRescanning] = useState<boolean>(false);
@@ -303,33 +305,43 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs font-sans animate-in fade-in duration-150">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs font-sans animate-in fade-in duration-150'
+      }
+    >
       <div
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden"
-        role="dialog"
-        aria-modal="true"
+        className={
+          isInline
+            ? 'bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md w-full flex flex-col overflow-hidden'
+            : 'bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md w-full max-w-4xl shadow-xl flex flex-col max-h-[92vh] overflow-hidden'
+        }
+        role={isInline ? undefined : 'dialog'}
+        aria-modal={isInline ? undefined : true}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 ring-1 ring-indigo-500/30">
-              <Cpu className="w-5 h-5" />
+            <div className="w-8 h-8 rounded-md bg-blue-600/10 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-500/25">
+              <Cpu className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-                  디스크 장치 상세 스펙 & 하드웨어 정보
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 truncate">
+                  디스크 장치 상세 스펙 &amp; 하드웨어 정보
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
-                  {specs.busType}
+                <span className="text-[11px] font-mono font-bold text-blue-600 dark:text-blue-400">
+                  · {specs.busType}
                 </span>
                 {specs.isAdvancedFormat === true && (
-                  <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
-                    4K AF ({specs.physicalSectorSize}B)
+                  <span className="hidden sm:inline font-mono text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                    · 4K AF ({specs.physicalSectorSize}B)
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
                 {specs.devicePhysicalPath || drive.model} · {drive.capacityGb !== null ? `${drive.capacityGb} GB` : '용량 N/A'} · S/N: {specs.serialNumber}
               </p>
             </div>
@@ -340,13 +352,13 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
               <button
                 type="button"
                 onClick={() => {
-                  onClose();
+                  if (!isInline) onClose();
                   onOpenHexInspector(0);
                 }}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
                 title="LBA 원시 섹터 헥스 및 MBR/GPT 파티션 테이블 검사 열기"
               >
-                <Binary className="w-3.5 h-3.5 text-indigo-500" />
+                <Binary className="w-3.5 h-3.5 text-blue-500" />
                 <span className="hidden md:inline">헥스/파티션</span>
               </button>
             )}
@@ -354,20 +366,22 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
               <button
                 onClick={handleRescanClick}
                 disabled={isRescanning}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
                 title="실제 하드웨어 저장장치 및 I/O 실측 프로브 재실행"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
                 <span className="hidden sm:inline">실시간 재탐색</span>
               </button>
             )}
-            <button
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-              aria-label="닫기"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            {!isInline && (
+              <button
+                onClick={onClose}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
+                aria-label="닫기"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </div>
 

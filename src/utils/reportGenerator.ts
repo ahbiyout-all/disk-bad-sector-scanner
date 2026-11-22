@@ -105,7 +105,10 @@ export function createScanRecordFromSession(
  */
 export function exportCsvReport(record: SavedScanRecord, badBlocks: SectorBlock[] = []) {
   const csvCell = (value: unknown): string => {
-    const text = value === undefined || value === null ? '' : String(value);
+    let text = value === undefined || value === null ? '' : String(value);
+    if (!/^===/.test(text) && /^[=+\-@\t\r]/.test(text)) {
+      text = `'${text}`;
+    }
     return `"${text.replace(/"/g, '""')}"`;
   };
 

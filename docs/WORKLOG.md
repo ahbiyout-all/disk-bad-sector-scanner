@@ -1,5 +1,34 @@
 # Disk Bad Sector Scanner - Developer Work Log (작업 로그)
 
+### 2026-11-22 (v4.6.3 제5 순수 창작 DLL `DiskSentinelIntegrity.dll` 구축, 기존 4-DLL 심층 감사 패치 및 명세서 등록)
+- **제5 순수 창작 네이티브 DLL `DiskSentinelIntegrity.dll` 설계·구현 (`src/native/DiskSentinelIntegrity.h`, `DiskSentinelIntegrity.cpp`)**:
+  - 디바이스 핸들 의존성 없이 동작하는 무결성·Bit-Rot·LBA 익스텐트 상관·시점 Diff·플릿 Watchdog SLA 전용 C ABI 엔진(8대 익스포트, `#pragma pack(push, 8)` 명시 패딩 Zero-Padding 구조체, 4종 KAT 자가진단) 구현.
+  - 64KB 청크 무제한 스트리밍 FIPS 180-4 SHA-256(`DSI_Sha256Init/Update/Final`) + Slicing-by-8 IEEE 802.3 CRC32 + FNV-1a64 단일 패스 다이제스트, $O((E+B)\log B)$ 익스텐트 생존성 평가기, `>= 1h` 가드 기반 스캔 Diff 열화 속도 산출기, 플릿 Watchdog 쿨다운·SLA 매트릭스 평가기 탑재.
+- **기존 4-DLL + Rust/TS 패리티 심층 감사(Audit) 및 오류 수정**:
+  - `DiskSentinelForensics.cpp`: 512B LBA1 GPT 헤더 단독 입력 시 `bufLen >= 92` 헤더 CRC32 실검증 경로 복구.
+  - `DiskSentinelPredictive.cpp` / `src-tauri/src/main.rs` / `src/utils/predictiveAnalyticsBridge.ts`: `< 1h` 초단기 관측 구간 OLS `slopePerDay` 폭주 차단(`spanDays < 1/24` 시 `0.0`) 3계층 통일.
+  - `DiskSentinelRecovery.cpp` / `src-tauri/src/main.rs` / `src/utils/recoveryDllBridge.ts`: 2/3/4바이트 유효 UTF-8 시퀀스 인쇄율 반영(한글 로그 카빙 정확도 복원) 및 `$MFT` 상주 판별 시 `targetLba > 0 && targetLba != UINT64_MAX` 경계 가드 적용.
+- **전 스택 통합·빌드/CI/인스톨러 확장 & 기술 문서 등록**:
+  - `src-tauri/src/main.rs`(`LoadLibraryW` 디스패치 + `sha256_file_streaming` DLL 가속 + 5대 IPC 커맨드), `DiskSentinelLauncher.cs`(`integrityDllLoaded` 프로브), `src/utils/integrityDllBridge.ts`, `watchdogEngine.ts`, `FolderLbaIntegrityPanel.tsx`, `HistoryAndComparison.tsx`, `TrayGuardianModal.tsx` 연동 및 `indigo-*` 잔여 클래스를 `blue-*`로 일원화.
+  - `build-dll.bat`, `setup.iss`, `src-tauri/tauri.conf.json`, `.github/workflows/tauri-desktop.yml`을 Penta-DLL(5종) 체제로 확장.
+  - `docs/DiskSentinel_Integrity_DLL_Specification.md` 신규 작성 및 `DllDocsModal.tsx`, `MODULES.md`, `PATCHNOTES.md`, `README.md` 전 문서 업데이트 완료.
+
+### 2026-11-22 (v4.6.2 심층 자기성찰 감사(Self-Reflection Audit), MSVC `C3861` 빌드 수정 및 종합 진단 기능 정합성 보완)
+- **MSVC C++ 컴파일 오류 수정 및 정렬 안전성 강화 (`src/native/DiskSentinelEngine.cpp`)**:
+  - `build-dll.bat --no-pause` Windows MSVC x64 빌드에서 발생한 `error C3861: 'pow'/'fmax': identifier not found` 원인을 `<math.h>`/`<cmath>` 누락으로 규명해 헤더를 추가하고, Linux `g++ -std=c++17 -Wall -Wextra` 기준으로 4대 C++ 네이티브 소스 경고 0건 통과 검증.
+  - `DS_ProbeUsbTopology` 내 USB Hub IOCTL 버퍼 오프셋(`detailBuf`, `connEx+31`)의 비정렬 포인터 역참조를 `memcpy` 기반 복사로 교체.
+- **Tauri / Win32 커널 프로브 및 OS 알림 프로세스 심층 감사 수정 (`src-tauri/src/main.rs`)**:
+  - **PCIe 링크 속성 ID 교정**: `probe_pci_devnode_link_for_drive`에서 `DEVPKEY_PciDevice_*` PID `10`(CurrentLinkWidth)과 `11`(MaxLinkSpeed)이 교차 매핑되어 있던 오류를 바로잡고 부모 DevNode 탐색 깊이(`4`→`6`)를 확장해 NVMe 링크 다운그레이드 탐지 정확도 복원.
+  - **IOCTL 핸들 누수 및 익스텐트 버퍼 경계 보호**: `get_file_physical_lba_extents` 내 `ERROR_HANDLE_EOF` 조기 반환 시 `CloseHandle(h_file)` 누락을 보완하고, `RetrievalPointersBuffer.extent_count`를 실제 수신 버퍼(`bytes_ret`/`rp_buf.len()`) 허용 범위로 클램핑.
+  - **디렉터리 정션/심볼릭 링크 순환 차단**: `collect_target_files`가 `symlink_metadata`로 리파스 포인트/심볼릭 링크를 배제하고 정규화 경로 `HashSet`으로 중복/순환 탐색을 방지하도록 개선.
+  - **OS 토스트 알림 명령 분리**: `send_native_os_notification`에서 PowerShell `-Command` 문자열 보간을 제거해 `DS_NOTIF_ICON`/`DS_NOTIF_TITLE`/`DS_NOTIF_BODY` 환경 변수로 안전 전달하고 `CREATE_NO_WINDOW` 플래그로 콘솔 창 노출 차단.
+- **React UI/상태·경로 매칭·CSV 보안·의존성 감사 패치 (`App.tsx`, `FolderLbaIntegrityPanel.tsx`, `scanDiff.ts`, `reportGenerator.ts`, `package.json`)**:
+  - `handleResumeFromCheckpoint` 훅 의존성(`scanSpeedMultiplier`), `activeTask` 기준 보고서 모드/방식 보존, 스캔 LBA `Start/End` 범위 역전 클램핑, `fleet` 탭 백그라운드 텔레메트리 리프레셔 연동을 수정.
+  - `FolderLbaIntegrityPanel`의 경로 구분자/후행 슬래시 정규화 경계 비교를 적용해 유사 접두어 루트 충돌 및 삭제 잔류 문제 해소.
+  - `escapeCsvCell` / `csvCell`에 Excel/Calc CSV 수식 주입 방어 이스케이프를 적용하고, 실제 미사용 상태이던 `express` 및 `@types/express` 의존성을 `package.json`에서 제거.
+- **v4.6.2 핵심 신규 기능 통합 검증**:
+  - **전체 디스크 플릿 대시보드(`FleetOverviewDashboard.tsx`)**, **중요 폴더 LBA 매핑 및 SHA-256 Bit-Rot 무결성 감시(`FolderLbaIntegrityPanel.tsx`, `lbaIntegrityStore.ts`)**, **실시간 체크포인트 중단/재개(`scanCheckpoint.ts`)**, **OS 네이티브 Watchdog 엔진(`watchdogEngine.ts`)**, **`Ctrl+K` 커맨드 팔레트(`CommandPaletteModal.tsx`)**, **S.M.A.R.T. 시점 비교 Diff(`scanDiff.ts`, `HistoryAndComparison.tsx`)**, **KO/EN 다국어(`i18n.ts`)** 전 모듈 문서 및 타입/번들 무결성 검증 완료.
+
 ### 2026-11-14 (v4.6.1 브라우저 디스크 인식 방식 전면 제거 및 Tauri 데스크톱 네이티브 IPC 전용 전환)
 - **브라우저 기반 가상/샌드박스 디스크 인식 코드 완전 제거 (`types.ts`, `nativeDriveEngine.ts`, `nativeDllBridge.ts`, `hardwareTelemetry.ts`)**:
   - OPFS(`navigator.storage.getDirectory`), File System Access(`showDirectoryPicker`/`showSaveFilePicker`), HTML5 폴더/파일 마운트(`webkitdirectory`/`File.slice`), WebUSB(`navigator.usb`), Web Serial(`navigator.serial`) 기반의 드라이브 생성·I/O·복구 경로를 전면 삭제.

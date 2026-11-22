@@ -57,7 +57,11 @@ export function computeSmartSnapshotDiff(
 
 function escapeCsvCell(value: unknown): string {
   if (value === null || value === undefined) return '""';
-  const str = String(value).replace(/"/g, '""');
+  let raw = String(value);
+  if (/^[=+\-@\t\r]/.test(raw)) {
+    raw = `'${raw}`;
+  }
+  const str = raw.replace(/"/g, '""');
   return `"${str}"`;
 }
 

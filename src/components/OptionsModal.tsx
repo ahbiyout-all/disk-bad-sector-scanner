@@ -58,6 +58,7 @@ export type OptionsModalSubTab =
 
 export interface OptionsModalProps {
   isOpen: boolean;
+  isInline?: boolean;
   onClose: () => void;
   initialSubTab?: OptionsModalSubTab;
   isDarkMode: boolean;
@@ -91,6 +92,7 @@ export interface OptionsModalProps {
 
 export const OptionsModal: React.FC<OptionsModalProps> = ({
   isOpen,
+  isInline = false,
   onClose,
   initialSubTab = 'general',
   isDarkMode,
@@ -571,18 +573,21 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
   ).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans">
+    <div className={isInline ? 'w-full font-sans' : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200'}>
+      <div className={isInline
+        ? 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md w-full flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans'
+        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans'
+      }>
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center justify-center">
-              <Settings className="w-5 h-5" />
+            <div className="w-8 h-8 rounded-md bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center justify-center">
+              <Settings className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <span>프로그램 환경설정</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold">
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold">
                   OPTIONS
                 </span>
               </h2>
@@ -592,22 +597,24 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="닫기"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="닫기"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Sub-tab Navigation */}
-        <div className="flex overflow-x-auto border-b border-slate-200 dark:border-slate-800 px-5 bg-slate-50/50 dark:bg-slate-950/30 gap-4 text-xs font-bold">
+        <div className="flex overflow-x-auto border-b border-slate-200 dark:border-slate-800 px-4 sm:px-5 bg-slate-50/50 dark:bg-slate-950/30 gap-4 text-xs font-bold">
           <button
             onClick={() => setActiveSubTab('general')}
-            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSubTab === 'general'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -616,9 +623,9 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveSubTab('audio')}
-            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSubTab === 'audio'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -627,9 +634,9 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveSubTab('notification')}
-            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSubTab === 'notification'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -638,9 +645,9 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveSubTab('diagnostic')}
-            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSubTab === 'diagnostic'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -649,9 +656,9 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveSubTab('smart_thresholds')}
-            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSubTab === 'smart_thresholds'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -660,9 +667,9 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveSubTab('migration')}
-            className={`py-3 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeSubTab === 'migration'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -672,7 +679,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
         </div>
 
         {/* Modal Body Content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
+        <div className={isInline ? 'p-4 sm:p-5 space-y-5 text-xs' : 'flex-1 overflow-y-auto p-5 space-y-5 text-xs'}>
           {/* TAB 1: General & Theme */}
           {activeSubTab === 'general' && (
             <div className="space-y-4">
@@ -1611,16 +1618,18 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 flex items-center justify-between">
+        <div className="px-4 sm:px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 flex items-center justify-between gap-2">
           <span className="text-[11px] text-slate-400 font-mono">
             모든 설정은 브라우저 로컬 저장소에 안전하게 유지되며 JSON으로 언제든 백업할 수 있습니다.
           </span>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors cursor-pointer shadow-xs"
-          >
-            확인 및 닫기
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors cursor-pointer shadow-xs"
+            >
+              확인 및 닫기
+            </button>
+          )}
         </div>
       </div>
     </div>

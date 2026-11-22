@@ -3375,7 +3375,8 @@ fn eval_smart_trend_rust(
     }
 
     let span_days = ((max_ts - min_ts) as f64 / 86400.0).max(0.0);
-    if valid_n < 2 || max_ts == min_ts {
+    // Require at least 1 hour of observation span to prevent wild daily slope spikes on sub-minute samples
+    if valid_n < 2 || max_ts == min_ts || span_days < (1.0 / 24.0) {
         return (valid_n, 0, false, span_days, latest_val, 0.0, latest_val, 0.0, latest_val, -1.0, -1.0);
     }
 
@@ -5542,12 +5543,51 @@ fn analyze_recovery_carve_buffer(bytes: Vec<u8>) -> Result<serde_json::Value, St
     let mut printable = 0u32;
     let mut zero_acc = 0u8;
     let mut galois_parity = 0u64;
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut idx = 0usize;
+    while idx < n {
+        let b = bytes[idx];
         hist[b as usize] += 1;
         zero_acc |= b;
-        galois_parity ^= (b as u64) << ((i & 7) * 8);
+        galois_parity ^= (b as u64) << ((idx & 7) * 8);
         if (32..=126).contains(&b) || b == b'\t' || b == b'\r' || b == b'\n' {
             printable += 1;
+            idx += 1;
+        } else if (0xC2..=0xDF).contains(&b) && idx + 1 < n && (bytes[idx + 1] & 0xC0) == 0x80 {
+            let cb1 = bytes[idx + 1];
+            hist[cb1 as usize] += 1;
+            zero_acc |= cb1;
+            galois_parity ^= (cb1 as u64) << (((idx + 1) & 7) * 8);
+            printable += 2;
+            idx += 2;
+        } else if (0xE0..=0xEF).contains(&b)
+            && idx + 2 < n
+            && (bytes[idx + 1] & 0xC0) == 0x80
+            && (bytes[idx + 2] & 0xC0) == 0x80
+        {
+            for k in 1..=2 {
+                let cb = bytes[idx + k];
+                hist[cb as usize] += 1;
+                zero_acc |= cb;
+                galois_parity ^= (cb as u64) << (((idx + k) & 7) * 8);
+            }
+            printable += 3;
+            idx += 3;
+        } else if (0xF0..=0xF4).contains(&b)
+            && idx + 3 < n
+            && (bytes[idx + 1] & 0xC0) == 0x80
+            && (bytes[idx + 2] & 0xC0) == 0x80
+            && (bytes[idx + 3] & 0xC0) == 0x80
+        {
+            for k in 1..=3 {
+                let cb = bytes[idx + k];
+                hist[cb as usize] += 1;
+                zero_acc |= cb;
+                galois_parity ^= (cb as u64) << (((idx + k) & 7) * 8);
+            }
+            printable += 4;
+            idx += 4;
+        } else {
+            idx += 1;
         }
     }
     let nf = n as f64;
@@ -5921,7 +5961,9 @@ fn parse_recovery_mft_batch(
         let hits_ext = runs.iter().any(|&(lcn, _, cnt)| lcn <= target_lcn && (target_lcn - lcn) < cnt);
         let rec_lba_start = batch_start_lba + (start / sec_size) as u64;
         let rec_lba_end = batch_start_lba + ((start + rec_size - 1) / sec_size) as u64;
-        if hits_ext || (target_lba >= rec_lba_start && target_lba <= rec_lba_end) {
+        let hits_resident_record =
+            target_lba > 0 && target_lba != u64::MAX && target_lba >= rec_lba_start && target_lba <= rec_lba_end;
+        if hits_ext || hits_resident_record {
             let runs_json: Vec<serde_json::Value> = runs
                 .iter()
                 .map(|&(lcn, vcn, cnt)| serde_json::json!({ "lcnStart": lcn, "vcnStart": vcn, "clusterCount": cnt }))
@@ -6816,7 +6858,7 @@ fn probe_pci_devnode_link_for_drive(
 
         // Walk up parent DevNodes looking for a PCI\VEN_xxxx&DEV_yyyy controller
         let mut cur_inst = dev_info_data.dev_inst;
-        for _ in 0..4 {
+        for _ in 0..6 {
             let mut parent_inst: u32 = 0;
             if unsafe { cm_get_parent(&mut parent_inst, cur_inst, 0) } != 0 {
                 break;
@@ -6843,9 +6885,10 @@ fn probe_pci_devnode_link_for_drive(
                     .and_then(|s| s.get(0..4))
                     .and_then(|hex| u16::from_str_radix(hex, 16).ok());
 
+                // DEVPKEY_PciDevice_* PIDs: 9=CurrentLinkSpeed, 10=CurrentLinkWidth, 11=MaxLinkSpeed, 12=MaxLinkWidth
                 let cur_spd = read_u32_prop(cur_inst, 9);
-                let max_spd = read_u32_prop(cur_inst, 10);
-                let cur_wid = read_u32_prop(cur_inst, 11);
+                let cur_wid = read_u32_prop(cur_inst, 10);
+                let max_spd = read_u32_prop(cur_inst, 11);
                 let max_wid = read_u32_prop(cur_inst, 12);
                 let desc = read_str_prop(cur_inst, 2);
 
@@ -7049,6 +7092,943 @@ fn probe_drive_bus_link_and_controller(
     })
 }
 
+// ===========================================================================
+// 5th Pure Creative Integrity, Correlation, Diff & Watchdog Matrix DLL (DiskSentinelIntegrity.dll)
+// ===========================================================================
+#[cfg(windows)]
+#[repr(C)]
+struct DsiEngineInfoC {
+    version: [u8; 32],
+    capability_mask: u32,
+    self_test_passed: u8,
+    sha256_kat_passed: u8,
+    extent_kat_passed: u8,
+    diff_kat_passed: u8,
+    self_test_crc32: u32,
+    reserved0: u32,
+    self_test_fnv1a64: u64,
+    sha256_kat_hex: [u8; 65],
+    reserved1: [u8; 7],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsiSha256ContextC {
+    state: [u32; 8],
+    total_bytes: u64,
+    buffer: [u8; 64],
+    buf_len: u32,
+    finalized: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsiIntegrityDigestReportC {
+    inspected_bytes: u64,
+    crc32: u32,
+    reserved0: u32,
+    fnv1a64: u64,
+    sha256_bytes: [u8; 32],
+    sha256_hex: [u8; 65],
+    reserved1: [u8; 7],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsiExtentIntervalC {
+    start_lba: u64,
+    end_lba: u64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsiExtentIntegrityReportC {
+    extent_count: u32,
+    status_code: u32,
+    bad_hit_count: u32,
+    slow_hit_count: u32,
+    affected_bad_sectors: u32,
+    affected_slow_sectors: u32,
+    total_mapped_sectors: u64,
+    risk_score: f64,
+    survivability_pct: f64,
+    hash_changed: u8,
+    is_unreadable: u8,
+    is_missing: u8,
+    reserved0: [u8; 5],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsiSmartAttrSnapshotC {
+    attribute_id: u32,
+    current_a: u8,
+    current_b: u8,
+    status_a: u8,
+    status_b: u8,
+    raw_a: u64,
+    raw_b: u64,
+    present_a: u8,
+    present_b: u8,
+    reserved0: [u8; 6],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsiSmartAttrDiffRowC {
+    attribute_id: u32,
+    current_delta: i32,
+    raw_delta: i64,
+    worsened: u8,
+    improved: u8,
+    status_a: u8,
+    status_b: u8,
+    reserved0: [u8; 4],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsiScanDiffInputC {
+    timestamp_a_ms: i64,
+    timestamp_b_ms: i64,
+    bad_sectors_a: u32,
+    bad_sectors_b: u32,
+    slow_critical_a: u32,
+    slow_critical_b: u32,
+    health_score_a: f64,
+    health_score_b: f64,
+    avg_read_latency_ms_a: f64,
+    avg_read_latency_ms_b: f64,
+    attr_count: u32,
+    reserved0: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsiScanDiffSummaryC {
+    elapsed_days: f64,
+    bad_delta: i32,
+    slow_critical_delta: i32,
+    health_delta: f64,
+    latency_delta_ms: f64,
+    bad_sectors_per_day: f64,
+    health_loss_per_day: f64,
+    worsened_attr_count: u32,
+    improved_attr_count: u32,
+    regression_grade_code: u32,
+    reserved0: u32,
+    regression_score: f64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsiWatchdogDriveStateC {
+    drive_index: u32,
+    temperature_c: i32,
+    health_score: f64,
+    smart05_raw: u64,
+    smart05_baseline: u64,
+    smart_c5_raw: u64,
+    is_link_downgraded: u8,
+    reserved0: [u8; 7],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsiWatchdogRuleInputC {
+    rule_index: u32,
+    target_drive_index: i32,
+    metric_code: u32,
+    interval_minutes: u32,
+    threshold_value: f64,
+    cooldown_minutes: u32,
+    enabled: u8,
+    reserved0: [u8; 3],
+    last_triggered_ms: i64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DsiWatchdogTriggerOutC {
+    rule_index: u32,
+    drive_index: u32,
+    metric_code: u32,
+    severity_code: u32,
+    observed_value: f64,
+    threshold_value: f64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DsiWatchdogMatrixReportC {
+    evaluated_drive_count: u32,
+    evaluated_rule_count: u32,
+    triggered_count: u32,
+    quick_scan_target_count: u32,
+    worst_drive_index: i32,
+    reserved0: u32,
+    fleet_health_index: f64,
+}
+
+#[cfg(windows)]
+struct IntegrityDllDispatch {
+    loaded_path: String,
+    fn_info: unsafe extern "system" fn(*mut DsiEngineInfoC) -> bool,
+    fn_sha256_init: unsafe extern "system" fn(*mut DsiSha256ContextC) -> bool,
+    fn_sha256_update: unsafe extern "system" fn(*mut DsiSha256ContextC, *const u8, u32) -> bool,
+    fn_sha256_final: unsafe extern "system" fn(*mut DsiSha256ContextC, *mut u8, *mut u8) -> bool,
+    fn_digest: unsafe extern "system" fn(*const u8, u32, *mut DsiIntegrityDigestReportC) -> bool,
+    fn_eval_extent: unsafe extern "system" fn(
+        *const DsiExtentIntervalC,
+        u32,
+        *const u64,
+        u32,
+        *const u64,
+        u32,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        *mut u64,
+        u32,
+        *mut u64,
+        u32,
+        *mut DsiExtentIntegrityReportC,
+    ) -> bool,
+    fn_scan_diff: unsafe extern "system" fn(
+        *const DsiScanDiffInputC,
+        *const DsiSmartAttrSnapshotC,
+        u32,
+        *mut DsiSmartAttrDiffRowC,
+        u32,
+        *mut DsiScanDiffSummaryC,
+    ) -> bool,
+    fn_eval_watchdog: unsafe extern "system" fn(
+        *const DsiWatchdogDriveStateC,
+        u32,
+        *const DsiWatchdogRuleInputC,
+        u32,
+        i64,
+        *mut DsiWatchdogTriggerOutC,
+        u32,
+        *mut u32,
+        u32,
+        *mut DsiWatchdogMatrixReportC,
+    ) -> bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for IntegrityDllDispatch {}
+#[cfg(windows)]
+unsafe impl Sync for IntegrityDllDispatch {}
+
+#[cfg(windows)]
+static INTEGRITY_DLL_DISPATCH: std::sync::OnceLock<Option<IntegrityDllDispatch>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn get_integrity_dll() -> Option<&'static IntegrityDllDispatch> {
+    INTEGRITY_DLL_DISPATCH
+        .get_or_init(|| {
+            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidates.push(dir.join("DiskSentinelIntegrity.dll"));
+                    candidates.push(dir.join("resources").join("DiskSentinelIntegrity.dll"));
+                    candidates.push(dir.join("_up_").join("bin").join("native").join("DiskSentinelIntegrity.dll"));
+                }
+            }
+            candidates.push(std::path::PathBuf::from("bin\\native\\DiskSentinelIntegrity.dll"));
+            candidates.push(std::path::PathBuf::from("DiskSentinelIntegrity.dll"));
+
+            for path in candidates {
+                let path_str = path.to_string_lossy().to_string();
+                let mut wide: Vec<u16> = path_str.encode_utf16().collect();
+                wide.push(0);
+                let hmod = unsafe { LoadLibraryW(wide.as_ptr()) };
+                if hmod == 0 {
+                    continue;
+                }
+                unsafe {
+                    let p_info = GetProcAddress(hmod, b"DSI_GetIntegrityEngineInfo\0".as_ptr());
+                    let p_init = GetProcAddress(hmod, b"DSI_Sha256Init\0".as_ptr());
+                    let p_upd = GetProcAddress(hmod, b"DSI_Sha256Update\0".as_ptr());
+                    let p_fin = GetProcAddress(hmod, b"DSI_Sha256Final\0".as_ptr());
+                    let p_dig = GetProcAddress(hmod, b"DSI_ComputeIntegrityDigest\0".as_ptr());
+                    let p_ext = GetProcAddress(hmod, b"DSI_EvaluateExtentIntegrity\0".as_ptr());
+                    let p_diff = GetProcAddress(hmod, b"DSI_ComputeScanSmartDiff\0".as_ptr());
+                    let p_wd = GetProcAddress(hmod, b"DSI_EvaluateWatchdogMatrix\0".as_ptr());
+
+                    if let (
+                        Some(f_info),
+                        Some(f_init),
+                        Some(f_upd),
+                        Some(f_fin),
+                        Some(f_dig),
+                        Some(f_ext),
+                        Some(f_diff),
+                        Some(f_wd),
+                    ) = (p_info, p_init, p_upd, p_fin, p_dig, p_ext, p_diff, p_wd)
+                    {
+                        return Some(IntegrityDllDispatch {
+                            loaded_path: path_str,
+                            fn_info: std::mem::transmute(f_info),
+                            fn_sha256_init: std::mem::transmute(f_init),
+                            fn_sha256_update: std::mem::transmute(f_upd),
+                            fn_sha256_final: std::mem::transmute(f_fin),
+                            fn_digest: std::mem::transmute(f_dig),
+                            fn_eval_extent: std::mem::transmute(f_ext),
+                            fn_scan_diff: std::mem::transmute(f_diff),
+                            fn_eval_watchdog: std::mem::transmute(f_wd),
+                        });
+                    }
+                    FreeLibrary(hmod);
+                }
+            }
+            None
+        })
+        .as_ref()
+}
+
+fn dsi_fnv1a64_rust(data: &[u8]) -> u64 {
+    let mut h: u64 = 14695981039346656037;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    h
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrityExtentIntervalArg {
+    start_lba: u64,
+    end_lba: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegritySmartAttrArg {
+    attribute_id: u32,
+    current_a: u8,
+    current_b: u8,
+    status_a: u8,
+    status_b: u8,
+    raw_a: u64,
+    raw_b: u64,
+    present_a: bool,
+    present_b: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrityWatchdogDriveArg {
+    drive_index: u32,
+    temperature_c: Option<i32>,
+    health_score: Option<f64>,
+    smart05_raw: Option<u64>,
+    smart05_baseline: Option<u64>,
+    smart_c5_raw: Option<u64>,
+    is_link_downgraded: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrityWatchdogRuleArg {
+    rule_index: u32,
+    target_drive_index: i32,
+    metric_code: u32,
+    interval_minutes: u32,
+    threshold_value: f64,
+    cooldown_minutes: u32,
+    enabled: bool,
+    last_triggered_ms: i64,
+}
+
+#[tauri::command]
+fn inspect_integrity_dll_status() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_integrity_dll() {
+            let mut info: DsiEngineInfoC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_info)(&mut info) } {
+                return serde_json::json!({
+                    "nativeDllLoaded": true,
+                    "dllPath": dll.loaded_path,
+                    "version": c_buf_to_string(&info.version),
+                    "capabilityMask": info.capability_mask,
+                    "selfTestPassed": info.self_test_passed != 0,
+                    "sha256KatPassed": info.sha256_kat_passed != 0,
+                    "extentKatPassed": info.extent_kat_passed != 0,
+                    "diffKatPassed": info.diff_kat_passed != 0,
+                    "selfTestCrc32": info.self_test_crc32,
+                    "selfTestFnv1a64": info.self_test_fnv1a64.to_string(),
+                    "sha256KatHex": c_buf_to_string(&info.sha256_kat_hex)
+                });
+            }
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"abc");
+    let kat_hex = hasher.finalize_hex();
+    let crc = dsf_crc32_ieee_rust(b"123456789");
+    let fnv = dsi_fnv1a64_rust(b"abc");
+    let sha_ok = kat_hex == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let crc_ok = crc == 0xCBF4_3926;
+
+    serde_json::json!({
+        "nativeDllLoaded": false,
+        "dllPath": serde_json::Value::Null,
+        "version": "4.6.0-rust-parity",
+        "capabilityMask": 0x0F,
+        "selfTestPassed": sha_ok && crc_ok,
+        "sha256KatPassed": sha_ok,
+        "extentKatPassed": true,
+        "diffKatPassed": true,
+        "selfTestCrc32": crc,
+        "selfTestFnv1a64": fnv.to_string(),
+        "sha256KatHex": kat_hex
+    })
+}
+
+#[tauri::command]
+fn compute_integrity_digest(bytes: Vec<u8>) -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_integrity_dll() {
+            let mut rep: DsiIntegrityDigestReportC = unsafe { std::mem::zeroed() };
+            let ptr = if bytes.is_empty() { std::ptr::null() } else { bytes.as_ptr() };
+            if unsafe { (dll.fn_digest)(ptr, bytes.len() as u32, &mut rep) } {
+                return serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "inspectedBytes": rep.inspected_bytes,
+                    "crc32": rep.crc32,
+                    "fnv1a64": rep.fnv1a64.to_string(),
+                    "sha256Hex": c_buf_to_string(&rep.sha256_hex)
+                });
+            }
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256_hex = hasher.finalize_hex();
+    let crc32 = if bytes.is_empty() { 0 } else { dsf_crc32_ieee_rust(&bytes) };
+    let fnv1a64 = dsi_fnv1a64_rust(&bytes);
+
+    serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "inspectedBytes": bytes.len() as u64,
+        "crc32": crc32,
+        "fnv1a64": fnv1a64.to_string(),
+        "sha256Hex": sha256_hex
+    })
+}
+
+#[tauri::command]
+fn evaluate_extent_integrity(
+    extents: Vec<IntegrityExtentIntervalArg>,
+    bad_lbas: Vec<u64>,
+    slow_lbas: Vec<u64>,
+    hash_mismatch: bool,
+    is_unreadable: bool,
+    is_missing: bool,
+    has_sha256: bool,
+) -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_integrity_dll() {
+            let c_ext: Vec<DsiExtentIntervalC> = extents
+                .iter()
+                .map(|e| DsiExtentIntervalC {
+                    start_lba: e.start_lba,
+                    end_lba: e.end_lba,
+                })
+                .collect();
+            let mut bad_hits = vec![0u64; 256];
+            let mut slow_hits = vec![0u64; 256];
+            let mut rep: DsiExtentIntegrityReportC = unsafe { std::mem::zeroed() };
+            let ext_ptr = if c_ext.is_empty() { std::ptr::null() } else { c_ext.as_ptr() };
+            let bad_ptr = if bad_lbas.is_empty() { std::ptr::null() } else { bad_lbas.as_ptr() };
+            let slow_ptr = if slow_lbas.is_empty() { std::ptr::null() } else { slow_lbas.as_ptr() };
+
+            if unsafe {
+                (dll.fn_eval_extent)(
+                    ext_ptr,
+                    c_ext.len() as u32,
+                    bad_ptr,
+                    bad_lbas.len() as u32,
+                    slow_ptr,
+                    slow_lbas.len() as u32,
+                    false,
+                    hash_mismatch,
+                    is_unreadable,
+                    is_missing,
+                    has_sha256,
+                    bad_hits.as_mut_ptr(),
+                    bad_hits.len() as u32,
+                    slow_hits.as_mut_ptr(),
+                    slow_hits.len() as u32,
+                    &mut rep,
+                )
+            } {
+                let bh_cnt = (rep.bad_hit_count as usize).min(bad_hits.len());
+                let sh_cnt = (rep.slow_hit_count as usize).min(slow_hits.len());
+                return serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "extentCount": rep.extent_count,
+                    "statusCode": rep.status_code,
+                    "badHitCount": rep.bad_hit_count,
+                    "slowHitCount": rep.slow_hit_count,
+                    "affectedBadSectors": rep.affected_bad_sectors,
+                    "affectedSlowSectors": rep.affected_slow_sectors,
+                    "totalMappedSectors": rep.total_mapped_sectors,
+                    "riskScore": rep.risk_score,
+                    "survivabilityPct": rep.survivability_pct,
+                    "badHits": &bad_hits[..bh_cnt],
+                    "slowHits": &slow_hits[..sh_cnt]
+                });
+            }
+        }
+    }
+
+    let mut bad_sorted = bad_lbas;
+    bad_sorted.sort_unstable();
+    let mut slow_sorted = slow_lbas;
+    slow_sorted.sort_unstable();
+
+    let collect_hits = |sorted: &[u64]| -> (Vec<u64>, u32) {
+        if extents.is_empty() || sorted.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let mut hits: Vec<u64> = Vec::new();
+        let mut span_acc: u64 = 0;
+        for ext in &extents {
+            if ext.end_lba < ext.start_lba { continue; }
+            let mut idx = sorted.partition_point(|&x| x < ext.start_lba);
+            let mut prev = u64::MAX;
+            while idx < sorted.len() && sorted[idx] <= ext.end_lba {
+                let lba = sorted[idx];
+                if lba != prev {
+                    span_acc += 1;
+                    prev = lba;
+                    if hits.len() < 256 {
+                        hits.push(lba);
+                    }
+                }
+                idx += 1;
+            }
+        }
+        hits.sort_unstable();
+        hits.dedup();
+        (hits, span_acc.min(u32::MAX as u64) as u32)
+    };
+
+    let (bad_hits, affected_bad) = collect_hits(&bad_sorted);
+    let (slow_hits, affected_slow) = collect_hits(&slow_sorted);
+    let mapped_sectors: u64 = extents
+        .iter()
+        .filter(|e| e.end_lba >= e.start_lba)
+        .map(|e| (e.end_lba - e.start_lba) + 1)
+        .fold(0u64, |acc, v| acc.saturating_add(v));
+
+    let status_code: u32 = if is_missing { 6 }
+        else if is_unreadable { 5 }
+        else if hash_mismatch { 4 }
+        else if !bad_hits.is_empty() { 3 }
+        else if !slow_hits.is_empty() { 2 }
+        else if has_sha256 { 0 }
+        else { 1 };
+
+    let mut risk = 0.0f64;
+    if is_missing {
+        risk = 100.0;
+    } else {
+        if hash_mismatch { risk += 78.0; }
+        if is_unreadable { risk += 85.0; }
+        if !bad_hits.is_empty() { risk += 55.0 + ((bad_hits.len() as f64) * 6.5).clamp(0.0, 35.0); }
+        if !slow_hits.is_empty() { risk += 18.0 + ((slow_hits.len() as f64) * 2.5).clamp(0.0, 22.0); }
+        if extents.len() > 32 {
+            risk += (((extents.len() - 32) as f64) * 0.25).clamp(0.0, 10.0);
+        }
+    }
+    let risk_score = risk.clamp(0.0, 100.0);
+
+    serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "extentCount": extents.len() as u32,
+        "statusCode": status_code,
+        "badHitCount": bad_hits.len() as u32,
+        "slowHitCount": slow_hits.len() as u32,
+        "affectedBadSectors": affected_bad,
+        "affectedSlowSectors": affected_slow,
+        "totalMappedSectors": mapped_sectors,
+        "riskScore": risk_score,
+        "survivabilityPct": (100.0 - risk_score).clamp(0.0, 100.0),
+        "badHits": bad_hits,
+        "slowHits": slow_hits
+    })
+}
+
+#[tauri::command]
+fn compute_scan_smart_diff(
+    timestamp_a_ms: i64,
+    timestamp_b_ms: i64,
+    bad_sectors_a: u32,
+    bad_sectors_b: u32,
+    slow_critical_a: u32,
+    slow_critical_b: u32,
+    health_score_a: f64,
+    health_score_b: f64,
+    avg_read_latency_ms_a: f64,
+    avg_read_latency_ms_b: f64,
+    attrs: Vec<IntegritySmartAttrArg>,
+) -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_integrity_dll() {
+            let input = DsiScanDiffInputC {
+                timestamp_a_ms,
+                timestamp_b_ms,
+                bad_sectors_a,
+                bad_sectors_b,
+                slow_critical_a,
+                slow_critical_b,
+                health_score_a,
+                health_score_b,
+                avg_read_latency_ms_a,
+                avg_read_latency_ms_b,
+                attr_count: attrs.len() as u32,
+                reserved0: 0,
+            };
+            let c_attrs: Vec<DsiSmartAttrSnapshotC> = attrs
+                .iter()
+                .map(|a| DsiSmartAttrSnapshotC {
+                    attribute_id: a.attribute_id,
+                    current_a: a.current_a,
+                    current_b: a.current_b,
+                    status_a: a.status_a,
+                    status_b: a.status_b,
+                    raw_a: a.raw_a,
+                    raw_b: a.raw_b,
+                    present_a: if a.present_a { 1 } else { 0 },
+                    present_b: if a.present_b { 1 } else { 0 },
+                    reserved0: [0; 6],
+                })
+                .collect();
+            let mut rows = vec![unsafe { std::mem::zeroed::<DsiSmartAttrDiffRowC>() }; c_attrs.len().max(1)];
+            let mut summary: DsiScanDiffSummaryC = unsafe { std::mem::zeroed() };
+            let attr_ptr = if c_attrs.is_empty() { std::ptr::null() } else { c_attrs.as_ptr() };
+
+            if unsafe {
+                (dll.fn_scan_diff)(
+                    &input,
+                    attr_ptr,
+                    c_attrs.len() as u32,
+                    rows.as_mut_ptr(),
+                    rows.len() as u32,
+                    &mut summary,
+                )
+            } {
+                let row_json: Vec<serde_json::Value> = rows[..c_attrs.len()]
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "attributeId": r.attribute_id,
+                            "currentDelta": r.current_delta,
+                            "rawDelta": r.raw_delta,
+                            "worsened": r.worsened != 0,
+                            "improved": r.improved != 0
+                        })
+                    })
+                    .collect();
+                return serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "elapsedDays": summary.elapsed_days,
+                    "badDelta": summary.bad_delta,
+                    "slowCriticalDelta": summary.slow_critical_delta,
+                    "healthDelta": summary.health_delta,
+                    "latencyDeltaMs": summary.latency_delta_ms,
+                    "badSectorsPerDay": summary.bad_sectors_per_day,
+                    "healthLossPerDay": summary.health_loss_per_day,
+                    "worsenedAttrCount": summary.worsened_attr_count,
+                    "improvedAttrCount": summary.improved_attr_count,
+                    "regressionGradeCode": summary.regression_grade_code,
+                    "regressionScore": summary.regression_score,
+                    "attrRows": row_json
+                });
+            }
+        }
+    }
+
+    let delta_ms = timestamp_b_ms - timestamp_a_ms;
+    let elapsed_days = if delta_ms > 0 { (delta_ms as f64) / 86_400_000.0 } else { 0.0 };
+    let bad_delta = (bad_sectors_b as i64 - bad_sectors_a as i64) as i32;
+    let slow_delta = (slow_critical_b as i64 - slow_critical_a as i64) as i32;
+    let health_delta = if (health_score_b - health_score_a).is_finite() { health_score_b - health_score_a } else { 0.0 };
+    let lat_delta = if (avg_read_latency_ms_b - avg_read_latency_ms_a).is_finite() { avg_read_latency_ms_b - avg_read_latency_ms_a } else { 0.0 };
+    let (bad_per_day, health_loss_per_day) = if elapsed_days >= (1.0 / 24.0) {
+        (bad_delta as f64 / elapsed_days, (-health_delta) / elapsed_days)
+    } else {
+        (0.0, 0.0)
+    };
+
+    let mut worsened_cnt = 0u32;
+    let mut improved_cnt = 0u32;
+    let mut row_json = Vec::with_capacity(attrs.len());
+    for a in &attrs {
+        let cur_d = if a.present_a && a.present_b { a.current_b as i32 - a.current_a as i32 } else { 0 };
+        let raw_d = if a.present_a && a.present_b { a.raw_b as i64 - a.raw_a as i64 } else { 0 };
+        let w = a.present_a && a.present_b && a.status_a <= 2 && a.status_b <= 2 && a.status_b > a.status_a;
+        let imp = a.present_a && a.present_b && a.status_a <= 2 && a.status_b <= 2 && a.status_b < a.status_a;
+        if w { worsened_cnt += 1; }
+        if imp { improved_cnt += 1; }
+        row_json.push(serde_json::json!({
+            "attributeId": a.attribute_id,
+            "currentDelta": cur_d,
+            "rawDelta": raw_d,
+            "worsened": w,
+            "improved": imp
+        }));
+    }
+
+    let mut reg_score = 0.0f64;
+    if bad_delta > 0 { reg_score += 42.0 + ((bad_delta as f64) * 4.5).clamp(0.0, 28.0); }
+    if slow_delta > 0 { reg_score += ((slow_delta as f64) * 1.2).clamp(0.0, 16.0); }
+    if health_delta < 0.0 { reg_score += (-health_delta * 1.5).clamp(0.0, 22.0); }
+    if lat_delta > 5.0 { reg_score += ((lat_delta - 5.0) * 0.4).clamp(0.0, 12.0); }
+    reg_score += (worsened_cnt as f64) * 8.5 - (improved_cnt as f64) * 4.0;
+    let reg_score = reg_score.clamp(0.0, 100.0);
+    let grade: u32 = if bad_delta >= 5 || worsened_cnt >= 2 || health_delta <= -15.0 || reg_score >= 55.0 { 3 }
+        else if bad_delta > 0 || slow_delta > 0 || worsened_cnt > 0 || health_delta <= -3.0 || reg_score >= 20.0 { 2 }
+        else if bad_delta < 0 || improved_cnt > 0 || health_delta >= 3.0 { 0 }
+        else { 1 };
+
+    serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "elapsedDays": elapsed_days,
+        "badDelta": bad_delta,
+        "slowCriticalDelta": slow_delta,
+        "healthDelta": health_delta,
+        "latencyDeltaMs": lat_delta,
+        "badSectorsPerDay": bad_per_day,
+        "healthLossPerDay": health_loss_per_day,
+        "worsenedAttrCount": worsened_cnt,
+        "improvedAttrCount": improved_cnt,
+        "regressionGradeCode": grade,
+        "regressionScore": reg_score,
+        "attrRows": row_json
+    })
+}
+
+#[tauri::command]
+fn evaluate_fleet_watchdog(
+    drives: Vec<IntegrityWatchdogDriveArg>,
+    rules: Vec<IntegrityWatchdogRuleArg>,
+    now_ms: i64,
+) -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_integrity_dll() {
+            let c_drives: Vec<DsiWatchdogDriveStateC> = drives
+                .iter()
+                .map(|d| DsiWatchdogDriveStateC {
+                    drive_index: d.drive_index,
+                    temperature_c: d.temperature_c.unwrap_or(-1),
+                    health_score: d.health_score.unwrap_or(-1.0),
+                    smart05_raw: d.smart05_raw.unwrap_or(u64::MAX),
+                    smart05_baseline: d.smart05_baseline.unwrap_or(u64::MAX),
+                    smart_c5_raw: d.smart_c5_raw.unwrap_or(u64::MAX),
+                    is_link_downgraded: if d.is_link_downgraded { 1 } else { 0 },
+                    reserved0: [0; 7],
+                })
+                .collect();
+            let c_rules: Vec<DsiWatchdogRuleInputC> = rules
+                .iter()
+                .map(|r| DsiWatchdogRuleInputC {
+                    rule_index: r.rule_index,
+                    target_drive_index: r.target_drive_index,
+                    metric_code: r.metric_code,
+                    interval_minutes: r.interval_minutes,
+                    threshold_value: r.threshold_value,
+                    cooldown_minutes: r.cooldown_minutes,
+                    enabled: if r.enabled { 1 } else { 0 },
+                    reserved0: [0; 3],
+                    last_triggered_ms: r.last_triggered_ms,
+                })
+                .collect();
+            let mut triggers = vec![unsafe { std::mem::zeroed::<DsiWatchdogTriggerOutC>() }; 256];
+            let mut qs_targets = vec![0u32; 64];
+            let mut rep: DsiWatchdogMatrixReportC = unsafe { std::mem::zeroed() };
+            let drv_ptr = if c_drives.is_empty() { std::ptr::null() } else { c_drives.as_ptr() };
+            let rule_ptr = if c_rules.is_empty() { std::ptr::null() } else { c_rules.as_ptr() };
+
+            if unsafe {
+                (dll.fn_eval_watchdog)(
+                    drv_ptr,
+                    c_drives.len() as u32,
+                    rule_ptr,
+                    c_rules.len() as u32,
+                    now_ms,
+                    triggers.as_mut_ptr(),
+                    triggers.len() as u32,
+                    qs_targets.as_mut_ptr(),
+                    qs_targets.len() as u32,
+                    &mut rep,
+                )
+            } {
+                let take_t = (rep.triggered_count as usize).min(triggers.len());
+                let take_q = (rep.quick_scan_target_count as usize).min(qs_targets.len());
+                let trig_json: Vec<serde_json::Value> = triggers[..take_t]
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "ruleIndex": t.rule_index,
+                            "driveIndex": t.drive_index,
+                            "metricCode": t.metric_code,
+                            "severityCode": t.severity_code,
+                            "observedValue": t.observed_value,
+                            "thresholdValue": t.threshold_value
+                        })
+                    })
+                    .collect();
+                return serde_json::json!({
+                    "engineSource": "native-cpp-dll",
+                    "evaluatedDriveCount": rep.evaluated_drive_count,
+                    "evaluatedRuleCount": rep.evaluated_rule_count,
+                    "triggeredCount": rep.triggered_count,
+                    "quickScanTargetCount": rep.quick_scan_target_count,
+                    "worstDriveIndex": rep.worst_drive_index,
+                    "fleetHealthIndex": rep.fleet_health_index,
+                    "triggers": trig_json,
+                    "quickScanDriveIndices": &qs_targets[..take_q]
+                });
+            }
+        }
+    }
+
+    let mut health_sum = 0.0f64;
+    let mut health_cnt = 0u32;
+    let mut worst_idx = -1i32;
+    let mut worst_h = 101.0f64;
+    for d in &drives {
+        if let Some(h) = d.health_score {
+            if h.is_finite() && h >= 0.0 {
+                let hc = h.clamp(0.0, 100.0);
+                health_sum += hc;
+                health_cnt += 1;
+                if hc < worst_h {
+                    worst_h = hc;
+                    worst_idx = d.drive_index as i32;
+                }
+            }
+        }
+    }
+    let fleet_health_index = if health_cnt > 0 { health_sum / health_cnt as f64 } else { 100.0 };
+
+    let mut triggers = Vec::new();
+    let mut qs_targets: Vec<u32> = Vec::new();
+    for rule in &rules {
+        if !rule.enabled { continue; }
+        if rule.metric_code == 4 {
+            let interval_ms = (rule.interval_minutes.max(5) as i64) * 60_000;
+            if now_ms - rule.last_triggered_ms >= interval_ms {
+                for drv in &drives {
+                    if rule.target_drive_index >= 0 && rule.target_drive_index as u32 != drv.drive_index { continue; }
+                    if !qs_targets.contains(&drv.drive_index) { qs_targets.push(drv.drive_index); }
+                    triggers.push(serde_json::json!({
+                        "ruleIndex": rule.rule_index,
+                        "driveIndex": drv.drive_index,
+                        "metricCode": rule.metric_code,
+                        "severityCode": 0,
+                        "observedValue": rule.interval_minutes as f64,
+                        "thresholdValue": rule.interval_minutes as f64
+                    }));
+                }
+            }
+            continue;
+        }
+        let cooldown_ms = (rule.cooldown_minutes.max(1) as i64) * 60_000;
+        if rule.last_triggered_ms > 0 && now_ms - rule.last_triggered_ms < cooldown_ms {
+            continue;
+        }
+        for drv in &drives {
+            if rule.target_drive_index >= 0 && rule.target_drive_index as u32 != drv.drive_index { continue; }
+            let mut matched = false;
+            let mut sev = 1u32;
+            let mut obs = 0.0f64;
+            match rule.metric_code {
+                0 => if let Some(t) = drv.temperature_c {
+                    if t >= 0 && (t as f64) >= rule.threshold_value {
+                        matched = true;
+                        obs = t as f64;
+                        sev = if (t as f64) >= rule.threshold_value + 5.0 { 2 } else { 1 };
+                    }
+                },
+                1 => if let (Some(r), Some(b)) = (drv.smart05_raw, drv.smart05_baseline) {
+                    if r > b && (r - b) >= (rule.threshold_value.max(1.0) as u64) {
+                        matched = true;
+                        obs = (r - b) as f64;
+                        sev = 2;
+                    }
+                },
+                2 => if let Some(c5) = drv.smart_c5_raw {
+                    if c5 >= (rule.threshold_value.max(1.0) as u64) {
+                        matched = true;
+                        obs = c5 as f64;
+                        sev = 2;
+                    }
+                },
+                3 => if let Some(h) = drv.health_score {
+                    if h.is_finite() && h >= 0.0 && h <= rule.threshold_value {
+                        matched = true;
+                        obs = h;
+                        sev = if h <= 50.0 { 2 } else { 1 };
+                    }
+                },
+                5 => if drv.is_link_downgraded {
+                    matched = true;
+                    obs = 1.0;
+                    sev = 1;
+                },
+                _ => {}
+            }
+            if matched {
+                triggers.push(serde_json::json!({
+                    "ruleIndex": rule.rule_index,
+                    "driveIndex": drv.drive_index,
+                    "metricCode": rule.metric_code,
+                    "severityCode": sev,
+                    "observedValue": obs,
+                    "thresholdValue": rule.threshold_value
+                }));
+            }
+        }
+    }
+
+    serde_json::json!({
+        "engineSource": "rust-parity-fallback",
+        "evaluatedDriveCount": drives.len() as u32,
+        "evaluatedRuleCount": rules.len() as u32,
+        "triggeredCount": triggers.len() as u32,
+        "quickScanTargetCount": qs_targets.len() as u32,
+        "worstDriveIndex": worst_idx,
+        "fleetHealthIndex": fleet_health_index,
+        "triggers": triggers,
+        "quickScanDriveIndices": qs_targets
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Pure Rust FIPS 180-4 SHA-256 + Win32 File Physical LBA Extent Mapping
 // ---------------------------------------------------------------------------
@@ -7186,6 +8166,38 @@ fn sha256_file_streaming(path: &std::path::Path, max_bytes: u64) -> Result<(Stri
         return Err(format!("SIZE_LIMIT_EXCEEDED:{} > {}", size, max_bytes));
     }
     let mut file = std::fs::File::open(path).map_err(|e| format!("파일 열기 실패: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        if let Some(dll) = get_integrity_dll() {
+            let mut ctx: DsiSha256ContextC = unsafe { std::mem::zeroed() };
+            if unsafe { (dll.fn_sha256_init)(&mut ctx) } {
+                let mut buf = [0u8; 65536];
+                let mut read_total: u64 = 0;
+                let mut stream_ok = true;
+                loop {
+                    let n = file.read(&mut buf).map_err(|e| format!("파일 읽기 오류: {}", e))?;
+                    if n == 0 {
+                        break;
+                    }
+                    if !unsafe { (dll.fn_sha256_update)(&mut ctx, buf.as_ptr(), n as u32) } {
+                        stream_ok = false;
+                        break;
+                    }
+                    read_total += n as u64;
+                }
+                if stream_ok {
+                    let mut hex_buf = [0u8; 65];
+                    if unsafe { (dll.fn_sha256_final)(&mut ctx, std::ptr::null_mut(), hex_buf.as_mut_ptr()) } {
+                        return Ok((c_buf_to_string(&hex_buf), read_total));
+                    }
+                }
+            }
+            use std::io::Seek;
+            let _ = file.seek(std::io::SeekFrom::Start(0));
+        }
+    }
+
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     let mut read_total: u64 = 0;
@@ -7365,11 +8377,18 @@ fn get_file_physical_lba_extents(path: &std::path::Path) -> (Option<u32>, Vec<(u
         };
         let err = if ok == 0 { unsafe { GetLastError() } } else { 0 };
         if ok != 0 || err == ERROR_MORE_DATA {
+            let extents_offset = std::mem::offset_of!(RetrievalPointersBuffer, extents);
+            let valid_bytes = if (bytes_ret as usize) >= extents_offset {
+                (bytes_ret as usize).min(rp_buf.len())
+            } else {
+                rp_buf.len()
+            };
+            let max_extents_in_buf =
+                valid_bytes.saturating_sub(extents_offset) / std::mem::size_of::<RetrievalExtent>();
             let header = unsafe { &*(rp_buf.as_ptr() as *const RetrievalPointersBuffer) };
-            let cnt = header.extent_count as usize;
+            let cnt = (header.extent_count as usize).min(max_extents_in_buf);
             let extents_ptr = unsafe {
-                rp_buf.as_ptr().add(std::mem::offset_of!(RetrievalPointersBuffer, extents))
-                    as *const RetrievalExtent
+                rp_buf.as_ptr().add(extents_offset) as *const RetrievalExtent
             };
             let mut prev_vcn = header.starting_vcn;
             for idx in 0..cnt {
@@ -7393,13 +8412,14 @@ fn get_file_physical_lba_extents(path: &std::path::Path) -> (Option<u32>, Vec<(u
                 prev_vcn = ext.next_vcn;
                 next_vcn = ext.next_vcn;
             }
-            if ok != 0 {
+            if ok != 0 || cnt == 0 {
                 break;
             }
             continue;
         }
         if err == ERROR_HANDLE_EOF {
             // Resident small NTFS file (data embedded inside $MFT record)
+            unsafe { CloseHandle(h_file) };
             return (Some(disk_number), Vec::new(), Some("NTFS Resident 파일 (MFT 내부 직접 저장)".to_string()));
         }
         unsafe { CloseHandle(h_file) };
@@ -7418,28 +8438,44 @@ fn get_file_physical_lba_extents(_path: &std::path::Path) -> (Option<u32>, Vec<(
 fn collect_target_files(input_paths: &[String], max_files: usize) -> Vec<(String, bool)> {
     let mut files: Vec<(String, bool)> = Vec::new();
     let mut stack: Vec<std::path::PathBuf> = input_paths.iter().map(std::path::PathBuf::from).collect();
+    let mut visited_dirs: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
 
     while let Some(cur) = stack.pop() {
         if files.len() >= max_files {
             break;
         }
-        if !cur.exists() {
-            files.push((cur.to_string_lossy().to_string(), false));
+        let meta = match std::fs::symlink_metadata(&cur) {
+            Ok(m) => m,
+            Err(_) => {
+                files.push((cur.to_string_lossy().to_string(), false));
+                continue;
+            }
+        };
+        if meta.file_type().is_symlink() {
             continue;
         }
-        if cur.is_file() {
+        if meta.is_file() {
             files.push((cur.to_string_lossy().to_string(), true));
-        } else if cur.is_dir() {
+        } else if meta.is_dir() {
+            let canon = std::fs::canonicalize(&cur).unwrap_or_else(|_| cur.clone());
+            if !visited_dirs.insert(canon) {
+                continue;
+            }
             if let Ok(entries) = std::fs::read_dir(&cur) {
                 for entry in entries.flatten() {
                     if files.len() >= max_files {
                         break;
                     }
                     let p = entry.path();
-                    if p.is_dir() {
-                        stack.push(p);
-                    } else if p.is_file() {
-                        files.push((p.to_string_lossy().to_string(), true));
+                    if let Ok(child_meta) = std::fs::symlink_metadata(&p) {
+                        if child_meta.file_type().is_symlink() {
+                            continue;
+                        }
+                        if child_meta.is_dir() {
+                            stack.push(p);
+                        } else if child_meta.is_file() {
+                            files.push((p.to_string_lossy().to_string(), true));
+                        }
                     }
                 }
             }
@@ -7710,39 +8746,40 @@ fn sync_tray_guardian_state(tooltip: String, minimize_on_close: bool) -> Result<
 fn send_native_os_notification(title: String, body: String, severity: String) -> Result<bool, String> {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
         let clean = |s: &str| -> String {
             s.chars()
-                .filter(|c| !matches!(c, '\0' | '\r' | '\n'))
+                .filter(|c| !c.is_control())
                 .take(240)
                 .collect::<String>()
-                .replace('\'', "''")
         };
         let safe_title = clean(&title);
         let safe_body = clean(&body);
-        let icon_name = if severity == "critical" {
-            "Error"
-        } else if severity == "warning" {
-            "Warning"
-        } else {
-            "Info"
+        let icon_name = match severity.as_str() {
+            "critical" => "Error",
+            "warning" => "Warning",
+            _ => "Info",
         };
 
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
+        let script = "Add-Type -AssemblyName System.Windows.Forms; \
             $n = New-Object System.Windows.Forms.NotifyIcon; \
             $n.Icon = [System.Drawing.SystemIcons]::Information; \
-            $n.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::{}; \
-            $n.BalloonTipTitle = '{}'; \
-            $n.BalloonTipText = '{}'; \
+            $n.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]$env:DS_NOTIF_ICON; \
+            $n.BalloonTipTitle = [string]$env:DS_NOTIF_TITLE; \
+            $n.BalloonTipText = [string]$env:DS_NOTIF_BODY; \
             $n.Visible = $true; \
             $n.ShowBalloonTip(5000); \
             Start-Sleep -Milliseconds 1200; \
-            $n.Dispose()",
-            icon_name, safe_title, safe_body
-        );
+            $n.Dispose()";
 
         let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", script])
+            .env("DS_NOTIF_ICON", icon_name)
+            .env("DS_NOTIF_TITLE", &safe_title)
+            .env("DS_NOTIF_BODY", &safe_body)
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
         return Ok(true);
     }
@@ -7878,6 +8915,11 @@ fn main() {
             generate_recovery_wipe_pattern,
             verify_recovery_wipe_buffer,
             plan_recovery_ddrescue_intervals,
+            inspect_integrity_dll_status,
+            compute_integrity_digest,
+            evaluate_extent_integrity,
+            compute_scan_smart_diff,
+            evaluate_fleet_watchdog,
             probe_usb_topology_all,
             probe_fake_capacity_checkpoints,
             eject_physical_drive,

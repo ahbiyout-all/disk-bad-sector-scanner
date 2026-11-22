@@ -13,14 +13,15 @@
 
 ## 1. 개발 배경 및 순수 창작 설계 의의 (Design Philosophy)
 
-DiskSentinel Pro의 **4-DLL(Quad-DLL) 순수 창작 아키텍처**에서:
+DiskSentinel Pro의 **Penta-DLL(5-DLL) 순수 창작 아키텍처**에서:
 - **`DiskSentinelNativeCore.dll`**은 OS 캐시 우회 Direct DMA/S.M.A.R.T. 입출력 및 Memory-Mapped Zero-Copy 전송을,
 - **`DiskSentinelForensics.dll`**은 Welford Z-Score 군집 탐지·섀넌 엔트로피·GPT/VBR 구조 검증을,
-- **`DiskSentinelPredictive.dll`**은 Weibull RUL·음향 RMSSD 지터·Arrhenius 열가속·OLS S.M.A.R.T. 추세 회귀를 담당합니다.
+- **`DiskSentinelPredictive.dll`**은 Weibull RUL·음향 RMSSD 지터·Arrhenius 열가속·OLS S.M.A.R.T. 추세 회귀를,
+- **`DiskSentinelIntegrity.dll`**은 스트리밍 SHA-256·익스텐트 Bit-Rot 생존성·스캔 Diff·플릿 Watchdog 매트릭스를 담당합니다.
 
-신규 순수 창작 라이브러리인 **`DiskSentinelRecovery.dll`**은 커널 디바이스 핸들(`HANDLE`)에 일절 의존하지 않는 순수 바이트 버퍼 및 도메인 구간 연산 엔진으로서, **실제 손상 섹터 복구·NTFS 구조 역추적·보안 소거 검증·멀티패스 이미지 백업 스케줄링**의 4대 핵심 파이프라인을 네이티브 속도와 64비트 메모리 안전성으로 처리합니다.
+순수 창작 라이브러리인 **`DiskSentinelRecovery.dll`**은 커널 디바이스 핸들(`HANDLE`)에 일절 의존하지 않는 순수 바이트 버퍼 및 도메인 구간 연산 엔진으로서, **실제 손상 섹터 복구·NTFS 구조 역추적·보안 소거 검증·멀티패스 이미지 백업 스케줄링**의 4대 핵심 파이프라인을 네이티브 속도와 64비트 메모리 안전성으로 처리합니다.
 
-Quad-DLL 분업 체계 내 고유 역할:
+Penta-DLL 분업 체계 내 고유 역할:
 1. **고정밀 다중 시그니처 카빙 & 비트 반전 내성**: 16종 이상의 파일 헤더 및 푸터/트레일러(EOF) 경계를 탐색해 절단 여부를 판별하고, 1~2비트 헤더 반전 손상을 **Hamming Distance(해밍 거리)**로 구출합니다.
 2. **NTFS `$MFT` 레코드 USA Fixup & 가변 부호 Runlist 디코딩**: 1024B/4096B MFT 레코드의 Update Sequence Array(USA) 섹터 말미 태그를 인플레이스 복원하고, `$STANDARD_INFORMATION`, `$FILE_NAME`(UTF-16LE→UTF-8 우선순위 네임스페이스), 비거주 `$DATA` 가변 부호 델타 Runlist를 단일 패스로 고속 해독합니다.
 3. **NIST SP 800-88 / DoD 5220.22-M 결정적 소거 패턴 & Read-Back 감사**: SplitMix64 시딩 기반 `Xoshiro256**` PRNG와 LBA 오프셋 바인딩으로 재현 가능한 소거 버퍼를 생성하고, Read-Back 섹터에서 단 1바이트의 잔존 데이터(`firstMismatchOffset`)도 즉시 검출합니다.

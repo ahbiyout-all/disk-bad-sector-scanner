@@ -4,6 +4,10 @@ import {
   WatchdogRule,
   WatchdogTriggerEvent
 } from '../types';
+import {
+  evaluateWatchdogMatrixNative,
+  WatchdogMatrixReport
+} from './integrityDllBridge';
 
 const RULES_STORAGE_KEY = 'disksentinel_watchdog_rules_v1';
 const BASELINES_STORAGE_KEY = 'disksentinel_watchdog_baselines_v1';
@@ -318,5 +322,23 @@ export function evaluateWatchdogRules(
     quickScanTargetDriveIds,
     rulesChanged,
     baselinesChanged
+  };
+}
+
+/**
+ * Evaluates fleet Watchdog matrix through DiskSentinelIntegrity.dll (or deterministic parity fallback),
+ * returning both the standard WatchdogEvaluationResult and the fleetHealthIndex matrix telemetry.
+ */
+export async function evaluateWatchdogRulesNative(
+  drives: DiskDrive[],
+  rules: WatchdogRule[],
+  baselines: Record<string, WatchdogBaselineSnapshot>,
+  now = Date.now()
+): Promise<WatchdogEvaluationResult & { matrixReport: WatchdogMatrixReport }> {
+  const result = evaluateWatchdogRules(drives, rules, baselines, now);
+  const matrixReport = await evaluateWatchdogMatrixNative(drives, rules, baselines, now);
+  return {
+    ...result,
+    matrixReport
   };
 }

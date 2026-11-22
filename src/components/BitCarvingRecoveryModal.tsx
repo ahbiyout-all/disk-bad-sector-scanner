@@ -26,6 +26,7 @@ interface BitCarvingRecoveryModalProps {
   initialLba?: number;
   drive?: DiskDrive;
   driveModel?: string;
+  isInline?: boolean;
 }
 
 export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = ({
@@ -34,6 +35,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   initialLba = 0,
   drive,
   driveModel,
+  isInline = false,
 }) => {
   const [targetLba, setTargetLba] = useState<number>(initialLba);
   const [clusterSpan, setClusterSpan] = useState<number>(8);
@@ -174,13 +176,25 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-3xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-3xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans'
+        }
+      >
 
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shadow-xs">
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold">
               <Binary className="w-4 h-4" />
             </div>
             <div>
@@ -188,8 +202,8 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   비트 카빙 심층 복구 엔진 (Bit Carving &amp; Signature Scanner)
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30">
-                  Raw LBA Salvager
+                <span className="text-[10px] font-mono font-semibold text-blue-600 dark:text-blue-400">
+                  · Raw LBA Salvager
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -198,16 +212,18 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-md hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Content */}
-        <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs">
+        <div className={`p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
 
           {/* Target LBA & Span Config */}
           <div className="p-3.5 rounded-lg border bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 space-y-3">

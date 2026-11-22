@@ -304,6 +304,54 @@
 - **Current Status**: `VERIFIED`
 - **Remaining Blockers**: None
 
+---
 
+### [TASK-UX-11] Fleet Dashboard, Folder LBA Integrity Monitor, PCIe/SATA Link Probe, Checkpoint Resume, Watchdog, Ctrl+K Palette & SMART Diff
+- **Description**: 장착된 전체 디스크 플릿 비교 및 일괄 CSV/JSON 내보내기, 중요 폴더 LBA 익스텐트 매핑 + SHA-256 Bit-Rot 무결성 감시, PCIe/SATA 링크 속도·다운그레이드 실측, 스캔 체크포인트 중단/재개, OS 네이티브 Watchdog 알림, `Ctrl+K` 통합 커맨드 팔레트, S.M.A.R.T. 시점별 Diff·인쇄 진단서, KO/EN 다국어 UI 통합.
+- **Priority**: P1
+- **Dependencies**: Win32 DeviceIoControl / `FSCTL_GET_RETRIEVAL_POINTERS` / `DEVPKEY_PciDevice_*` / Tauri IPC
+- **Target Files**:
+  - `src-tauri/src/main.rs`
+  - `src/App.tsx`
+  - `src/components/FleetOverviewDashboard.tsx`
+  - `src/components/FolderLbaIntegrityPanel.tsx`
+  - `src/components/HistoryAndComparison.tsx`
+  - `src/components/CommandPaletteModal.tsx`
+  - `src/components/TrayGuardianModal.tsx`
+  - `src/utils/lbaIntegrityStore.ts`
+  - `src/utils/scanCheckpoint.ts`
+  - `src/utils/scanDiff.ts`
+  - `src/utils/watchdogEngine.ts`
+  - `src/utils/i18n.ts`
+- **Acceptance Criteria**:
+  - 플릿 대시보드 일괄 지표 비교·CSV/JSON 추출 및 폴더 LBA 익스텐트·SHA-256 교차 추적 정상 동작.
+  - 체크포인트 저장/복원, `Ctrl+K` 검색 이동, SMART Diff 렌더링 및 KO/EN 전환 무결성 확보.
+- **Validation**:
+  - `npm run lint`: PASS (0 errors)
+  - `npm run build`: PASS (0 errors)
+- **Current Status**: `VERIFIED`
+- **Remaining Blockers**: None
 
+---
 
+### [TASK-AUDIT-12] Self-Reflection Deep Audit, MSVC C3861 Fix & Win32/Rust/React Security & Reliability Hardening
+- **Description**: 코드베이스 전수 자아성찰 감사를 통해 확인된 MSVC `C3861` 컴파일 오류, Win32 PCIe PID `10/11` 매핑 스왑, `FSCTL_GET_RETRIEVAL_POINTERS` 핸들 누수 및 버퍼 경계, NTFS 정션 순환 위험, PowerShell 알림 명령 보간, C++ 비정렬 포인터 접근, 프론트엔드 훅 의존성·경로 접두어 충돌·CSV 수식 주입·미사용 `express` 의존성 일괄 시정.
+- **Priority**: P0
+- **Dependencies**: None
+- **Target Files**:
+  - `src/native/DiskSentinelEngine.cpp`
+  - `src-tauri/src/main.rs`
+  - `src/App.tsx`
+  - `src/components/FolderLbaIntegrityPanel.tsx`
+  - `src/utils/scanDiff.ts`
+  - `src/utils/reportGenerator.ts`
+  - `package.json`
+- **Acceptance Criteria**:
+  - C++ 4종 소스 `g++ -Wall -Wextra` 경고 0건 및 MSVC `<cmath>`/`<math.h>` 헤더 보완.
+  - Win32 핸들 누수, 버퍼 초과 읽기, 정션 순환, 명령 보간, 경로 오매칭 및 CSV 수식 주입 경로 0건.
+- **Validation**:
+  - `npm run lint`: PASS (0 errors)
+  - `npm run build`: PASS (0 errors)
+  - C++ native compilation check: PASS (0 warnings)
+- **Current Status**: `VERIFIED`
+- **Remaining Blockers**: None

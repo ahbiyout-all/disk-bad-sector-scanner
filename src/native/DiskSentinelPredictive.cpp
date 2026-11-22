@@ -582,7 +582,8 @@ DSP_API bool DSP_CALL DSP_ProjectSmartDegradationTrend(
     if (spanDays < 0.0) spanDays = 0.0;
     outProjection->observationSpanDays = spanDays;
 
-    if (validN < 2 || maxTs == minTs) {
+    // Require at least 1 hour of observation span to avoid wild daily slope extrapolation on sub-minute samples
+    if (validN < 2 || maxTs == minTs || spanDays < (1.0 / 24.0)) {
         outProjection->interceptValue = latestVal;
         outProjection->projectedValue30d = latestVal;
         outProjection->trendDirection = DSP_TREND_STABLE;

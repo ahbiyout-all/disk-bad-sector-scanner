@@ -19,17 +19,24 @@
   - 실시간 P50/P95/P99, 표준편차(σ), 꼬리 왜도(Tail Ratio), Z-Score 기반 **예측 장애 분석(Predictive Failure Analysis)**
   - 선택된 검사 방식(`Quick` 8-Bin/0.1ms vs `Full` 20-Bin/0.01ms) 연동 통계 정밀도 동적 제어
   - **100ms 이상 지연(Slow/Critical) 섹터 오렌지/레드 컬러 하이라이트** 및 차트 상단 실시간 요약 카운터, 클릭 시 LBA 상세 드릴다운 지원
-- **4대 순수 창작 C++ DLL 네이티브 엔진 스위트 (`src/native/`)**:
+- **5대(Penta-DLL) 순수 창작 C++ DLL 네이티브 엔진 스위트 (`src/native/`)**:
   - **`DiskSentinelNativeCore.dll`**: Direct DMA (`VirtualAlloc` 64KB 정렬 + `StorageAdapterProperty`), Memory-Mapped Zero-Copy I/O, $O(\log K)$ 이진 분할 탐색, Slicing-by-8 CRC32 및 ATA/NVMe 패스스루
   - **`DiskSentinelForensics.dll`**: 무의존성 Welford Z-Score 군집 탐지, $O(N \log M)$ 익스텐트 히트맵, 256-bin 섀넌 엔트로피·소거 NAND 판별, GPT IEEE 802.3 CRC32(UTF-16LE→UTF-8) & VBR 디코더
   - **`DiskSentinelPredictive.dll`**: **Weibull 욕조 곡선 잔여 수명(RUL) 예측**, **음향 탐색 RMSSD 지터·FTL 스톨 프로파일링**, **Arrhenius(0.7 eV) 열가속·TBW 수명 모델**, **중심화 OLS S.M.A.R.T. 추세 회귀** ([기술 명세서](docs/DiskSentinel_Predictive_DLL_Specification.md))
-  - **`DiskSentinelRecovery.dll`** *(신규)*: **16+ 시그니처 카빙·Hamming 비트 반전 복원**, **NTFS `$MFT` USA/Runlist 디코더**, **NIST SP 800-88 `Xoshiro256**` 소거 패턴 생성·검증**, **ddrescue 도메인 구간 병합 플래너** ([기술 명세서](docs/DiskSentinel_Recovery_DLL_Specification.md) · [모듈 레지스트리](docs/MODULES.md))
+  - **`DiskSentinelRecovery.dll`**: **16+ 시그니처 카빙·Hamming 비트 반전 복원**, **NTFS `$MFT` USA/Runlist 디코더**, **NIST SP 800-88 `Xoshiro256**` 소거 패턴 생성·검증**, **ddrescue 도메인 구간 병합 플래너** ([기술 명세서](docs/DiskSentinel_Recovery_DLL_Specification.md))
+  - **`DiskSentinelIntegrity.dll`** *(신규)*: **스트리밍 FIPS 180-4 SHA-256 + Slicing-by-8 CRC32 + FNV-1a64**, **$O((E+B)\log B)$ 익스텐트 Bit-Rot/생존성 평가**, **시점 간 S.M.A.R.T. 열화 속도(Diff)**, **플릿 Watchdog SLA 매트릭스** ([기술 명세서](docs/DiskSentinel_Integrity_DLL_Specification.md) · [모듈 레지스트리](docs/MODULES.md))
 - **Windows IOCTL/WMI 네이티브 32-드라이브 전수 탐색 & 제로 더미(Zero-Dummy) 실측 엔진**:
   - `\\.\PhysicalDrive0`~`31` 물리 장치 및 논리 볼륨 매핑 정밀 인식 (SSD/HDD/NVMe/USB 자동 분류)
   - C++, Rust, Tauri, TypeScript 전 계층의 가짜/더미 폴백을 완전 제거하고 커널 Direct I/O 및 실측 텔레메트리 전면 적용 (미지원 항목 `N/A` 표기)
 - **USB 버전·장치별 적응형 표면검사 매트릭스 & 위조 용량 가드**:
   - Win32 USB Hub IOCTL/PnP(`DS_ProbeUsbTopology`)로 USB 1.1~USB4, BOT/UASP/PCIe 터널, 브릿지 칩셋을 실측하고 C++/Rust I/O 엔진(`DS_ScanLbaBlockWithPolicy`) 청크·임계치·재시도·쿨다운을 동적 튜닝
   - H2testw 방식 2단계(Tier 1 읽기 전용 CRC32 앨리어싱 + OS 디스크 영구 보호 Tier 2 `Xoshiro256**` 검증/복원) 위조 용량 가드 내장 ([상세 명세서](docs/USB_Surface_Scan_Matrix_Specification.md))
+- **PCIe / SATA / NVMe 링크 속도 실측·컨트롤러 매트릭스 & 플릿(Fleet) 일괄 진단**:
+  - `DEVPKEY_PciDevice_*` 기반 실제 PCIe 현재/최대 레인 폭·링크 세대, SATA/NVMe 컨트롤러 규격 실측 및 대역폭 병목(Link Downgrade) 자동 경보
+  - 장착된 모든 물리 디스크를 한눈에 비교하는 **전체 디스크 플릿 대시보드(`FleetOverviewDashboard`)** 및 일괄 CSV/JSON 리포트 내보내기
+- **중요 폴더 LBA 익스텐트 매핑 · SHA-256 Bit-Rot 무결성 감시 & 스캔 체크포인트 재개**:
+  - Win32 `FSCTL_GET_RETRIEVAL_POINTERS`로 중요 폴더/파일의 실제 물리 LBA 익스텐트 구간을 추출해 배드섹터/지연 LBA와의 중첩을 즉시 교차 추적하고 SHA-256 해시로 비트 부패(Bit-Rot) 감지
+  - `scanCheckpoint` 기반 실시간 스캔 중단·재개 복구, OS 네이티브 토스트 기반 백그라운드 **Watchdog 규칙 엔진**, `Ctrl+K` 커맨드 팔레트, **S.M.A.R.T. 스냅샷 Diff & 인쇄용 진단서**, 한국어/영어(`KO/EN`) 다국어 UI 지원
 - **GitHub Releases 기반 실시간 자동 업데이트 알림 & 데이터 마이그레이션**:
   - 실행 시 최신 릴리스를 자동 대조해 업데이트 팝업(버전 정보, GitHub 릴리스 링크, 다운로드 버튼) 제공
   - 사용자 설정 및 전체 검사 기록 JSON 백업/복원 지원
@@ -50,10 +57,10 @@
 ├── public/                      # 정적 웹 자산
 ├── scripts/                     # Unpacked 스테이징 감사 및 패키징 스크립트 (package-cross-platform.mjs)
 ├── src/                         # React/TypeScript UI 컴포넌트, 진단 엔진, 상태 관리
-│   ├── components/              # D3 히스토그램, 섹터 그리드, S.M.A.R.T. 대시보드, 업데이트/옵션 모달
+│   ├── components/              # D3 히스토그램, 섹터 그리드, 플릿 대시보드, LBA 무결성 감시, 커맨드 팔레트, S.M.A.R.T. 비교 뷰
 │   ├── config/                  # 프로젝트 버전 및 GitHub 저장소 메타데이터 (projectInfo.ts)
-│   ├── native/                  # C++/C#/Rust 네이티브 런처 및 Core DLL 소스 코드
-│   └── utils/                   # 진단 엔진, 예측 분석, 마이그레이션, 업데이터, 리포트 생성기
+│   ├── native/                  # C++/C#/Rust 네이티브 런처 및 5대(Penta-DLL) 순수 창작 DLL 소스 코드
+│   └── utils/                   # 진단 엔진, 예측 분석, LBA 무결성·체크포인트·Diff·Watchdog·i18n·리포트 생성기
 ├── src-tauri/                   # Tauri v2 / Rust 데스크톱 빌드 구성
 ├── .env.example                 # 개발 환경 변수 템플릿
 ├── .gitignore                   # 빌드 산출물, 바이너리, 푸시 스크립트 및 비밀정보 제외 규칙
@@ -89,11 +96,11 @@ npm run build
 프로젝트 루트에서 `build.bat`을 실행하면 다음 단계가 전자동으로 실행됩니다:
 1. `package.json`에서 최신 버전(`4.6.0`) 동적 파싱 및 Node.js 점검
 2. `npm run lint` TypeScript 정적 타입 검증 & `npm run build`
-3. 네이티브 엔진 4종(`DiskSentinelNativeCore.dll`, `DiskSentinelForensics.dll`, `DiskSentinelPredictive.dll`, `DiskSentinelRecovery.dll`) 및 데스크톱 실행 파일(`DiskBadSectorScanner.exe`) 컴파일
+3. 네이티브 엔진 5종(`DiskSentinelNativeCore.dll`, `DiskSentinelForensics.dll`, `DiskSentinelPredictive.dll`, `DiskSentinelRecovery.dll`, `DiskSentinelIntegrity.dll`) 및 데스크톱 실행 파일(`DiskBadSectorScanner.exe`) 컴파일
 4. `package-cross-platform.mjs`로 불필요한 문서·포터블 파일·임시 파일 제거 감사 및 Unpacked 스테이징 검증
 5. `ISCC.exe /DAppVersion=%APP_VERSION% setup.iss` 컴파일 → **`Output\DiskBadSectorScanner_Setup_v4.6.0.exe`** 단일 공식 인스톨러 생성
 
-> **GitHub Actions 릴리스 정책**: GitHub Releases에는 **Tauri v2 데스크톱 앱(`DiskBadSectorScanner.exe`, NSIS/MSI 설치 파일)**만 생성·첨부하며, CI 워크플로우가 4종 순수 창작 DLL(`NativeCore`, `Forensics`, `Predictive`, `Recovery`)을 MSVC x64로 함께 컴파일해 `bundle.resources`에 포함·스테이징합니다.
+> **GitHub Actions 릴리스 정책**: GitHub Releases에는 **Tauri v2 데스크톱 앱(`DiskBadSectorScanner.exe`, NSIS/MSI 설치 파일)**만 생성·첨부하며, CI 워크플로우가 5종 순수 창작 DLL(`NativeCore`, `Forensics`, `Predictive`, `Recovery`, `Integrity`)을 MSVC x64로 함께 컴파일해 `bundle.resources`에 포함·스테이징합니다.
 
 ---
 

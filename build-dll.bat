@@ -1,7 +1,7 @@
 @echo off
 REM ===================================================================
 REM Disk Bad Sector Scanner - Native Core DLL & Host Compilation Script
-REM Builds: DiskSentinelNativeCore.dll, DiskSentinelForensics.dll, DiskSentinelPredictive.dll, DiskSentinelRecovery.dll & DiskBadSectorScanner.exe
+REM Builds: DiskSentinelNativeCore.dll, DiskSentinelForensics.dll, DiskSentinelPredictive.dll, DiskSentinelRecovery.dll, DiskSentinelIntegrity.dll & DiskBadSectorScanner.exe
 REM Target: Windows x64 / ARM64
 REM Author: AhBiYout (CISNet)
 REM Repository: https://github.com/AhBiYout-all/disk-bad-sector-scanner
@@ -87,6 +87,19 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo -^> MSVC compiler: Compiling Pure Creative DiskSentinelIntegrity.dll (x64 Release)...
+cl.exe /O2 /LD /MD /EHsc /W4 /D_WIN32 /DDSI_EXPORTS ^
+    src\native\DiskSentinelIntegrity.cpp ^
+    /Fe"%OUTPUT_DIR%\DiskSentinelIntegrity.dll" ^
+    /Fo"%OUTPUT_DIR%\DiskSentinelIntegrity.obj"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MSVC Integrity DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 if exist "src\native\DiskSentinelLauncher.cpp" (
     echo -^> MSVC: Compiling native desktop host DiskBadSectorScanner.exe...
     cl.exe /O2 /MD /EHsc /D_WIN32 src\native\DiskSentinelLauncher.cpp ^
@@ -149,6 +162,19 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo -^> MinGW G++: Compiling Pure Creative DiskSentinelIntegrity.dll (x64 Release)...
+g++.exe -O3 -shared -m64 -DDSI_EXPORTS -D_WIN32 ^
+    src/native/DiskSentinelIntegrity.cpp ^
+    -o "%OUTPUT_DIR%/DiskSentinelIntegrity.dll" ^
+    -Wl,--out-implib,"%OUTPUT_DIR%/libDiskSentinelIntegrity.a"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] MinGW Integrity DLL Compilation failed!
+    if /i "%1"=="--no-pause" exit /b %ERRORLEVEL%
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 if exist "src\native\DiskSentinelLauncher.cpp" (
     echo -^> MinGW: Compiling native desktop host DiskBadSectorScanner.exe...
     g++.exe -O3 -m64 -mwindows src/native/DiskSentinelLauncher.cpp ^
@@ -163,6 +189,7 @@ echo     - %OUTPUT_DIR%\DiskSentinelNativeCore.dll
 echo     - %OUTPUT_DIR%\DiskSentinelForensics.dll
 echo     - %OUTPUT_DIR%\DiskSentinelPredictive.dll
 echo     - %OUTPUT_DIR%\DiskSentinelRecovery.dll
+echo     - %OUTPUT_DIR%\DiskSentinelIntegrity.dll
 echo ===================================================================
 
 if /i "%1"=="--no-pause" goto EXIT_NOW

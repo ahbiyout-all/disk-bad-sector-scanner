@@ -19,11 +19,13 @@ import {
 
 interface DllDocsModalProps {
   isOpen: boolean;
+  isInline?: boolean;
   onClose: () => void;
 }
 
 export const DllDocsModal: React.FC<DllDocsModalProps> = ({
   isOpen,
+  isInline = false,
   onClose
 }) => {
   const [activeSection, setActiveSection] = useState<'architecture' | 'modules' | 'api' | 'usage' | 'audit'>('architecture');
@@ -128,48 +130,65 @@ DSR_API bool DSR_CALL DSR_ParseNtfsMftRecord(uint8_t* recordBytes, uint32_t reco
 DSR_API bool DSR_CALL DSR_ScanMftBufferForCluster(const uint8_t* mftBuffer, uint32_t bufferLength, uint32_t mftRecordSize, uint32_t firstRecordIndex, uint64_t batchStartLba, uint32_t sectorSize, uint64_t targetLba, uint64_t targetLcn, DSRNtfsMftParsedRecord* outMatchedRecords, uint32_t maxMatched, uint32_t* outMatchedCount, DSRNtfsDataRun* outRunsFlat, uint32_t maxRunsFlat, uint32_t* outWrittenRuns);
 DSR_API bool DSR_CALL DSR_GenerateWipePatternBuffer(uint8_t* pOutBuffer, uint32_t bufferLength, uint32_t patternMode, uint8_t constantByte, uint64_t seed64, uint64_t lbaOffset, uint32_t* outCrc32);
 DSR_API bool DSR_CALL DSR_VerifyWipedBuffer(const uint8_t* pBuffer, uint32_t bufferLength, uint32_t patternMode, uint8_t constantByte, uint64_t seed64, uint64_t lbaOffset, DSRWipeVerifyReport* outReport);
-DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueIntervalC* inIntervals, uint32_t inCount, uint32_t chunkSectors, DSRDdrescueIntervalC* outCoalesced, uint32_t maxOut, DSRDdrescuePlanSummary* outSummary);`;
+DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueIntervalC* inIntervals, uint32_t inCount, uint32_t chunkSectors, DSRDdrescueIntervalC* outCoalesced, uint32_t maxOut, DSRDdrescuePlanSummary* outSummary);
+
+// ---------------------------------------------------------------------------
+// DiskSentinelIntegrity.h - Pure Creative Bit-Rot, Correlation, Diff & Watchdog DLL (DiskSentinelIntegrity.dll)
+// ---------------------------------------------------------------------------
+DSI_API bool DSI_CALL DSI_GetIntegrityEngineInfo(DSIEngineInfo* outInfo);
+DSI_API bool DSI_CALL DSI_Sha256Init(DSISha256Context* ctx);
+DSI_API bool DSI_CALL DSI_Sha256Update(DSISha256Context* ctx, const uint8_t* pData, uint32_t dataLen);
+DSI_API bool DSI_CALL DSI_Sha256Final(DSISha256Context* ctx, uint8_t outDigest[32], char* outHex65);
+DSI_API bool DSI_CALL DSI_ComputeIntegrityDigest(const uint8_t* pData, uint32_t dataLen, DSIIntegrityDigestReport* outReport);
+DSI_API bool DSI_CALL DSI_EvaluateExtentIntegrity(const DSIExtentInterval* extents, uint32_t extentCount, const uint64_t* badLbas, uint32_t badCount, const uint64_t* slowLbas, uint32_t slowCount, bool inputsSorted, bool hashMismatch, bool isUnreadable, bool isMissing, bool hasSha256, uint64_t* outBadHits, uint32_t maxBadHits, uint64_t* outSlowHits, uint32_t maxSlowHits, DSIExtentIntegrityReport* outReport);
+DSI_API bool DSI_CALL DSI_ComputeScanSmartDiff(const DSIScanDiffInput* pInput, const DSISmartAttrSnapshot* pAttrs, uint32_t attrCount, DSISmartAttrDiffRow* outAttrRows, uint32_t maxAttrRows, DSIScanDiffSummary* outSummary);
+DSI_API bool DSI_CALL DSI_EvaluateWatchdogMatrix(const DSIWatchdogDriveState* pDrives, uint32_t driveCount, const DSIWatchdogRuleInput* pRules, uint32_t ruleCount, int64_t nowMs, DSIWatchdogTriggerOut* outTriggers, uint32_t maxTriggers, uint32_t* outQuickScanDriveIndices, uint32_t maxQuickScanTargets, DSIWatchdogMatrixReport* outReport);`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
+    <div className={isInline ? 'w-full font-sans' : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150'}>
+      <div className={isInline
+        ? 'relative w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+        : 'relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans'
+      }>
         
         {/* Top Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-xs shadow-xs">
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold text-xs shadow-xs">
               <Cpu className="w-4 h-4" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                  DiskSentinel Quad-DLL 순수 창작 네이티브 엔진 기술 명세서
+                  DiskSentinel Penta-DLL 순수 창작 네이티브 엔진 기술 명세서
                 </h2>
                 <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 font-semibold whitespace-nowrap">
-                  · Core + Forensics + Predictive + Recovery
+                  · Core + Forensics + Predictive + Recovery + Integrity
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Direct DMA/mmap · Welford/GPT 포렌식 · Weibull/RMSSD/OLS 예지 · 16종 카빙/MFT/NIST 소거검증
+                Direct DMA/mmap · Welford/GPT 포렌식 · Weibull/RMSSD 예지 · 16종 카빙/MFT · SHA-256 Bit-Rot/Diff/Watchdog
               </p>
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium overflow-x-auto">
+        <div className="flex items-center gap-1 px-4 sm:px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium overflow-x-auto">
           <button
             onClick={() => setActiveSection('architecture')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeSection === 'architecture'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
@@ -179,9 +198,9 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
 
           <button
             onClick={() => setActiveSection('modules')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeSection === 'modules'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
@@ -191,9 +210,9 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
 
           <button
             onClick={() => setActiveSection('audit')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeSection === 'audit'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
@@ -203,21 +222,21 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
 
           <button
             onClick={() => setActiveSection('api')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeSection === 'api'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
-            C/C++ API 명세 (43종)
+            C/C++ API 명세 (51종)
           </button>
 
           <button
             onClick={() => setActiveSection('usage')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeSection === 'usage'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
@@ -227,44 +246,49 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
         </div>
 
         {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs text-slate-700 dark:text-slate-300">
+        <div className={isInline ? 'p-4 sm:p-5 space-y-4 text-xs text-slate-700 dark:text-slate-300' : 'flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs text-slate-700 dark:text-slate-300'}>
           
           {/* 1. Architecture Section */}
           {activeSection === 'architecture' && (
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-2.5">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-indigo-500" />
+                  <Zap className="w-4 h-4 text-blue-500" />
                   순수 창작 DLL 개발 배경 및 해결 과제
                 </h3>
                 <p className="leading-relaxed text-[11px] text-slate-600 dark:text-slate-300">
                   일반 웹 및 상위 API는 OS의 **페이지 캐시(Page Cache)**와 버퍼링으로 인해 실제 디스크의 물리적 플래터 마모나 NAND 셀 지연시간을 100% 실측할 수 없습니다. <br />
-                  <strong>DiskSentinelNativeCore.dll</strong>은 OS 캐시를 완전히 우회하는 <strong>Direct I/O 파이프라인</strong>과 <strong>적응형 버스트 점핑 알고리즘</strong>을 C++로 독자 창작하여 개발되었습니다.
+                  <strong>DiskSentinelNativeCore.dll</strong>을 필두로 한 <strong>5-DLL(Penta-DLL) 순수 창작 네이티브 엔진</strong>은 Direct I/O, 포렌식, 예지 진단, 딥 리커버리, SHA-256 Bit-Rot/차분/워치독까지 C++ C ABI 네이티브 속도로 처리합니다.
                 </p>
               </div>
 
               {/* Architecture Diagram */}
               <div className="bg-slate-900 text-slate-100 p-4 rounded-lg font-mono text-[11px] overflow-x-auto border border-slate-800 leading-snug">
-                <div className="text-emerald-400 font-bold mb-2">┌─── Quad-DLL Pure Creative Architecture (Core + Forensics + Predictive + Recovery) ───┐</div>
+                <div className="text-emerald-400 font-bold mb-2">┌── Penta-DLL Pure Creative Architecture (Core+Forensics+Predictive+Recovery+Integrity) ─┐</div>
                 <div>│                                                                                      │</div>
-                <div>│  <span className="text-indigo-400">[DiskSentinelNativeCore.dll] Kernel Direct DMA &amp; mmap Engine</span>                      │</div>
+                <div>│  <span className="text-blue-400">[DiskSentinelNativeCore.dll] Kernel Direct DMA &amp; mmap Engine</span>                       │</div>
                 <div>│  └─ Physical: FILE_FLAG_NO_BUFFERING + Lazy VirtualAlloc MDL Buffers                 │</div>
                 <div>│  └─ Image/Clone: CreateFileMappingW / MapViewOfFile Zero-Copy                        │</div>
-                <div>│  └─ O(log K) AdaptiveBurstSeeker + Slicing-by-8 CRC32 + ATA/NVMe IOCTL               │</div>
+                <div>│  └─ O(log K) AdaptiveBurstSeeker + Slicing-by-8 CRC32 + ATA 0xA0/NVMe IOCTL          │</div>
                 <div>│                                                                                      │</div>
                 <div>│  <span className="text-purple-400">[DiskSentinelForensics.dll] Zero-Handle Forensics Engine</span>                          │</div>
                 <div>│  └─ Welford One-Pass Z-Score(N-1) &amp; Contiguous Cluster Detector                      │</div>
-                <div>│  └─ O(N log M) Extent Heatmap + Shannon Entropy + GPT CRC32/UTF-8 + VBR              │</div>
+                <div>│  └─ O(N log M) Extent Heatmap + Shannon Entropy + 512B GPT CRC32/UTF-8 + VBR         │</div>
                 <div>│                                                                                      │</div>
                 <div>│  <span className="text-cyan-400">[DiskSentinelPredictive.dll] Pure Creative Prognostic Engine</span>                       │</div>
                 <div>│  └─ Weibull Bathtub Conditional Failure &amp; Median RUL Estimator                       │</div>
                 <div>│  └─ Acoustic Seek RMSSD Jitter, Resonance &amp; FTL GC Stall Profiler                    │</div>
-                <div>│  └─ Arrhenius(0.7eV) Thermal Aging + Centered OLS S.M.A.R.T. Regressor               │</div>
+                <div>│  └─ Arrhenius(0.7eV) Thermal Aging + Centered OLS S.M.A.R.T. Regressor (&gt;=1h guard)  │</div>
                 <div>│                                                                                      │</div>
-                <div>│  <span className="text-emerald-400">[DiskSentinelRecovery.dll] Deep Recovery, MFT &amp; Sanitize Verify DLL (신규)</span>          │</div>
-                <div>│  └─ 16+ Signature Carver + EOF Boundary &amp; Hamming(1~2bit) Bit-Flip Tolerance         │</div>
+                <div>│  <span className="text-emerald-400">[DiskSentinelRecovery.dll] Deep Recovery, MFT &amp; Sanitize Verify DLL</span>                │</div>
+                <div>│  └─ 16+ Signature Carver (UTF-8 aware) + EOF Boundary &amp; Hamming(1~2bit) Tolerance    │</div>
                 <div>│  └─ NTFS $MFT USA Fixup + UTF-16LE Name + $DATA Non-Resident Runlist Decoder        │</div>
                 <div>│  └─ NIST SP 800-88 Xoshiro256** Wipe Gen/Verify &amp; ddrescue Interval Planner          │</div>
+                <div>│                                                                                      │</div>
+                <div>│  <span className="text-amber-400">[DiskSentinelIntegrity.dll] Bit-Rot, Correlation, Diff &amp; Watchdog DLL (신규)</span>        │</div>
+                <div>│  └─ Streaming FIPS 180-4 SHA-256 + FNV-1a64 + Slicing-by-8 IEEE 802.3 CRC32          │</div>
+                <div>│  └─ O((E+B)log B) Physical Extent-vs-Bad/Slow LBA Risk &amp; Survivability Scorer        │</div>
+                <div>│  └─ Scan A↔B Daily Degradation Velocity &amp; Fleet Watchdog SLA Matrix Evaluator        │</div>
                 <div className="text-emerald-400 font-bold mt-2">└──────────────────────────────────────────────────────────────────────────────────────┘</div>
               </div>
             </div>
@@ -274,7 +298,7 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
           {activeSection === 'modules' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
-                <div className="flex items-center gap-2 font-bold text-indigo-600 dark:text-indigo-400 text-xs">
+                <div className="flex items-center gap-2 font-bold text-blue-600 dark:text-blue-400 text-xs">
                   <HardDrive className="w-4 h-4 shrink-0" />
                   <span>1. Direct DMA &amp; Memory-Mapped Zero-Copy</span>
                 </div>
@@ -364,12 +388,32 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
               </div>
 
               <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
-                <div className="flex items-center gap-2 font-bold text-indigo-600 dark:text-indigo-400 text-xs">
+                <div className="flex items-center gap-2 font-bold text-blue-600 dark:text-blue-400 text-xs">
                   <ShieldCheck className="w-4 h-4 shrink-0" />
                   <span>10. NIST Xoshiro256** 소거 검증 &amp; ddrescue 플래너 (Recovery.dll)</span>
                 </div>
                 <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
                   SplitMix64+Xoshiro256** 결정적 PRNG와 IEEE CRC32로 소거 후 Read-Back 잔존 데이터(최초 불일치 오프셋)를 감사하고, ddrescue 도메인 구간을 병합·스케줄링합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-amber-600 dark:text-amber-400 text-xs">
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>11. 스트리밍 SHA-256 &amp; 익스텐트 Bit-Rot 상관분석 (Integrity.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  64KB 청크 스트리밍 FIPS 180-4 SHA-256 + FNV-1a64 + Slicing-by-8 CRC32 지문을 생성하고, $O((E+B)\log B)$ 이진 탐색으로 중요 파일 물리 익스텐트의 배드·지연 LBA 중첩 및 생존율(%)을 산출합니다.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-blue-600 dark:text-blue-400 text-xs">
+                  <Activity className="w-4 h-4 shrink-0" />
+                  <span>12. 스캔 일일 열화 차분 &amp; 플릿 워치독 매트릭스 (Integrity.dll)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  두 스캔 시점 간 배드/건강도 일일 열화 속도(≥1h 가드) 및 S.M.A.R.T. 회귀 등급을 판별하고, 다중 드라이브 워치독 6종 규칙과 쿨다운 윈도우·Fleet Health Index를 고속 평가합니다.
                 </p>
               </div>
             </div>
@@ -409,7 +453,7 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
                   </div>
 
                   <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-bold text-indigo-500 mr-2">[도구 배치]</span>
+                    <span className="font-bold text-blue-500 mr-2">[도구 배치]</span>
                     <strong className="text-slate-900 dark:text-slate-100">원클릭 DLL 빌더(build-dll.bat):</strong>
                     <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                       MSVC(`cl.exe`) 또는 MinGW(`g++`)를 자동 감지하여 릴리스 최적화된 `DiskSentinelNativeCore.dll`을 생성하는 배치 스크립트를 제공합니다.
@@ -471,6 +515,14 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
                       (1) <code>DS_AdaptiveScanChunk</code> 내 <code>DS_ScanLbaBlock</code> 반환 규약으로 인한 치명 핸들 오류 데드코드 수정 및 <code>DS_VerifyLbaBlock</code>·<code>DS_CopyLbaRangeToMappedFile</code> 핸들/QPF 가드 추가, (2) <code>DSP_ComputeWeibullRul</code> NVMe <code>availableSparePct==0</code> 고갈 판정 보강, (3) TypeScript <code>DS_CalculateAvx2ChecksumAndZeroCheck</code> 룩업 테이블 가속 통일, (4) MFT/PE 헤더 32비트 정수 래핑 방어, (5) <code>tauri.conf.json</code> 리소스 번들 및 GitHub Actions 선행 DLL 스테이징과 함께 신규 <code>DiskSentinelRecovery.dll</code> 7대 API를 전 기능에 통합했습니다.
                     </p>
                   </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-blue-500 mr-2">[v4.6.3 Penta-DLL &amp; 심층 감사]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">제5 순수 창작 DLL(DiskSentinelIntegrity.dll) 출범 및 4대 DLL 결함 추가 패치:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      (1) <code>Core</code>: <code>DS_ScanLbaBlock</code> 실패 시 <code>false</code> 반환 일관화, <code>DS_EvaluateDriveReliability</code> <code>0xC2</code>/<code>0xBE</code> 이중 온도 감점·<code>0xFF</code> 오감점 차단, ATA <code>0xA0</code> 우선 프로브 + 홀수 드라이브 <code>0xB0</code> 폴백(C++/Rust 동시 적용), (2) <code>Forensics</code>: GPT CRC 버퍼 <code>512B</code> 확장 및 LDM/LVM/LUKS/APFS GUID 추가, (3) <code>Predictive</code>: 1시간 미만 OLS 기울기 폭주 가드(C++/Rust/TS), (4) <code>Recovery</code>: UTF-8 한글 로그 오분류·MFT <code>targetLba==0</code> 오탐 차단, (5) 신규 <strong><code>DiskSentinelIntegrity.dll</code></strong> 8종 API 구축 및 스트리밍 SHA-256·LBA 무결성·스캔 속도 차분·워치독 매트릭스 전면 연동 완료.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -480,8 +532,8 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
           {activeSection === 'api' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="font-mono text-[11px] font-bold text-indigo-500">
-                  DiskSentinelEngine.h + Forensics.h + Predictive.h + Recovery.h (Standard C ABI Export)
+                <span className="font-mono text-[11px] font-bold text-blue-500">
+                  Core.h + Forensics.h + Predictive.h + Recovery.h + Integrity.h (Standard C ABI Export)
                 </span>
                 <button
                   onClick={() => copyToClipboard(headerCodeSample, 'header-code')}
@@ -502,24 +554,26 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
           {activeSection === 'usage' && (
             <div className="space-y-3">
               <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200">
-                타 언어 및 런타임 FFI 바인딩 가이드 (Quad-DLL Suite)
+                타 언어 및 런타임 FFI 바인딩 가이드 (Penta-DLL Suite)
               </h4>
               <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
                 표준 <code>__stdcall</code> 및 C ABI(<code>#pragma pack(push, 8)</code>)를 따르므로 <strong>C# (.NET P/Invoke)</strong>, <strong>Python (ctypes)</strong>, <strong>Tauri / Rust (LoadLibraryW + FFI)</strong>에서 아무런 래퍼 라이브러리 없이 직접 호출할 수 있습니다.
               </p>
 
               <div className="bg-slate-900 text-slate-200 p-3 rounded-lg font-mono text-[10px] space-y-1 border border-slate-800 overflow-x-auto">
-                <div className="text-slate-400">// Python ctypes 호출 예시 (Core + Forensics + Predictive + Recovery):</div>
+                <div className="text-slate-400">// Python ctypes 호출 예시 (Core + Forensics + Predictive + Recovery + Integrity):</div>
                 <div>from ctypes import cdll, c_uint32, byref</div>
                 <div>core_dll = cdll.LoadLibrary('./DiskSentinelNativeCore.dll')</div>
                 <div>forensics_dll = cdll.LoadLibrary('./DiskSentinelForensics.dll')</div>
                 <div>predictive_dll = cdll.LoadLibrary('./DiskSentinelPredictive.dll')</div>
                 <div>recovery_dll = cdll.LoadLibrary('./DiskSentinelRecovery.dll')</div>
+                <div>integrity_dll = cdll.LoadLibrary('./DiskSentinelIntegrity.dll')</div>
                 <div>sector_size = c_uint32(0)</div>
                 <div>h_drive = core_dll.DS_OpenDriveDirect(0, byref(sector_size))</div>
                 <div># predictive_dll.DSP_ComputeWeibullRul(byref(weibull_in), byref(weibull_out))</div>
                 <div># forensics_dll.DSF_ComputeSectorEntropyAndPattern(buf, 512, byref(entropy_res))</div>
                 <div># recovery_dll.DSR_InspectRecoveryCarveBuffer(buf, 512, byref(carve_res))</div>
+                <div># integrity_dll.DSI_ComputeIntegrityDigest(buf, len(buf), byref(digest_rep))</div>
               </div>
             </div>
           )}
@@ -527,19 +581,21 @@ DSR_API bool DSR_CALL DSR_CoalesceAndPlanDdrescueIntervals(const DSRDdrescueInte
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/80 flex items-center justify-between gap-2 text-xs">
+        <div className="px-4 sm:px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/80 flex items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-1 text-[11px] text-slate-400 font-mono">
             <span>Author: {PROJECT_INFO.developer.name}</span>
             <span>•</span>
             <span>License: Apache-2.0</span>
           </div>
 
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded transition-colors"
-          >
-            닫기
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs rounded-md transition-colors cursor-pointer"
+            >
+              닫기
+            </button>
+          )}
         </div>
 
       </div>

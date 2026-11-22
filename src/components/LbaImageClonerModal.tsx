@@ -51,13 +51,15 @@ interface LbaImageClonerModalProps {
   onClose: () => void;
   drive: DiskDrive;
   initialRange?: { startLba: number; endLba: number } | null;
+  isInline?: boolean;
 }
 
 export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   isOpen,
   onClose,
   drive,
-  initialRange
+  initialRange,
+  isInline = false
 }) => {
   const maxLba = Math.max(0, (drive.totalSectors || 2048) - 1);
   const sectorSize = drive.hardwareSpecs?.logicalSectorSize || 512;
@@ -467,12 +469,24 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   const writtenMb = session ? (session.bytesWritten / (1024 * 1024)).toFixed(2) : '0.00';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto">
-      <div className="relative w-full max-w-5xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-5xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans'
+        }
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white">
               <Layers className="w-4 h-4" />
             </div>
             <div>
@@ -480,30 +494,32 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   ddrescue 다중 패스 LBA 이미지 백업 &amp; 섹터 구출
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
-                  Tauri Native Thread Engine
+                <span className="text-[10px] font-mono font-semibold text-blue-600 dark:text-blue-400">
+                  · Tauri Native Thread Engine
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums">
                 {drive.model} · S/N {drive.serialNumber} · Max LBA #{maxLba.toLocaleString()} ({sectorSize} B/sector)
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              if (!isRunning) onClose();
-            }}
-            disabled={isRunning}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer disabled:opacity-40"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isInline && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!isRunning) onClose();
+              }}
+              disabled={isRunning}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer disabled:opacity-40"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Body */}
-        <div className="p-5 overflow-y-auto space-y-4 text-xs">
+        <div className={`p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
           {!tauriActive && (
             <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />

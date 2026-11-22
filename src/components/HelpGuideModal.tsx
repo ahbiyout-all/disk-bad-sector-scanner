@@ -20,6 +20,7 @@ import { PROJECT_INFO } from '../config/projectInfo';
 
 export interface HelpGuideModalProps {
   isOpen: boolean;
+  isInline?: boolean;
   onClose: () => void;
   onOpenVendorDiagnostics?: () => void;
   onOpenSupportedCatalog?: () => void;
@@ -30,6 +31,7 @@ export interface HelpGuideModalProps {
 
 export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
   isOpen,
+  isInline = false,
   onClose,
   onOpenVendorDiagnostics,
   onOpenSupportedCatalog,
@@ -42,19 +44,22 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans">
+    <div className={isInline ? 'w-full font-sans' : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200'}>
+      <div className={isInline
+        ? 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md w-full flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans'
+        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans'
+      }>
         
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center justify-center">
-              <HelpCircle className="w-5 h-5" />
+            <div className="w-8 h-8 rounded-md bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center justify-center">
+              <HelpCircle className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <span>디스크 진단 및 복구 도움말</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold">
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold">
                   USER GUIDE
                 </span>
               </h2>
@@ -64,13 +69,15 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="닫기"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="닫기"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Sub-tab Navigation */}
@@ -122,7 +129,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+        <div className={isInline ? 'p-4 sm:p-5 space-y-4 text-xs' : 'flex-1 overflow-y-auto p-5 space-y-4 text-xs'}>
 
           {/* TAB 1: Inspection Methods Guide */}
           {activeGuideTab === 'methods' && (
@@ -428,16 +435,18 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 flex items-center justify-between">
+        <div className="px-4 sm:px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 flex items-center justify-between">
           <span className="text-[11px] text-slate-400 font-mono">
             {PROJECT_INFO.appName} {PROJECT_INFO.version} · Professional Storage Diagnostic Guide
           </span>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors cursor-pointer shadow-xs"
-          >
-            가이드 닫기
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors cursor-pointer shadow-xs"
+            >
+              가이드 닫기
+            </button>
+          )}
         </div>
 
       </div>

@@ -29,12 +29,14 @@ interface SupportedProductsCatalogModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectVendorForDiagnostic?: (vendor: StorageVendor) => void;
+  isInline?: boolean;
 }
 
 export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogModalProps> = ({
   isOpen,
   onClose,
-  onSelectVendorForDiagnostic
+  onSelectVendorForDiagnostic,
+  isInline = false
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
@@ -68,22 +70,34 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-5xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-5xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[92vh] flex flex-col font-sans'
+        }
+      >
         
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold shadow-md shrink-0">
-              <ShieldCheck className="w-6 h-6" />
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold shrink-0">
+              <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   정밀진단 지원 제조사 및 제품 목록 카탈로그
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
-                  총 {SUPPORTED_VENDOR_CATALOG.length}개 핵심 라인업 / 50+ 지원 모델
+                <span className="text-[11px] font-mono font-semibold text-blue-600 dark:text-blue-400 tabular-nums">
+                  · 총 {SUPPORTED_VENDOR_CATALOG.length}개 핵심 라인업 / 50+ 지원 모델
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -92,16 +106,18 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Filter Controls Bar */}
-        <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-100/50 dark:bg-slate-900/60 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 text-xs">
+        <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-100/50 dark:bg-[#090D16]/60 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 text-xs">
           
           {/* Search Box */}
           <div className="relative flex-1">
@@ -111,7 +127,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="제품명, 모델명(예: 990 PRO, ST2000, Canvio, SN850X), 기능 검색..."
-              className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:outline-none focus:border-indigo-500"
+              className="w-full pl-9 pr-3 py-1.5 rounded-md bg-white dark:bg-[#090D16] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:outline-none focus:border-blue-500"
             />
             {searchQuery && (
               <button 
@@ -130,7 +146,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
             <select
               value={selectedVendor}
               onChange={(e) => setSelectedVendor(e.target.value)}
-              className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 font-medium text-xs focus:outline-none focus:border-indigo-500 cursor-pointer"
+              className="bg-white dark:bg-[#090D16] border border-slate-200 dark:border-slate-800 rounded-md px-2.5 py-1.5 text-slate-800 dark:text-slate-200 font-medium text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
             >
               {vendorsList.map((v) => (
                 <option key={v.id} value={v.id}>
@@ -143,7 +159,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
         </div>
 
         {/* Category Tabs */}
-        <div className="flex items-center gap-1.5 px-5 pt-2.5 pb-2 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 overflow-x-auto text-xs">
+        <div className="flex items-center gap-1.5 px-5 pt-2.5 pb-2 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0F172A] overflow-x-auto text-xs">
           {categories.map((cat) => {
             const Icon = cat.icon;
             const isSel = selectedCategory === cat.id;
@@ -151,9 +167,9 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all shrink-0 cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors shrink-0 cursor-pointer whitespace-nowrap ${
                   isSel
-                    ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                    ? 'bg-blue-600 text-white font-bold'
                     : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
                 }`}
               >

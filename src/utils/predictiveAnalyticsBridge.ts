@@ -624,7 +624,8 @@ export function projectSmartDegradationTrend(
   }
 
   const observationSpanDays = Math.max(0, (maxTs - minTs) / 86400);
-  if (finitePts.length < 2 || maxTs === minTs) {
+  // Require at least 1 hour of observation span to prevent huge daily slope extrapolation from sub-minute samples
+  if (finitePts.length < 2 || maxTs === minTs || observationSpanDays < 1 / 24) {
     return {
       engineSource: 'ts-parity',
       validPointCount: finitePts.length,

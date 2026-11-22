@@ -30,13 +30,15 @@ interface SanitizeTrimModalProps {
   onClose: () => void;
   drive: DiskDrive;
   onRefreshHardware?: () => Promise<void> | void;
+  isInline?: boolean;
 }
 
 export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
   isOpen,
   onClose,
   drive,
-  onRefreshHardware
+  onRefreshHardware,
+  isInline = false
 }) => {
   const [cap, setCap] = useState<DriveSanitizeCapability | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -280,12 +282,24 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
   const isSystemBlocked = Boolean(cap?.isSystemDrive);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto">
-      <div className="relative w-full max-w-3xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-3xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[94vh] flex flex-col font-sans'
+        }
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center text-white">
+            <div className="w-8 h-8 rounded-md bg-red-600 flex items-center justify-center text-white">
               <ShieldAlert className="w-4 h-4" />
             </div>
             <div>
@@ -310,19 +324,21 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
-            <button
-              type="button"
-              disabled={executing !== null}
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer disabled:opacity-40"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            {!isInline && (
+              <button
+                type="button"
+                disabled={executing !== null}
+                onClick={onClose}
+                className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
         {/* Body */}
-        <div className="p-5 overflow-y-auto space-y-4 text-xs">
+        <div className={`p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
           {!tauriActive && (
             <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />

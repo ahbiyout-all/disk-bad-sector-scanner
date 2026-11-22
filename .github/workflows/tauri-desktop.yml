@@ -91,12 +91,12 @@ jobs:
       - name: Run TypeScript Type Check
         run: npm run lint
 
-      - name: Stage Compiled Quad-DLL Suite Alongside Tauri Target
+      - name: Stage Compiled Penta-DLL Suite Alongside Tauri Target
         shell: pwsh
         run: |
           $releaseDir = "src-tauri/target/release"
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-          foreach ($dll in @("DiskSentinelNativeCore.dll", "DiskSentinelForensics.dll", "DiskSentinelPredictive.dll", "DiskSentinelRecovery.dll")) {
+          foreach ($dll in @("DiskSentinelNativeCore.dll", "DiskSentinelForensics.dll", "DiskSentinelPredictive.dll", "DiskSentinelRecovery.dll", "DiskSentinelIntegrity.dll")) {
             $src = Join-Path "bin/native" $dll
             if (Test-Path $src) {
               Copy-Item $src -Destination (Join-Path $releaseDir $dll) -Force
@@ -154,6 +154,7 @@ jobs:
             src-tauri/target/release/DiskSentinelForensics.dll
             src-tauri/target/release/DiskSentinelPredictive.dll
             src-tauri/target/release/DiskSentinelRecovery.dll
+            src-tauri/target/release/DiskSentinelIntegrity.dll
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error

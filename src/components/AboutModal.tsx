@@ -22,33 +22,38 @@ import {
 
 interface AboutModalProps {
   isOpen: boolean;
+  isInline?: boolean;
   onClose: () => void;
   onCheckUpdates: () => void;
 }
 
 export const AboutModal: React.FC<AboutModalProps> = ({
   isOpen,
+  isInline = false,
   onClose,
   onCheckUpdates
 }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans">
+    <div className={isInline ? 'w-full font-sans' : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200'}>
+      <div className={isInline
+        ? 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md w-full flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans'
+        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 font-sans'
+      }>
         
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded bg-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-xs">
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-xs">
               D
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   {PROJECT_INFO.appName}
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
                   {PROJECT_INFO.version}
                 </span>
               </div>
@@ -58,21 +63,23 @@ export const AboutModal: React.FC<AboutModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs">
+        <div className={isInline ? 'p-4 sm:p-5 space-y-4 text-xs' : 'flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs'}>
           
           {/* Creator & Official Channels Guide */}
-          <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
+          <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-md p-4 space-y-3">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-              <span className="font-bold text-xs uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+              <span className="font-bold text-xs uppercase tracking-wider text-blue-600 dark:text-blue-400">
                 제작자 및 공식 채널 안내
               </span>
               <span className="text-[10px] font-mono text-slate-400">
@@ -241,24 +248,26 @@ export const AboutModal: React.FC<AboutModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/80 flex items-center justify-between gap-2">
+        <div className="px-4 sm:px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/80 flex items-center justify-between gap-2">
           <button
             onClick={() => {
               onClose();
               onCheckUpdates();
             }}
-            className="px-3 py-1.5 rounded border border-indigo-500/40 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            className="px-3 py-1.5 rounded-md border border-blue-500/40 hover:bg-blue-50 dark:hover:bg-blue-950/30 text-blue-600 dark:text-blue-400 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>최신 업데이트 확인하기</span>
           </button>
 
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-medium text-xs rounded transition-colors"
-          >
-            닫기
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-medium text-xs rounded-md transition-colors cursor-pointer"
+            >
+              닫기
+            </button>
+          )}
         </div>
 
       </div>

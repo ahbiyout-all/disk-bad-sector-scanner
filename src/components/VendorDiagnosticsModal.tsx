@@ -42,6 +42,7 @@ interface VendorDiagnosticsModalProps {
   onOpenUsbModal?: () => void;
   onRefreshSmart?: () => void;
   onOpenCatalogModal?: () => void;
+  isInline?: boolean;
 }
 
 const ALL_VENDORS: StorageVendor[] = [
@@ -70,7 +71,8 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
   onOpenRemapModal,
   onOpenUsbModal,
   onRefreshSmart,
-  onOpenCatalogModal
+  onOpenCatalogModal,
+  isInline = false
 }) => {
   const [activeTab, setActiveTab] = useState<'actions' | 'profile' | 'comparison' | 'all_vendors'>('actions');
   const [selectedBrowseVendor, setSelectedBrowseVendor] = useState<StorageVendor>(detectVendor(activeDrive));
@@ -88,11 +90,11 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
   const getPriorityBadge = (priority: string) => {
     switch (priority) {
       case 'CRITICAL':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600 text-white animate-pulse">CRITICAL (긴급)</span>;
+        return <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600 text-white">CRITICAL (긴급)</span>;
       case 'HIGH':
         return <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500 text-white">HIGH (높음)</span>;
       case 'MEDIUM':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-indigo-600 text-white">MEDIUM (보통)</span>;
+        return <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-600 text-white">MEDIUM (보통)</span>;
       case 'INFO':
       default:
         return <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-600 text-white">INFO (권장)</span>;
@@ -100,25 +102,37 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-4xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[92vh] flex flex-col font-sans'
+        }
+      >
         
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shadow-xs shrink-0">
-              <Cpu className="w-5 h-5" />
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold shrink-0">
+              <Cpu className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  제조사 & 매체별 특성 진단 및 차별화 조치 센터
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  제조사 &amp; 매체별 특성 진단 및 차별화 조치 센터
                 </h2>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${currentVendorProfile.badgeColor}`}>
                   {currentVendorProfile.nameKo}
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
-                  {activeDrive.isExternal ? '외부 저장장치 (External)' : '내부 저장장치 (Internal)'}
+                <span className="text-[10px] font-mono font-semibold text-blue-600 dark:text-blue-400">
+                  · {activeDrive.isExternal ? '외부 저장장치 (External)' : '내부 저장장치 (Internal)'}
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
@@ -127,21 +141,23 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 sm:gap-2 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium overflow-x-auto">
+        <div className="flex items-center gap-1 sm:gap-2 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#090D16]/50 text-xs font-medium overflow-x-auto">
           <button
             onClick={() => setActiveTab('actions')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap ${
               activeTab === 'actions'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
@@ -151,9 +167,9 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
 
           <button
             onClick={() => setActiveTab('profile')}
-            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
+            className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap ${
               activeTab === 'profile'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >

@@ -43,7 +43,8 @@
       "../bin/native/DiskSentinelNativeCore.dll": "DiskSentinelNativeCore.dll",
       "../bin/native/DiskSentinelForensics.dll": "DiskSentinelForensics.dll",
       "../bin/native/DiskSentinelPredictive.dll": "DiskSentinelPredictive.dll",
-      "../bin/native/DiskSentinelRecovery.dll": "DiskSentinelRecovery.dll"
+      "../bin/native/DiskSentinelRecovery.dll": "DiskSentinelRecovery.dll",
+      "../bin/native/DiskSentinelIntegrity.dll": "DiskSentinelIntegrity.dll"
     }
   }
 }

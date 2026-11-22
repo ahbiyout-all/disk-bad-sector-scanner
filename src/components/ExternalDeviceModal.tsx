@@ -52,6 +52,7 @@ interface ExternalDeviceModalProps {
     profileKey: string | null,
     recommendedMethodId?: SpecializedScanMethodId
   ) => void;
+  isInline?: boolean;
 }
 
 export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
@@ -64,7 +65,8 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
   onRescanDrives,
   initialTab = 'connected',
   usbPolicyOverrides = {},
-  onApplyUsbMatrixPolicy
+  onApplyUsbMatrixPolicy,
+  isInline = false
 }) => {
   const [activeTab, setActiveTab] = useState<ExternalDeviceModalTab>(initialTab);
   const [ejectFeedback, setEjectFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -193,22 +195,34 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-4xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col font-sans">
+    <div
+      className={
+        isInline
+          ? 'w-full font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150'
+      }
+    >
+      <div
+        className={
+          isInline
+            ? 'relative w-full bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md overflow-hidden flex flex-col font-sans'
+            : 'relative w-full max-w-4xl bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md shadow-xl overflow-hidden my-auto max-h-[92vh] flex flex-col font-sans'
+        }
+      >
 
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#090D16]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-xs shadow-xs shrink-0">
+            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold text-xs shrink-0">
               <Usb className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   외부 저장장치 &amp; USB 매트릭스 엔진 (External Storage Manager)
                 </h2>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30 whitespace-nowrap shrink-0">
-                  USB 1.1 ~ USB4 · BOT / UASP / PCIe
+                <span className="text-[10px] font-mono font-semibold text-blue-600 dark:text-blue-400 whitespace-nowrap shrink-0">
+                  · USB 1.1 ~ USB4 · BOT / UASP / PCIe
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -217,21 +231,23 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isInline && (
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 sm:gap-2 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 text-xs font-medium overflow-x-auto">
+        <div className="flex items-center gap-1 sm:gap-2 px-5 pt-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-[#090D16]/50 text-xs font-medium overflow-x-auto">
           <button
             onClick={() => setActiveTab('connected')}
             className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'connected'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
