@@ -82,6 +82,7 @@ interface NativeBridgeStatus {
   elevated: boolean;
   dllLoaded: boolean;
   forensicsDllLoaded?: boolean;
+  integrityDllLoaded?: boolean;
   version?: string;
 }
 
@@ -146,6 +147,7 @@ export async function detectNativeBridgeAvailable(forceRefresh = false): Promise
         elevated: Boolean(data?.elevated),
         dllLoaded: Boolean(data?.dllLoaded),
         forensicsDllLoaded: Boolean(data?.forensicsDllLoaded),
+        integrityDllLoaded: Boolean(data?.integrityDllLoaded),
         version: typeof data?.version === 'string' ? data.version : undefined
       };
       return available;

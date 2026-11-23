@@ -21,7 +21,7 @@
         │                             │                             │
  DiskBadSectorScanner.exe   DiskBadSectorScanner.exe   DiskBadSectorScanner_Setup_v4.6.0.exe
         │                             │                             │
- 14대 C ABI DLL 직접 링크      Rust Direct FFI Bridge        Unpacked 설치 + 방화벽 자동구성
+ 5종 순수 창작 C ABI DLL 링크   Rust Direct FFI Bridge        Unpacked 설치 + 방화벽 자동구성
 ```
 
 ---
@@ -34,7 +34,7 @@ Rust 툴체인이 설치된 환경에서 단 한 번의 명령어로 DLL과 단�
 build-rust.bat
 ```
 
-- 산출물: `bin\native\DiskBadSectorScanner.exe`, `bin\native\DiskSentinelNativeCore.dll`
+- 산출물: `bin\native\DiskBadSectorScanner.exe` 및 5종 순수 창작 DLL(`DiskSentinelNativeCore.dll`, `DiskSentinelForensics.dll`, `DiskSentinelPredictive.dll`, `DiskSentinelRecovery.dll`, `DiskSentinelIntegrity.dll`)
 
 ---
 
@@ -66,7 +66,7 @@ build.bat
    - `[아니오]` 기존 폴더에 덮어쓰기 설치
    - `[취소]` 설치 중단
 4. **라이선스 선언**: Apache License 2.0 (`docs\LICENSE_KR.md`)
-5. **Unpacked Multi-File 설치**: 런타임 필수 파일(`index.html`, `DiskBadSectorScanner.exe`, `DiskSentinelNativeCore.dll`)만 설치하고 문서/포터블/`.gitignore`/`aistudio` 제외
+5. **Unpacked Multi-File 설치**: 런타임 필수 파일(`index.html`, `DiskBadSectorScanner.exe`, Penta-DLL 5종 바이너리)만 설치하고 문서/포터블/`.gitignore`/`aistudio` 제외
 6. **바탕화면 바로가기(기본 체크) 및 설치 후 앱 실행**
 7. **무인 설치(`/SILENT`, `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`)** 및 Windows 프로그램 추가/제거 정식 등록
 8. **방화벽 규칙 조용한 자동 등록**:

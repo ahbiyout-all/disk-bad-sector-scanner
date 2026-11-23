@@ -2850,8 +2850,11 @@ fn pause_ddrescue_backup() -> Result<DdrescueBackendSnapshot, String> {
 fn query_windows_disable_delete_notify() -> Option<bool> {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         if let Ok(out) = std::process::Command::new("fsutil")
             .args(["behavior", "query", "DisableDeleteNotify"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             let txt = String::from_utf8_lossy(&out.stdout).to_string();
@@ -2952,8 +2955,11 @@ fn execute_sanitize_or_trim(
 
         #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             let output = std::process::Command::new("defrag")
                 .args([&target_vol, "/L", "/U"])
+                .creation_flags(CREATE_NO_WINDOW)
                 .output();
             return match output {
                 Ok(out) => {
@@ -3658,7 +3664,8 @@ fn analyze_acoustic_seek_profile(
                 .collect();
             let mut c_out: DspAcousticProfileC = unsafe { std::mem::zeroed() };
             let ptr = if c_samples.is_empty() { std::ptr::null() } else { c_samples.as_ptr() };
-            if unsafe { (dll.fn_acoustic)(ptr, c_samples.len() as u32, media_type, &mut c_out) } {
+            if let Ok(cnt_u32) = u32::try_from(c_samples.len()) {
+                if unsafe { (dll.fn_acoustic)(ptr, cnt_u32, media_type, &mut c_out) } {
                 return Ok(serde_json::json!({
                     "engineSource": "native-cpp-dll",
                     "validSampleCount": c_out.valid_sample_count,
@@ -3675,6 +3682,7 @@ fn analyze_acoustic_seek_profile(
                     "acousticInstabilityScore": c_out.acoustic_instability_score,
                     "diagnosticSummary": c_buf_to_string(&c_out.diagnostic_summary)
                 }));
+                }
             }
         }
     }
@@ -3955,30 +3963,32 @@ fn project_smart_degradation_trend(
                 .collect();
             let mut c_out: DspSmartTrendProjectionC = unsafe { std::mem::zeroed() };
             let ptr = if c_pts.is_empty() { std::ptr::null() } else { c_pts.as_ptr() };
-            if unsafe {
-                (dll.fn_trend)(
-                    ptr,
-                    c_pts.len() as u32,
-                    warning_threshold,
-                    critical_threshold,
-                    if lower_is_worse { 1 } else { 0 },
-                    &mut c_out,
-                )
-            } {
-                return Ok(serde_json::json!({
-                    "engineSource": "native-cpp-dll",
-                    "validPointCount": c_out.valid_point_count,
-                    "trendDirection": c_out.trend_direction,
-                    "isStatisticallySignificant": c_out.is_statistically_significant != 0,
-                    "observationSpanDays": c_out.observation_span_days,
-                    "latestValue": c_out.latest_value,
-                    "slopePerDay": c_out.slope_per_day,
-                    "interceptValue": c_out.intercept_value,
-                    "rSquared": c_out.r_squared,
-                    "projectedValue30d": c_out.projected_value_30d,
-                    "projectedDaysToWarning": c_out.projected_days_to_warning,
-                    "projectedDaysToCritical": c_out.projected_days_to_critical
-                }));
+            if let Ok(cnt_u32) = u32::try_from(c_pts.len()) {
+                if unsafe {
+                    (dll.fn_trend)(
+                        ptr,
+                        cnt_u32,
+                        warning_threshold,
+                        critical_threshold,
+                        if lower_is_worse { 1 } else { 0 },
+                        &mut c_out,
+                    )
+                } {
+                    return Ok(serde_json::json!({
+                        "engineSource": "native-cpp-dll",
+                        "validPointCount": c_out.valid_point_count,
+                        "trendDirection": c_out.trend_direction,
+                        "isStatisticallySignificant": c_out.is_statistically_significant != 0,
+                        "observationSpanDays": c_out.observation_span_days,
+                        "latestValue": c_out.latest_value,
+                        "slopePerDay": c_out.slope_per_day,
+                        "interceptValue": c_out.intercept_value,
+                        "rSquared": c_out.r_squared,
+                        "projectedValue30d": c_out.projected_value_30d,
+                        "projectedDaysToWarning": c_out.projected_days_to_warning,
+                        "projectedDaysToCritical": c_out.projected_days_to_critical
+                    }));
+                }
             }
         }
     }
@@ -4346,18 +4356,19 @@ fn analyze_forensics_sector_zscore(
             let mut zones = vec![unsafe { std::mem::zeroed::<DsfContiguousZoneC>() }; 64];
             let mut written_zones: u32 = 0;
             let ptr = if c_samples.is_empty() { std::ptr::null() } else { c_samples.as_ptr() };
-            if unsafe {
-                (dll.fn_zscore)(
-                    ptr,
-                    c_samples.len() as u32,
-                    baseline_expected_ms,
-                    max_block_id_gap,
-                    &mut report,
-                    zones.as_mut_ptr(),
-                    zones.len() as u32,
-                    &mut written_zones,
-                )
-            } {
+            if let Ok(cnt_u32) = u32::try_from(c_samples.len()) {
+                if unsafe {
+                    (dll.fn_zscore)(
+                        ptr,
+                        cnt_u32,
+                        baseline_expected_ms,
+                        max_block_id_gap,
+                        &mut report,
+                        zones.as_mut_ptr(),
+                        zones.len() as u32,
+                        &mut written_zones,
+                    )
+                } {
                 let zones_json: Vec<serde_json::Value> = zones[..(written_zones as usize).min(zones.len())]
                     .iter()
                     .map(|z| {
@@ -4392,6 +4403,7 @@ fn analyze_forensics_sector_zscore(
                     "degradationRiskScore": report.degradation_risk_score,
                     "zones": zones_json
                 }));
+                }
             }
         }
     }
@@ -4647,31 +4659,33 @@ fn compute_forensics_extent_heatmap(
             let mut summary: DsfHeatmapSummaryC = unsafe { std::mem::zeroed() };
             let ext_ptr = if c_ext.is_empty() { std::ptr::null() } else { c_ext.as_ptr() };
             let bad_ptr = if bad_lbas.is_empty() { std::ptr::null() } else { bad_lbas.as_ptr() };
-            if unsafe {
-                (dll.fn_heatmap)(
-                    ext_ptr,
-                    c_ext.len() as u32,
-                    bad_ptr,
-                    bad_lbas.len() as u32,
-                    false,
-                    safe_cells,
-                    counts.as_mut_ptr(),
-                    densities.as_mut_ptr(),
-                    &mut summary,
-                )
-            } {
-                return Ok(serde_json::json!({
-                    "engineSource": "native-cpp-dll",
-                    "totalExtents": summary.total_extents,
-                    "impactedExtentCount": summary.impacted_extent_count,
-                    "peakCellIndex": summary.peak_cell_index,
-                    "totalBadHits": summary.total_bad_hits,
-                    "totalSectorsMapped": summary.total_sectors_mapped,
-                    "peakCellDensityPct": summary.peak_cell_density_pct,
-                    "fragmentationSpreadScore": summary.fragmentation_spread_score,
-                    "cellBadCounts": counts,
-                    "cellDensityPct": densities
-                }));
+            if let (Ok(ext_len), Ok(bad_len)) = (u32::try_from(c_ext.len()), u32::try_from(bad_lbas.len())) {
+                if unsafe {
+                    (dll.fn_heatmap)(
+                        ext_ptr,
+                        ext_len,
+                        bad_ptr,
+                        bad_len,
+                        false,
+                        safe_cells,
+                        counts.as_mut_ptr(),
+                        densities.as_mut_ptr(),
+                        &mut summary,
+                    )
+                } {
+                    return Ok(serde_json::json!({
+                        "engineSource": "native-cpp-dll",
+                        "totalExtents": summary.total_extents,
+                        "impactedExtentCount": summary.impacted_extent_count,
+                        "peakCellIndex": summary.peak_cell_index,
+                        "totalBadHits": summary.total_bad_hits,
+                        "totalSectorsMapped": summary.total_sectors_mapped,
+                        "peakCellDensityPct": summary.peak_cell_density_pct,
+                        "fragmentationSpreadScore": summary.fragmentation_spread_score,
+                        "cellBadCounts": counts,
+                        "cellDensityPct": densities
+                    }));
+                }
             }
         }
     }
@@ -4758,22 +4772,24 @@ fn compute_forensics_sector_entropy(bytes: Vec<u8>) -> Result<serde_json::Value,
     {
         if let Some(dll) = get_forensics_dll() {
             let mut res: DsfSectorEntropyResultC = unsafe { std::mem::zeroed() };
-            if unsafe { (dll.fn_entropy)(bytes.as_ptr(), bytes.len() as u32, &mut res) } {
-                return Ok(serde_json::json!({
-                    "engineSource": "native-cpp-dll",
-                    "inspectedBytes": res.inspected_bytes,
-                    "crc32": res.crc32,
-                    "repeatingWord32": res.repeating_word32,
-                    "sectorClass": res.sector_class,
-                    "shannonEntropy": res.shannon_entropy,
-                    "zeroByteRatio": res.zero_byte_ratio,
-                    "ffByteRatio": res.ff_byte_ratio,
-                    "printableRatio": res.printable_ratio,
-                    "hasRepeatingPattern": res.has_repeating_pattern != 0,
-                    "isAllZero": res.is_all_zero != 0,
-                    "isAllFF": res.is_all_ff != 0,
-                    "classificationLabel": c_buf_to_string(&res.classification_label)
-                }));
+            if let Ok(len_u32) = u32::try_from(bytes.len()) {
+                if unsafe { (dll.fn_entropy)(bytes.as_ptr(), len_u32, &mut res) } {
+                    return Ok(serde_json::json!({
+                        "engineSource": "native-cpp-dll",
+                        "inspectedBytes": res.inspected_bytes,
+                        "crc32": res.crc32,
+                        "repeatingWord32": res.repeating_word32,
+                        "sectorClass": res.sector_class,
+                        "shannonEntropy": res.shannon_entropy,
+                        "zeroByteRatio": res.zero_byte_ratio,
+                        "ffByteRatio": res.ff_byte_ratio,
+                        "printableRatio": res.printable_ratio,
+                        "hasRepeatingPattern": res.has_repeating_pattern != 0,
+                        "isAllZero": res.is_all_zero != 0,
+                        "isAllFF": res.is_all_ff != 0,
+                        "classificationLabel": c_buf_to_string(&res.classification_label)
+                    }));
+                }
             }
         }
     }
@@ -4862,16 +4878,17 @@ fn inspect_forensics_partition_table(bytes: Vec<u8>, sector_size: u32) -> Result
         if let Some(dll) = get_forensics_dll() {
             let mut rep: DsfPartitionTableReportC = unsafe { std::mem::zeroed() };
             let mut recs = vec![unsafe { std::mem::zeroed::<DsfPartitionRecordC>() }; 128];
-            if unsafe {
-                (dll.fn_partition)(
-                    bytes.as_ptr(),
-                    bytes.len() as u32,
-                    sector_size,
-                    &mut rep,
-                    recs.as_mut_ptr(),
-                    recs.len() as u32,
-                )
-            } {
+            if let Ok(len_u32) = u32::try_from(bytes.len()) {
+                if unsafe {
+                    (dll.fn_partition)(
+                        bytes.as_ptr(),
+                        len_u32,
+                        sector_size,
+                        &mut rep,
+                        recs.as_mut_ptr(),
+                        recs.len() as u32,
+                    )
+                } {
                 let take_n = (rep.partition_count as usize).min(recs.len());
                 let parts: Vec<serde_json::Value> = recs[..take_n]
                     .iter()
@@ -4909,6 +4926,7 @@ fn inspect_forensics_partition_table(bytes: Vec<u8>, sector_size: u32) -> Result
                     "schemeName": c_buf_to_string(&rep.scheme_name),
                     "partitions": parts
                 }));
+                }
             }
         }
     }
@@ -5100,21 +5118,23 @@ fn inspect_forensics_vbr_sector(bytes: Vec<u8>) -> Result<serde_json::Value, Str
     {
         if let Some(dll) = get_forensics_dll() {
             let mut info: DsfVbrInfoC = unsafe { std::mem::zeroed() };
-            if unsafe { (dll.fn_vbr)(bytes.as_ptr(), bytes.len() as u32, &mut info) } && info.fs_type != 0 {
-                return Ok(serde_json::json!({
-                    "detected": true,
-                    "engineSource": "native-cpp-dll",
-                    "fsType": info.fs_type,
-                    "bytesPerSector": info.bytes_per_sector,
-                    "sectorsPerCluster": info.sectors_per_cluster,
-                    "clusterSizeBytes": info.cluster_size_bytes,
-                    "reservedSectors": info.reserved_sectors,
-                    "rootCluster": info.root_cluster,
-                    "totalSectors": info.total_sectors,
-                    "mftStartLcn": info.mft_start_lcn,
-                    "hasBootSignature": info.has_boot_signature != 0,
-                    "oemId": c_buf_to_string(&info.oem_id)
-                }));
+            if let Ok(len_u32) = u32::try_from(bytes.len()) {
+                if unsafe { (dll.fn_vbr)(bytes.as_ptr(), len_u32, &mut info) } && info.fs_type != 0 {
+                    return Ok(serde_json::json!({
+                        "detected": true,
+                        "engineSource": "native-cpp-dll",
+                        "fsType": info.fs_type,
+                        "bytesPerSector": info.bytes_per_sector,
+                        "sectorsPerCluster": info.sectors_per_cluster,
+                        "clusterSizeBytes": info.cluster_size_bytes,
+                        "reservedSectors": info.reserved_sectors,
+                        "rootCluster": info.root_cluster,
+                        "totalSectors": info.total_sectors,
+                        "mftStartLcn": info.mft_start_lcn,
+                        "hasBootSignature": info.has_boot_signature != 0,
+                        "oemId": c_buf_to_string(&info.oem_id)
+                    }));
+                }
             }
         }
     }
@@ -5515,25 +5535,27 @@ fn analyze_recovery_carve_buffer(bytes: Vec<u8>) -> Result<serde_json::Value, St
     {
         if let Some(dll) = get_recovery_dll() {
             let mut res: DsrCarveInspectionResultC = unsafe { std::mem::zeroed() };
-            if unsafe { (dll.fn_carve)(bytes.as_ptr(), bytes.len() as u32, &mut res) } {
-                return Ok(serde_json::json!({
-                    "engineSource": "native-cpp-dll",
-                    "inspectedBytes": res.inspected_bytes,
-                    "signatureType": res.signature_type,
-                    "confidenceScore": res.confidence_score,
-                    "footerDetected": res.footer_detected != 0,
-                    "isTruncated": res.is_truncated != 0,
-                    "isZeroFilled": res.is_zero_filled != 0,
-                    "estimatedPayloadBytes": res.estimated_payload_bytes,
-                    "crc32": res.crc32,
-                    "nearMatchBitFlips": res.near_match_bit_flips,
-                    "galoisParity64": res.galois_parity_64.to_string(),
-                    "shannonEntropy": res.shannon_entropy,
-                    "printableRatio": res.printable_ratio,
-                    "signatureName": c_buf_to_string(&res.signature_name),
-                    "fileExtension": c_buf_to_string(&res.file_extension),
-                    "footerMarker": c_buf_to_string(&res.footer_marker)
-                }));
+            if let Ok(len_u32) = u32::try_from(bytes.len()) {
+                if unsafe { (dll.fn_carve)(bytes.as_ptr(), len_u32, &mut res) } {
+                    return Ok(serde_json::json!({
+                        "engineSource": "native-cpp-dll",
+                        "inspectedBytes": res.inspected_bytes,
+                        "signatureType": res.signature_type,
+                        "confidenceScore": res.confidence_score,
+                        "footerDetected": res.footer_detected != 0,
+                        "isTruncated": res.is_truncated != 0,
+                        "isZeroFilled": res.is_zero_filled != 0,
+                        "estimatedPayloadBytes": res.estimated_payload_bytes,
+                        "crc32": res.crc32,
+                        "nearMatchBitFlips": res.near_match_bit_flips,
+                        "galoisParity64": res.galois_parity_64.to_string(),
+                        "shannonEntropy": res.shannon_entropy,
+                        "printableRatio": res.printable_ratio,
+                        "signatureName": c_buf_to_string(&res.signature_name),
+                        "fileExtension": c_buf_to_string(&res.file_extension),
+                        "footerMarker": c_buf_to_string(&res.footer_marker)
+                    }));
+                }
             }
         }
     }
@@ -7508,14 +7530,16 @@ fn compute_integrity_digest(bytes: Vec<u8>) -> serde_json::Value {
         if let Some(dll) = get_integrity_dll() {
             let mut rep: DsiIntegrityDigestReportC = unsafe { std::mem::zeroed() };
             let ptr = if bytes.is_empty() { std::ptr::null() } else { bytes.as_ptr() };
-            if unsafe { (dll.fn_digest)(ptr, bytes.len() as u32, &mut rep) } {
-                return serde_json::json!({
-                    "engineSource": "native-cpp-dll",
-                    "inspectedBytes": rep.inspected_bytes,
-                    "crc32": rep.crc32,
-                    "fnv1a64": rep.fnv1a64.to_string(),
-                    "sha256Hex": c_buf_to_string(&rep.sha256_hex)
-                });
+            if let Ok(len_u32) = u32::try_from(bytes.len()) {
+                if unsafe { (dll.fn_digest)(ptr, len_u32, &mut rep) } {
+                    return serde_json::json!({
+                        "engineSource": "native-cpp-dll",
+                        "inspectedBytes": rep.inspected_bytes,
+                        "crc32": rep.crc32,
+                        "fnv1a64": rep.fnv1a64.to_string(),
+                        "sha256Hex": c_buf_to_string(&rep.sha256_hex)
+                    });
+                }
             }
         }
     }
@@ -7562,42 +7586,48 @@ fn evaluate_extent_integrity(
             let bad_ptr = if bad_lbas.is_empty() { std::ptr::null() } else { bad_lbas.as_ptr() };
             let slow_ptr = if slow_lbas.is_empty() { std::ptr::null() } else { slow_lbas.as_ptr() };
 
-            if unsafe {
-                (dll.fn_eval_extent)(
-                    ext_ptr,
-                    c_ext.len() as u32,
-                    bad_ptr,
-                    bad_lbas.len() as u32,
-                    slow_ptr,
-                    slow_lbas.len() as u32,
-                    false,
-                    hash_mismatch,
-                    is_unreadable,
-                    is_missing,
-                    has_sha256,
-                    bad_hits.as_mut_ptr(),
-                    bad_hits.len() as u32,
-                    slow_hits.as_mut_ptr(),
-                    slow_hits.len() as u32,
-                    &mut rep,
-                )
-            } {
-                let bh_cnt = (rep.bad_hit_count as usize).min(bad_hits.len());
-                let sh_cnt = (rep.slow_hit_count as usize).min(slow_hits.len());
-                return serde_json::json!({
-                    "engineSource": "native-cpp-dll",
-                    "extentCount": rep.extent_count,
-                    "statusCode": rep.status_code,
-                    "badHitCount": rep.bad_hit_count,
-                    "slowHitCount": rep.slow_hit_count,
-                    "affectedBadSectors": rep.affected_bad_sectors,
-                    "affectedSlowSectors": rep.affected_slow_sectors,
-                    "totalMappedSectors": rep.total_mapped_sectors,
-                    "riskScore": rep.risk_score,
-                    "survivabilityPct": rep.survivability_pct,
-                    "badHits": &bad_hits[..bh_cnt],
-                    "slowHits": &slow_hits[..sh_cnt]
-                });
+            if let (Ok(ext_len), Ok(bad_len), Ok(slow_len)) = (
+                u32::try_from(c_ext.len()),
+                u32::try_from(bad_lbas.len()),
+                u32::try_from(slow_lbas.len()),
+            ) {
+                if unsafe {
+                    (dll.fn_eval_extent)(
+                        ext_ptr,
+                        ext_len,
+                        bad_ptr,
+                        bad_len,
+                        slow_ptr,
+                        slow_len,
+                        false,
+                        hash_mismatch,
+                        is_unreadable,
+                        is_missing,
+                        has_sha256,
+                        bad_hits.as_mut_ptr(),
+                        bad_hits.len() as u32,
+                        slow_hits.as_mut_ptr(),
+                        slow_hits.len() as u32,
+                        &mut rep,
+                    )
+                } {
+                    let bh_cnt = (rep.bad_hit_count as usize).min(bad_hits.len());
+                    let sh_cnt = (rep.slow_hit_count as usize).min(slow_hits.len());
+                    return serde_json::json!({
+                        "engineSource": "native-cpp-dll",
+                        "extentCount": rep.extent_count,
+                        "statusCode": rep.status_code,
+                        "badHitCount": rep.bad_hit_count,
+                        "slowHitCount": rep.slow_hit_count,
+                        "affectedBadSectors": rep.affected_bad_sectors,
+                        "affectedSlowSectors": rep.affected_slow_sectors,
+                        "totalMappedSectors": rep.total_mapped_sectors,
+                        "riskScore": rep.risk_score,
+                        "survivabilityPct": rep.survivability_pct,
+                        "badHits": &bad_hits[..bh_cnt],
+                        "slowHits": &slow_hits[..sh_cnt]
+                    });
+                }
             }
         }
     }
@@ -7729,17 +7759,17 @@ fn compute_scan_smart_diff(
             let mut rows = vec![unsafe { std::mem::zeroed::<DsiSmartAttrDiffRowC>() }; c_attrs.len().max(1)];
             let mut summary: DsiScanDiffSummaryC = unsafe { std::mem::zeroed() };
             let attr_ptr = if c_attrs.is_empty() { std::ptr::null() } else { c_attrs.as_ptr() };
-
-            if unsafe {
-                (dll.fn_scan_diff)(
-                    &input,
-                    attr_ptr,
-                    c_attrs.len() as u32,
-                    rows.as_mut_ptr(),
-                    rows.len() as u32,
-                    &mut summary,
-                )
-            } {
+            if let (Ok(attr_len), Ok(row_len)) = (u32::try_from(c_attrs.len()), u32::try_from(rows.len())) {
+                if unsafe {
+                    (dll.fn_scan_diff)(
+                        &input,
+                        attr_ptr,
+                        attr_len,
+                        rows.as_mut_ptr(),
+                        row_len,
+                        &mut summary,
+                    )
+                } {
                 let row_json: Vec<serde_json::Value> = rows[..c_attrs.len()]
                     .iter()
                     .map(|r| {
@@ -7767,6 +7797,7 @@ fn compute_scan_smart_diff(
                     "regressionScore": summary.regression_score,
                     "attrRows": row_json
                 });
+                }
             }
         }
     }
@@ -7873,20 +7904,21 @@ fn evaluate_fleet_watchdog(
             let drv_ptr = if c_drives.is_empty() { std::ptr::null() } else { c_drives.as_ptr() };
             let rule_ptr = if c_rules.is_empty() { std::ptr::null() } else { c_rules.as_ptr() };
 
-            if unsafe {
-                (dll.fn_eval_watchdog)(
-                    drv_ptr,
-                    c_drives.len() as u32,
-                    rule_ptr,
-                    c_rules.len() as u32,
-                    now_ms,
-                    triggers.as_mut_ptr(),
-                    triggers.len() as u32,
-                    qs_targets.as_mut_ptr(),
-                    qs_targets.len() as u32,
-                    &mut rep,
-                )
-            } {
+            if let (Ok(drv_len), Ok(rule_len)) = (u32::try_from(c_drives.len()), u32::try_from(c_rules.len())) {
+                if unsafe {
+                    (dll.fn_eval_watchdog)(
+                        drv_ptr,
+                        drv_len,
+                        rule_ptr,
+                        rule_len,
+                        now_ms,
+                        triggers.as_mut_ptr(),
+                        triggers.len() as u32,
+                        qs_targets.as_mut_ptr(),
+                        qs_targets.len() as u32,
+                        &mut rep,
+                    )
+                } {
                 let take_t = (rep.triggered_count as usize).min(triggers.len());
                 let take_q = (rep.quick_scan_target_count as usize).min(qs_targets.len());
                 let trig_json: Vec<serde_json::Value> = triggers[..take_t]
@@ -7913,6 +7945,7 @@ fn evaluate_fleet_watchdog(
                     "triggers": trig_json,
                     "quickScanDriveIndices": &qs_targets[..take_q]
                 });
+                }
             }
         }
     }
@@ -8160,7 +8193,10 @@ impl Sha256 {
 
 fn sha256_file_streaming(path: &std::path::Path, max_bytes: u64) -> Result<(String, u64), String> {
     use std::io::Read;
-    let meta = std::fs::metadata(path).map_err(|e| format!("메타데이터 조회 실패: {}", e))?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("메타데이터 조회 실패: {}", e))?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err("NOT_REGULAR_FILE".to_string());
+    }
     let size = meta.len();
     if size > max_bytes {
         return Err(format!("SIZE_LIMIT_EXCEEDED:{} > {}", size, max_bytes));

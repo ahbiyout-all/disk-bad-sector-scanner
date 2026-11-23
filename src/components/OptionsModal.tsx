@@ -688,7 +688,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   <div>
                     <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
                       {isDarkMode ? (
-                        <Moon className="w-4 h-4 text-indigo-400" />
+                        <Moon className="w-4 h-4 text-blue-400" />
                       ) : (
                         <Sun className="w-4 h-4 text-amber-500" />
                       )}
@@ -701,7 +701,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
 
                   <button
                     onClick={onToggleDarkMode}
-                    className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-all cursor-pointer shadow-xs shrink-0"
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all cursor-pointer shadow-xs shrink-0"
                   >
                     {isDarkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
                     <span>{isDarkMode ? '라이트 모드로 변경' : '다크 모드로 변경'}</span>
@@ -710,7 +710,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
 
                 <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400">
                   <span className="font-semibold">현재 활성 테마:</span>
-                  <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                  <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
                     {isDarkMode ? '🌙 Dark Mode (고대비 계측기 뷰어)' : '☀️ Light Mode (오피스 주광 뷰어)'}
                   </span>
                 </div>
@@ -734,7 +734,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                         onClick={() => onChangeLocale('ko')}
                         className={`px-3 py-1 rounded text-xs font-bold transition-colors cursor-pointer ${
                           locale === 'ko'
-                            ? 'bg-indigo-600 text-white shadow-xs'
+                            ? 'bg-blue-600 text-white shadow-xs'
                             : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
@@ -745,7 +745,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                         onClick={() => onChangeLocale('en')}
                         className={`px-3 py-1 rounded text-xs font-bold transition-colors cursor-pointer ${
                           locale === 'en'
-                            ? 'bg-indigo-600 text-white shadow-xs'
+                            ? 'bg-blue-600 text-white shadow-xs'
                             : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
@@ -776,7 +776,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                         onClick={() => onChangeSpeedMultiplier(speed)}
                         className={`px-2.5 py-1 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
                           scanSpeedMultiplier === speed
-                            ? 'bg-indigo-600 text-white shadow-xs'
+                            ? 'bg-blue-600 text-white shadow-xs'
                             : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
@@ -825,7 +825,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-2">
                   <div className="flex items-center justify-between text-xs font-semibold">
                     <span>마스터 경고 음량</span>
-                    <span className="font-mono text-indigo-600 dark:text-indigo-400">{volume}%</span>
+                    <span className="font-mono text-blue-600 dark:text-blue-400">{volume}%</span>
                   </div>
                   <input
                     type="range"
@@ -834,7 +834,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                     value={volume}
                     onChange={e => handleVolumeChange(Number(e.target.value))}
                     disabled={isMuted}
-                    className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-600 disabled:opacity-40"
+                    className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600 disabled:opacity-40"
                   />
                 </div>
 
@@ -906,7 +906,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   ) : (
                     <button
                       onClick={onRequestNotification}
-                      className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-all cursor-pointer shadow-xs flex items-center gap-1.5 shrink-0"
+                      className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all cursor-pointer shadow-xs flex items-center gap-1.5 shrink-0"
                     >
                       <Bell className="w-3.5 h-3.5" />
                       <span>알림 권한 요청</span>
@@ -944,7 +944,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                          <Bell className="w-4 h-4 text-indigo-500" />
+                          <Bell className="w-4 h-4 text-blue-500" />
                           <span>OS 네이티브 데스크톱 알림 (Tauri / Windows Toast)</span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
@@ -991,7 +991,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                         onClick={onToggleMinimizeToTray}
                         className={`px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer shrink-0 ${
                           minimizeToTray
-                            ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                            ? 'bg-blue-600 hover:bg-blue-500 text-white'
                             : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
                         }`}
                       >
@@ -1048,7 +1048,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
                 <div>
                   <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-indigo-500 shrink-0" />
+                    <Activity className="w-4 h-4 text-blue-500 shrink-0" />
                     <span>S.M.A.R.T. 속성별 사용자 정의 임계치</span>
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
@@ -1124,13 +1124,13 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                                   checked={rule.enabled}
                                   onChange={() => handleToggleRuleEnabled(rule.id)}
                                   aria-label={`${formatHexAttributeId(rule.attributeId)} 규칙 활성화`}
-                                  className="w-4 h-4 rounded accent-indigo-600 cursor-pointer"
+                                  className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
                                 />
                               </td>
 
                               <td className="px-3 py-2.5 align-middle min-w-[180px]">
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 tabular-nums">
+                                  <span className="font-mono font-bold text-blue-600 dark:text-blue-400 tabular-nums">
                                     {formatHexAttributeId(rule.attributeId)}
                                   </span>
                                   <span className="font-semibold text-slate-900 dark:text-slate-100">
@@ -1175,7 +1175,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                                     )
                                   }
                                   aria-label={`${rule.attributeName} 비교 방식`}
-                                  className="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-[11px] font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  className="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-[11px] font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 >
                                   <option value="raw_above">원시값 ≥ (Raw)</option>
                                   <option value="normalized_below">점수 ≤ (Current)</option>
@@ -1277,7 +1277,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                      <Plus className="w-3.5 h-3.5 text-indigo-500" />
+                      <Plus className="w-3.5 h-3.5 text-blue-500" />
                       <span>새 S.M.A.R.T. 속성 임계치 규칙 추가</span>
                     </h4>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
@@ -1290,7 +1290,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                       value={newRulePresetId}
                       onChange={e => handleSelectNewRulePreset(e.target.value)}
                       aria-label="프리셋 S.M.A.R.T. 속성 선택"
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-700 dark:text-slate-200 max-w-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-700 dark:text-slate-200 max-w-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">프리셋 속성 빠르게 채우기...</option>
                       {availablePresetsToAdd.map(p => (
@@ -1319,7 +1319,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                       value={newAttrIdInput}
                       onChange={e => setNewAttrIdInput(e.target.value)}
                       placeholder="예: 0x07"
-                      className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
 
@@ -1332,7 +1332,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                       value={newAttrNameInput}
                       onChange={e => setNewAttrNameInput(e.target.value)}
                       placeholder="예: Seek Error Rate"
-                      className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
 
@@ -1343,7 +1343,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                     <select
                       value={newAttrMode}
                       onChange={e => setNewAttrMode(e.target.value as SmartThresholdComparison)}
-                      className="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="raw_above">원시값 ≥ (Raw)</option>
                       <option value="normalized_below">점수 ≤ (Current)</option>
@@ -1384,7 +1384,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 <div className="flex justify-end pt-1">
                   <button
                     type="submit"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>임계치 규칙 추가</span>
@@ -1419,7 +1419,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                      <Download className="w-4 h-4 text-indigo-500" />
+                      <Download className="w-4 h-4 text-blue-500" />
                       <span>전체 설정 및 검사 기록 내보내기 (JSON 백업)</span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
@@ -1430,7 +1430,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   <button
                     type="button"
                     onClick={handleExportMigration}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-colors cursor-pointer shadow-xs shrink-0"
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer shadow-xs shrink-0"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>JSON 내보내기</span>
@@ -1458,7 +1458,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                   </div>
                   <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
                     <div className="text-[10px] text-slate-400 font-sans">저장된 검사 기록</div>
-                    <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-0.5 tabular-nums">
+                    <div className="font-bold text-blue-600 dark:text-blue-400 mt-0.5 tabular-nums">
                       총 {scanRecords.length.toLocaleString()}건 · 임계치 {customSmartThresholds.length}건
                     </div>
                   </div>
@@ -1509,7 +1509,7 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
                         onClick={() => setImportStrategy('merge')}
                         className={`px-2.5 py-1 rounded font-semibold transition-colors cursor-pointer ${
                           importStrategy === 'merge'
-                            ? 'bg-indigo-600 text-white'
+                            ? 'bg-blue-600 text-white'
                             : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
@@ -1537,10 +1537,10 @@ export const OptionsModal: React.FC<OptionsModalProps> = ({
 
                 {/* Pending Import Validation Preview */}
                 {pendingImport && (
-                  <div className="p-3 rounded-lg border border-indigo-300 dark:border-indigo-700/70 bg-indigo-50/70 dark:bg-indigo-950/30 space-y-2.5">
+                  <div className="p-3 rounded-lg border border-blue-300 dark:border-blue-700/70 bg-blue-50/70 dark:bg-blue-950/30 space-y-2.5">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="font-semibold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
-                        <FileJson className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <div className="font-semibold text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
+                        <FileJson className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                         <span className="font-mono">{pendingImport.filename}</span>
                       </div>
                       <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">

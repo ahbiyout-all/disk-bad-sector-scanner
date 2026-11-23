@@ -579,13 +579,13 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
               {/* Hex Dump Viewport or Unavailable State */}
               {hexLoading ? (
                 <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-500">
-                  <RefreshCw className="w-5 h-5 text-indigo-500 animate-spin" />
+                  <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />
                   <span>Win32 Direct IOCTL로 LBA #{currentLba.toLocaleString()} 섹터 버퍼를 읽는 중...</span>
                 </div>
               ) : !hexResponse || !hexResponse.supported || bytes.length === 0 ? (
                 <div className="p-6 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/50 text-center space-y-2">
                   <div className="flex items-center justify-center gap-1.5 font-bold text-slate-800 dark:text-slate-200">
-                    <Info className="w-4 h-4 text-indigo-500" />
+                    <Info className="w-4 h-4 text-blue-500" />
                     <span>원시 LBA 섹터 데이터를 읽을 수 없습니다</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-xl mx-auto leading-relaxed">
@@ -611,7 +611,7 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                       return (
                         <React.Fragment key={offset}>
                           {isSectorBoundary && (
-                            <div className="py-0.5 px-1 text-[10px] text-indigo-400 border-t border-slate-800/90">
+                            <div className="py-0.5 px-1 text-[10px] text-blue-400 border-t border-slate-800/90">
                               ── LBA #{(hexResponse.startLba + Math.floor(offset / sectorSize)).toLocaleString()} ──
                             </div>
                           )}
@@ -682,13 +682,13 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
 
               {partitionLoading ? (
                 <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-500">
-                  <RefreshCw className="w-5 h-5 text-indigo-500 animate-spin" />
+                  <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />
                   <span>MBR 및 GPT 헤더(LBA 0~33)를 파싱하는 중...</span>
                 </div>
               ) : partitionError || !partitionTable ? (
                 <div className="p-6 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/50 text-center space-y-2">
                   <div className="flex items-center justify-center gap-1.5 font-bold text-slate-800 dark:text-slate-200">
-                    <Info className="w-4 h-4 text-indigo-500" />
+                    <Info className="w-4 h-4 text-blue-500" />
                     <span>파티션 테이블 원시 판독 불가</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
@@ -701,7 +701,7 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                     <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
                       <div className="text-[10px] text-slate-500 uppercase font-semibold">파티션 규격</div>
-                      <div className="text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                      <div className="text-sm font-mono font-bold text-blue-600 dark:text-blue-400 mt-0.5">
                         {partitionTable.scheme}
                       </div>
                       <div className="text-[10px] font-mono text-slate-400 mt-0.5">
@@ -796,7 +796,7 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                                   {entry.typeName} · <span className="font-mono">{entry.typeCodeOrGuid}</span>
                                 </div>
                               </td>
-                              <td className="px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold">
+                              <td className="px-3 py-2 text-blue-600 dark:text-blue-400 font-semibold">
                                 {entry.startLba.toLocaleString()}
                               </td>
                               <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
@@ -819,7 +819,7 @@ export const SectorHexPartitionModal: React.FC<SectorHexPartitionModalProps> = (
                                     setActiveTab('hex');
                                     jumpToLba(entry.startLba);
                                   }}
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer"
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold cursor-pointer"
                                 >
                                   <span>Hex 이동</span>
                                   <ArrowUpRight className="w-3 h-3" />

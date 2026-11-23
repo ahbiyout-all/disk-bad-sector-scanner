@@ -13,7 +13,7 @@
 
 ## 1. 개발 배경 및 순수 창작 설계 의의 (Design Philosophy)
 
-DiskSentinel Pro의 **Penta-DLL(5-DLL) 순수 창작 아키텍처**에서:
+Disk Bad Sector Scanner의 **Penta-DLL(5-DLL) 순수 창작 아키텍처**에서:
 - **`DiskSentinelNativeCore.dll`**은 OS 캐시 우회 Direct DMA/S.M.A.R.T. 입출력 및 Memory-Mapped Zero-Copy 전송을,
 - **`DiskSentinelForensics.dll`**은 Welford Z-Score 군집 탐지·섀넌 엔트로피·GPT/VBR 구조 검증을,
 - **`DiskSentinelPredictive.dll`**은 Weibull RUL·음향 RMSSD 지터·Arrhenius 열가속·OLS S.M.A.R.T. 추세 회귀를,

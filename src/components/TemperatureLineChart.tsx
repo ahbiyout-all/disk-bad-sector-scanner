@@ -285,7 +285,7 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
           </div>
 
           <div className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center gap-2">
-            <Activity className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+            <Activity className="w-3.5 h-3.5 text-blue-500 shrink-0" />
             <div>
               <div className="text-[9px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">
                 평균 (변화량)
@@ -395,8 +395,8 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
 
           {hoveredPoint && (
             <g>
-              <line x1={getX(hoveredPoint.timeOffsetSeconds)} y1={padding.top} x2={getX(hoveredPoint.timeOffsetSeconds)} y2={padding.top + innerHeight} stroke="#6366F1" strokeWidth="1.2" strokeDasharray="3 3" />
-              <circle cx={getX(hoveredPoint.timeOffsetSeconds)} cy={getY(hoveredPoint.temperature)} r="5" fill="#FFFFFF" stroke="#6366F1" strokeWidth="2.5" />
+              <line x1={getX(hoveredPoint.timeOffsetSeconds)} y1={padding.top} x2={getX(hoveredPoint.timeOffsetSeconds)} y2={padding.top + innerHeight} stroke="#3B82F6" strokeWidth="1.2" strokeDasharray="3 3" />
+              <circle cx={getX(hoveredPoint.timeOffsetSeconds)} cy={getY(hoveredPoint.temperature)} r="5" fill="#FFFFFF" stroke="#3B82F6" strokeWidth="2.5" />
             </g>
           )}
 
@@ -428,7 +428,7 @@ export const TemperatureLineChart: React.FC<TemperatureLineChartProps> = ({
         {hoveredPoint && (
           <div className="absolute top-3 left-1/2 transform -translate-x-1/2 pointer-events-none px-3 py-1.5 rounded-lg bg-slate-900/95 text-white border border-slate-700 shadow-xl backdrop-blur-xs text-xs flex items-center gap-3 font-mono animate-in fade-in duration-100">
             <div className="flex items-center gap-1.5 text-slate-300">
-              <Clock className="w-3.5 h-3.5 text-indigo-400" />
+              <Clock className="w-3.5 h-3.5 text-blue-400" />
               <span>
                 {hoveredPoint.timeOffsetSeconds === 0
                   ? '현재 시각'

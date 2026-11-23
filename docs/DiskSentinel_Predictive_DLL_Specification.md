@@ -15,7 +15,7 @@
 
 기존 **`DiskSentinelNativeCore.dll`**이 커널 Direct DMA/S.M.A.R.T. 입출력을 담당하고 **`DiskSentinelForensics.dll`**이 Z-Score 군집 탐지·섀넌 엔트로피·GPT CRC32 포렌식을 담당한다면, 신규 순수 창작 라이브러리인 **`DiskSentinelPredictive.dll`**은 물리 디스크의 **단기 텔레메트리와 장기 마모 이력을 결합해 미래 고장 확률과 잔여 수명을 정량 예측**하는 전용 수리 예지(Prognostic) 엔진입니다.
 
-현재 DiskSentinel Pro의 **Penta-DLL(5-DLL) 분업 아키텍처**(`NativeCore`, `Forensics`, `Predictive`, `Recovery`, `Integrity`) 내에서의 고유 역할은 다음과 같습니다:
+현재 Disk Bad Sector Scanner의 **Penta-DLL(5-DLL) 분업 아키텍처**(`NativeCore`, `Forensics`, `Predictive`, `Recovery`, `Integrity`) 내에서의 고유 역할은 다음과 같습니다:
 1. **비선형 고장 위험률 모델링**: 단순 선형 감점이 아닌 **Weibull 욕조 곡선(Bathtub / Wear-Out Curve)** 기반의 조건부 고장 확률($30\text{일} / 90\text{일} / 365\text{일}$)과 중앙값 잔여 수명(Median RUL Days)을 산출합니다.
 2. **기계적 액추에이터·FTL 음향 진동 프로파일링**: 연속 LBA 탐색 지연의 인접 차분 제곱평균제곱근(**RMSSD Jitter**)을 연산해 HDD 헤드 공진/재시도 진동과 SSD FTL 가비지 컬렉션(GC) 마이크로 스톨 버스트를 정밀 분리합니다.
 3. **물리 화학적 열 스트레스 정량화**: 반도체 산화막 및 베어링 윤활유 열화 법칙인 **Arrhenius 열가속 방정식**을 적용해 $35^\circ\text{C}$ 기준 등가 가동시간과 일일 TBW 소진율을 계산합니다.

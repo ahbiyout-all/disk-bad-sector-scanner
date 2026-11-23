@@ -417,7 +417,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           </div>
           <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">TRIM / 명령 큐</div>
-            <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400 truncate mt-0.5">
+            <div className="font-mono font-bold text-blue-600 dark:text-blue-400 truncate mt-0.5">
               {specs.trimSupported === null ? 'N/A' : specs.trimSupported ? 'TRIM 활성' : '미지원'} · 큐 {specs.queueDepth !== null ? specs.queueDepth : 'N/A'}
             </div>
           </div>
@@ -437,7 +437,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             onClick={() => setActiveTab('architecture')}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'architecture'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -449,7 +449,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             onClick={() => setActiveTab('geometry')}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'geometry'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -461,7 +461,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             onClick={() => setActiveTab('endurance')}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'endurance'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -473,7 +473,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             onClick={() => setActiveTab('benchmark')}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'benchmark'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -485,7 +485,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             onClick={() => setActiveTab('identify')}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
               activeTab === 'identify'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
@@ -502,7 +502,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5">
-                  <Cpu className="w-4 h-4 text-indigo-500" />
+                  <Cpu className="w-4 h-4 text-blue-500" />
                   <span>컨트롤러 및 장치 식별 정보</span>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2.5 text-xs">
@@ -528,7 +528,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">컨트롤러 칩셋 사양</span>
-                    <span className="font-mono text-indigo-600 dark:text-indigo-400">{specs.controllerVendor || 'N/A'}</span>
+                    <span className="font-mono text-blue-600 dark:text-blue-400">{specs.controllerVendor || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">물리/가상 경로 (Device Path)</span>
@@ -540,7 +540,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-200/60 dark:border-slate-800">
                     <span className="text-slate-500">자동 프로토콜 분류 ({futureClass.recognitionSource})</span>
-                    <span className="font-mono text-indigo-600 dark:text-indigo-400 truncate max-w-[230px]" title={futureClass.adaptiveNote}>
+                    <span className="font-mono text-blue-600 dark:text-blue-400 truncate max-w-[230px]" title={futureClass.adaptiveNote}>
                       {futureClass.protocolStandard}
                     </span>
                   </div>
@@ -605,7 +605,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   </div>
                   <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                     <div className="text-slate-400 text-[10px]">휘발성 쓰기 캐시 (Write Cache)</div>
-                    <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-1">
+                    <div className="font-bold text-blue-600 dark:text-blue-400 mt-1">
                       {formatBoolNullable(specs.volatileWriteCache, '활성화 (Flush 지원)', '비활성')}
                     </div>
                   </div>
@@ -631,7 +631,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5">
-                  <Layers className="w-4 h-4 text-indigo-500" />
+                  <Layers className="w-4 h-4 text-blue-500" />
                   <span>물리 지오메트리 & 4K 섹터 정렬 사양</span>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2.5 text-xs">
@@ -688,7 +688,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                       <div key={idx} className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center gap-2">
-                            <span className="font-bold font-mono px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800">
+                            <span className="font-bold font-mono px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
                               {part.letterOrMount}
                             </span>
                             <span className="font-bold text-slate-800 dark:text-slate-200">{part.label}</span>
@@ -701,7 +701,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                         <div className="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all ${
-                              part.usedPercentage > 90 ? 'bg-red-500' : part.usedPercentage > 75 ? 'bg-amber-500' : 'bg-indigo-500'
+                              part.usedPercentage > 90 ? 'bg-red-500' : part.usedPercentage > 75 ? 'bg-amber-500' : 'bg-blue-500'
                             }`}
                             style={{ width: `${Math.min(100, part.usedPercentage)}%` }}
                           />
@@ -724,7 +724,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-3.5 border border-slate-200 dark:border-slate-800 text-xs">
                   <div className="text-[10px] uppercase font-bold text-slate-400">총 기록량 (TBW)</div>
-                  <div className="text-xl font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
+                  <div className="text-xl font-bold font-mono text-blue-600 dark:text-blue-400 mt-1">
                     {specs.hostWritesTb !== null ? `${specs.hostWritesTb.toFixed(1)} TBW` : 'N/A'}
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">
@@ -771,7 +771,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 {drive.smartAttributes.length === 0 ? (
                   <div className="p-4 rounded-lg bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 text-center text-xs text-slate-500 space-y-1">
                     <div className="flex items-center justify-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
-                      <Info className="w-4 h-4 text-indigo-500" />
+                      <Info className="w-4 h-4 text-blue-500" />
                       <span>S.M.A.R.T. 및 NVMe Log 02h 텔레메트리가 감지되지 않았습니다 (N/A)</span>
                     </div>
                     <p className="text-[11px] text-slate-400">
@@ -806,7 +806,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <div>
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                      <Activity className="w-4 h-4 text-indigo-500" />
+                      <Activity className="w-4 h-4 text-blue-500" />
                       <span>Tauri Win32 Direct IOCTL 실측 대역폭</span>
                     </h3>
                     <p className="text-[11px] text-slate-400 mt-0.5">
@@ -841,7 +841,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                       <button
                         onClick={handleRescanClick}
                         disabled={isRescanning || isBenchmarking}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
                         title="장치 하드웨어 프로브 및 S.M.A.R.T. 전체 갱신"
                       >
                         <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
@@ -867,7 +867,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
 
                   <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
                     <div className="text-[10px] text-slate-400 uppercase font-semibold">비파괴 쓰기 대역폭</div>
-                    <div className="text-2xl font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
+                    <div className="text-2xl font-bold font-mono text-blue-600 dark:text-blue-400 mt-1">
                       {specs.measuredSequentialWriteMbSec !== null ? (
                         <>
                           {specs.measuredSequentialWriteMbSec} <span className="text-xs font-sans text-slate-500">MB/s</span>
@@ -962,10 +962,10 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
                       <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                        <Binary className="w-4 h-4 text-indigo-500" />
+                        <Binary className="w-4 h-4 text-blue-500" />
                         <span>Drive Identify 512바이트 원시 데이터 &amp; 워드 디코더</span>
                         {identifySnapshot?.supported && (
-                          <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
                             {identifySnapshot.protocol}
                           </span>
                         )}
@@ -988,7 +988,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                         <button
                           type="button"
                           onClick={handleCopyHexDump}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer"
                         >
                           {hexCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                           <span>{hexCopied ? '복사됨' : 'Hex 복사'}</span>
@@ -1000,7 +1000,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                   {!identifyLoading && identifySnapshot && !identifySnapshot.supported ? (
                     <div className="p-4 rounded-lg bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 text-center space-y-1 text-xs">
                       <div className="flex items-center justify-center gap-1.5 font-bold text-slate-700 dark:text-slate-300">
-                        <Info className="w-4 h-4 text-indigo-500" />
+                        <Info className="w-4 h-4 text-blue-500" />
                         <span>512B Drive Identify 원시 버퍼 조회 불가</span>
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -1019,7 +1019,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                               onClick={() => setIdentifyCategory(cat)}
                               className={`px-2 py-1 rounded border font-semibold cursor-pointer ${
                                 identifyCategory === cat
-                                  ? 'border-indigo-500 bg-indigo-600 text-white'
+                                  ? 'border-blue-500 bg-blue-600 text-white'
                                   : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                               }`}
                             >
@@ -1034,7 +1034,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                             value={identifySearch}
                             onChange={e => setIdentifySearch(e.target.value)}
                             placeholder="Word / 필드 / 값 검색..."
-                            className="w-full pl-8 pr-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                            className="w-full pl-8 pr-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500"
                           />
                         </div>
                       </div>
@@ -1066,11 +1066,11 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                                   }
                                   className={`cursor-pointer transition-colors ${
                                     active
-                                      ? 'bg-indigo-50 dark:bg-indigo-950/60'
+                                      ? 'bg-blue-50 dark:bg-blue-950/60'
                                       : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                                   }`}
                                 >
-                                  <td className="px-2.5 py-1.5 text-indigo-600 dark:text-indigo-400 font-bold whitespace-nowrap">
+                                  <td className="px-2.5 py-1.5 text-blue-600 dark:text-blue-400 font-bold whitespace-nowrap">
                                     {field.wordIndex}
                                   </td>
                                   <td className="px-2.5 py-1.5 font-sans text-slate-500 dark:text-slate-400">
@@ -1098,7 +1098,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                           <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pb-2 mb-2 border-b border-slate-800">
                             <span>RAW IDENTIFY BUFFER ({rawBytes.length} BYTES · 16 BYTES/ROW)</span>
                             {selectedByteRange && (
-                              <span className="text-indigo-400 font-bold">
+                              <span className="text-blue-400 font-bold">
                                 선택 영역: 0x{selectedByteRange.start.toString(16).toUpperCase().padStart(4, '0')} ({selectedByteRange.length}B)
                               </span>
                             )}
@@ -1123,7 +1123,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                                             col === 8 ? 'ml-1.5 ' : ''
                                           }${
                                             hi
-                                              ? 'bg-indigo-600 text-white font-bold'
+                                              ? 'bg-blue-600 text-white font-bold'
                                               : b === 0
                                               ? 'text-slate-600'
                                               : 'text-slate-200'
@@ -1141,7 +1141,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
                                       return (
                                         <span
                                           key={absIdx}
-                                          className={isByteHighlighted(absIdx) ? 'bg-indigo-600 text-white font-bold' : ''}
+                                          className={isByteHighlighted(absIdx) ? 'bg-blue-600 text-white font-bold' : ''}
                                         >
                                           {ch}
                                         </span>
@@ -1170,7 +1170,7 @@ export const DiskHardwareDetailsModal: React.FC<DiskHardwareDetailsModalProps> =
           </span>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-colors cursor-pointer shadow-xs"
+            className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold transition-colors cursor-pointer shadow-xs"
           >
             확인 및 닫기
           </button>

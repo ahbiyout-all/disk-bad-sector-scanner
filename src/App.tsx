@@ -1039,7 +1039,7 @@ export default function App() {
     const activeSummary = activeDrive
       ? `${activeDrive.model} (${calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}, ${currentTemp !== null ? `${currentTemp.toFixed(0)}°C` : 'N/A'}, BAD:${badCount})`
       : 'No drive selected';
-    const tooltip = `DiskSentinel Pro · ${drives.length} Drives · ${activeSummary}`;
+    const tooltip = `Disk Bad Sector Scanner · ${drives.length} Drives · ${activeSummary}`;
     void invokeTauriSyncTrayState(tooltip, minimizeToTray);
   }, [isTauriRuntime, drives.length, activeDrive, calculatedHealth, currentTemp, badCount, minimizeToTray]);
 
@@ -1672,10 +1672,18 @@ export default function App() {
     }
 
     for (const targetDriveId of evalRes.quickScanTargetDriveIds) {
-      createAndEnqueueTask(true, 'verify', {
-        overrideDriveId: targetDriveId,
-        overrideScanMode: 'quick'
-      });
+      const alreadyQueuedOrRunning = tasksRef.current.some(
+        t =>
+          t.driveId === targetDriveId &&
+          t.testType === 'verify' &&
+          (t.status === 'running' || t.status === 'paused' || t.status === 'queued')
+      );
+      if (!alreadyQueuedOrRunning) {
+        createAndEnqueueTask(true, 'verify', {
+          overrideDriveId: targetDriveId,
+          overrideScanMode: 'quick'
+        });
+      }
     }
   }, [createAndEnqueueTask, dispatchNotification]);
 
@@ -2033,6 +2041,22 @@ export default function App() {
 
     return actions;
   }, [locale, activeDrive, drives, selectedBlock, latestBadLba, isDarkMode, handleRescanDrives, handleChangeLocale, openRecoveryTool, openHardwareTool, openSettingsPanel, openExternalDeviceModal]);
+
+  const resolveBadBlocksForRecord = useCallback((record: SavedScanRecord): SectorBlock[] => {
+    const liveBad = blocks.filter(b => b.status === 'bad');
+    if (activeDriveRef.current?.id === record.driveId) {
+      if (record.badCount === 0) return [];
+      if (liveBad.length === record.badCount) return liveBad;
+    }
+    return record.badLbaList.map((lba, idx) => ({
+      id: idx,
+      lba,
+      endLba: lba + 127,
+      status: 'bad' as const,
+      responseTimeMs: -1,
+      errorCode: 'UNC (Recorded Bad LBA)'
+    }));
+  }, [blocks]);
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#090D16] text-slate-900 dark:text-slate-100 flex font-sans transition-colors duration-150">
@@ -2986,7 +3010,7 @@ export default function App() {
               onToggleNativeOsNotifications={() => setNativeOsNotificationsEnabled(p => !p)}
               onTestNativeOsNotification={() => {
                 void invokeTauriNativeNotification(
-                  'DiskSentinel Pro Test Alert',
+                  'Disk Bad Sector Scanner Test Alert',
                   locale === 'en'
                     ? 'Native OS Watchdog notification channel is active.'
                     : '네이티브 OS 워치독 알림 채널이 정상 작동 중입니다.',
@@ -3018,7 +3042,7 @@ export default function App() {
         {activeReportRecord && (
           <ReportModal
             record={activeReportRecord}
-            badBlocks={blocks.filter(b => b.status === 'bad')}
+            badBlocks={resolveBadBlocksForRecord(activeReportRecord)}
             onClose={() => setActiveReportRecord(null)}
           />
         )}
@@ -3039,7 +3063,7 @@ export default function App() {
           <ExportModal
             isOpen={!!exportTargetRecord}
             record={exportTargetRecord}
-            badBlocks={blocks.filter(b => b.status === 'bad')}
+            badBlocks={resolveBadBlocksForRecord(exportTargetRecord)}
             onClose={() => setExportTargetRecord(null)}
           />
         )}

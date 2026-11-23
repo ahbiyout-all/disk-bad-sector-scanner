@@ -181,7 +181,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
             onClick={() => setActiveTab('comparison')}
             className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
               activeTab === 'comparison'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
@@ -193,11 +193,11 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
             onClick={() => setActiveTab('all_vendors')}
             className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
               activeTab === 'all_vendors'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+            <Sparkles className="w-3.5 h-3.5 text-blue-500" />
             전제 제조사 DB 탐색
           </button>
         </div>
@@ -208,13 +208,13 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
           {/* TAB 1: TAILORED ACTION METHODS */}
           {activeTab === 'actions' && (
             <div className="space-y-3.5">
-              <div className="p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/50 dark:bg-indigo-950/20 flex flex-col gap-2">
+              <div className="p-3.5 rounded-lg border border-blue-200 dark:border-blue-900/50 bg-blue-50/50 dark:bg-blue-950/20 flex flex-col gap-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="font-bold text-indigo-900 dark:text-indigo-200 text-xs flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <div className="font-bold text-blue-900 dark:text-blue-200 text-xs flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
                     <span>[{currentVendorProfile.nameKo}] 맞춤 분석 & 차세대 표준 분류</span>
                   </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-500/30 bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-300">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-blue-500/30 bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-300">
                     {futureClassification.recognitionSource}
                   </span>
                 </div>
@@ -238,7 +238,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-200/80 dark:border-slate-800/80">
                       <div className="flex items-center gap-2">
-                        <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0">
+                        <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0">
                           {index + 1}
                         </span>
                         <h3 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
@@ -289,7 +289,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                               setActiveTab('profile');
                             }
                           }}
-                          className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                         >
                           <span>{act.buttonText}</span>
                           <ArrowRight className="w-3.5 h-3.5" />
@@ -323,7 +323,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
 
                   <div className="text-right">
                     <span className="text-[10px] text-slate-400 uppercase font-semibold">공식 진단 유틸리티</span>
-                    <div className="font-bold text-indigo-600 dark:text-indigo-400 text-xs">
+                    <div className="font-bold text-blue-600 dark:text-blue-400 text-xs">
                       {currentVendorProfile.officialToolName}
                     </div>
                   </div>
@@ -339,7 +339,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                     <ul className="space-y-1 text-[11px]">
                       {currentVendorProfile.coreTechHighlights.map((tech, i) => (
                         <li key={i} className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
-                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                           <span>{tech}</span>
                         </li>
                       ))}
@@ -359,9 +359,9 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                 </div>
 
                 {/* Recommended Remediation */}
-                <div className="p-3.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-1">
-                  <div className="font-bold text-xs text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4 text-indigo-500" />
+                <div className="p-3.5 rounded-lg bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 space-y-1">
+                  <div className="font-bold text-xs text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-blue-500" />
                     제조사 권장 수복 & 유지보수 프로토콜
                   </div>
                   <p className="text-[11px] text-slate-700 dark:text-slate-300 leading-relaxed">
@@ -377,7 +377,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
             <div className="space-y-3.5">
               <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
                 <div className="font-bold text-slate-900 dark:text-slate-100 text-xs flex items-center gap-1.5">
-                  <Layers className="w-4 h-4 text-indigo-500" />
+                  <Layers className="w-4 h-4 text-blue-500" />
                   현재 장치 ({mediaAnalysis.connectionCategoryKo}) 인터페이스 사양 정밀 분석
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -398,7 +398,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                       <td className="p-3 font-semibold text-slate-800 dark:text-slate-200 bg-slate-50/50 dark:bg-slate-950/40">
                         연결 매체 분류
                       </td>
-                      <td className="p-3 font-bold text-indigo-600 dark:text-indigo-400">
+                      <td className="p-3 font-bold text-blue-600 dark:text-blue-400">
                         {mediaAnalysis.connectionCategoryKo}
                       </td>
                     </tr>
@@ -483,8 +483,8 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                       onClick={() => setSelectedBrowseVendor(v)}
                       className={`px-3 py-1.5 rounded-lg border text-xs font-semibold shrink-0 cursor-pointer transition-all ${
                         isSel
-                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-indigo-400'
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-blue-400'
                       }`}
                     >
                       {prof.nameKo.split(' ')[0]}
@@ -509,7 +509,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                   </div>
                   <div className="text-right">
                     <span className="text-[10px] text-slate-400 uppercase font-semibold">공식 소프트웨어</span>
-                    <div className="font-bold text-indigo-600 dark:text-indigo-400 text-xs">
+                    <div className="font-bold text-blue-600 dark:text-blue-400 text-xs">
                       {browseVendorProfile.officialToolName}
                     </div>
                   </div>
@@ -523,7 +523,7 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                     <ul className="space-y-1">
                       {browseVendorProfile.coreTechHighlights.map((t, i) => (
                         <li key={i} className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 text-[11px]">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                           <span>{t}</span>
                         </li>
                       ))}
@@ -539,8 +539,8 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                     </p>
                   </div>
 
-                  <div className="p-3 rounded bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/60">
-                    <div className="font-bold text-indigo-900 dark:text-indigo-300 mb-1">
+                  <div className="p-3 rounded bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/60">
+                    <div className="font-bold text-blue-900 dark:text-blue-300 mb-1">
                       권장 조치 프로토콜
                     </div>
                     <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
@@ -566,9 +566,9 @@ export const VendorDiagnosticsModal: React.FC<VendorDiagnosticsModalProps> = ({
                   onClose();
                   onOpenCatalogModal();
                 }}
-                className="px-2.5 py-1 rounded bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-600 dark:text-indigo-400 font-bold border border-indigo-500/30 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-2.5 py-1 rounded bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-blue-400 font-bold border border-blue-500/30 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                <Sparkles className="w-3.5 h-3.5 text-blue-500" />
                 <span>정밀진단 지원 제품 전체 카탈로그 보기</span>
               </button>
             )}

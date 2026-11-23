@@ -89,7 +89,7 @@ const SectorTile = React.memo<{
   }
 
   if (isActive) {
-    colorClass = 'bg-indigo-500 border-indigo-300 ring-2 ring-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.8)] z-10 text-white';
+    colorClass = 'bg-blue-500 border-blue-300 ring-2 ring-blue-400 shadow-[0_0_10px_rgba(59,130,246,0.8)] z-10 text-white';
   }
 
   if (isQueuedForRepair) {
@@ -418,7 +418,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
       {/* 1. Header with Title, Zoom Controls & Filter Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pb-2.5 mb-2.5 border-b border-slate-200 dark:border-slate-800">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800/60 text-indigo-500">
+          <div className="p-1.5 rounded-md bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800/60 text-blue-500">
             <Crosshair className="w-4 h-4" />
           </div>
           <div>
@@ -426,7 +426,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
               <span>디스크 물리적 표면 LBA 지도 (Sector Map)</span>
               <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-semibold border ${
                 zoomLevel > 1 
-                  ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-500/30' 
+                  ? 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-500/30' 
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-300 dark:border-slate-700'
               }`}>
                 {zoomLevel === 1 ? '전체 보기 (1x)' : `줌 ${zoomLevel}x 확대`}
@@ -455,7 +455,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
                 onClick={() => handleZoomChange(lvl)}
                 className={`px-2 py-0.5 rounded text-xs font-mono font-semibold transition-all cursor-pointer ${
                   zoomLevel === lvl
-                    ? 'bg-indigo-600 text-white shadow-xs'
+                    ? 'bg-blue-600 text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                 }`}
                 title={`${lvl}배율 LBA 정밀 확대`}
@@ -673,7 +673,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
         <div className="bg-slate-100 dark:bg-slate-950 rounded-lg p-2 border border-slate-200 dark:border-slate-800">
           <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-mono mb-1">
             <div className="flex items-center gap-1">
-              <Compass className="w-3 h-3 text-indigo-500" />
+              <Compass className="w-3 h-3 text-blue-500" />
               <span>전체 디스크 LBA 네비게이터 (미니맵 클릭 시 해당 영역으로 확대 이동)</span>
             </div>
             <span>
@@ -689,7 +689,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
           >
             {/* Scanned Progress Fill */}
             <div 
-              className="absolute top-0 bottom-0 left-0 bg-indigo-500/20"
+              className="absolute top-0 bottom-0 left-0 bg-blue-500/20"
               style={{ width: `${blocks.length > 0 ? Math.min(100, (activeBlockIndex / Math.max(1, blocks.length)) * 100) : 0}%` }}
             />
 
@@ -731,7 +731,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
             <div
               className={`absolute top-0 bottom-0 rounded-xs border-2 transition-all pointer-events-none z-30 ${
                 zoomLevel > 1 
-                  ? 'border-indigo-400 bg-indigo-500/25 shadow-xs' 
+                  ? 'border-blue-400 bg-blue-500/25 shadow-xs' 
                   : 'border-slate-400/40 bg-transparent'
               }`}
               style={{
@@ -745,9 +745,9 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
 
       {/* 4. Zoom Panning Control Ribbon (Visible when Zoom > 1x) */}
       {zoomLevel > 1 && (
-        <div className="mb-2 p-2 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+        <div className="mb-2 p-2 rounded-lg bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2 text-slate-800 dark:text-slate-200 font-mono">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-600 text-white">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white">
               {zoomLevel}X ZOOM
             </span>
             <span className="text-[11px]">
@@ -865,7 +865,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
             <span>정상 (&lt;10ms)</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-indigo-500" />
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
             <span>읽는 중 (I/O)</span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -893,10 +893,10 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
         {/* Live Block Inspector Box */}
         {inspectedBlock && inspectedBlock.status !== 'unscanned' ? (
           <div className="flex items-center gap-2 px-2.5 py-1 bg-slate-100 dark:bg-slate-950 rounded text-[11px] font-mono text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-800 flex-wrap">
-            <Eye className="w-3 h-3 text-indigo-500" />
+            <Eye className="w-3 h-3 text-blue-500" />
             <span>Block #{inspectedBlock.id}</span>
             {inspectedBlock.zoneTag && (
-              <span className="px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-500 border border-indigo-500/20 text-[10px]">
+              <span className="px-1.5 py-0.2 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[10px]">
                 {inspectedBlock.zoneTag}
               </span>
             )}
@@ -932,7 +932,7 @@ export const SectorGrid: React.FC<SectorGridProps> = React.memo(({
             {zoomLevel === 1 && (
               <button
                 onClick={() => focusOnBlockWithZoom(inspectedBlock, 4)}
-                className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-blue-600 hover:bg-blue-500 text-white font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
                 title="이 블록의 물리적 LBA 주변 영역을 4배율로 확대"
               >
                 <ZoomIn className="w-2.5 h-2.5" />

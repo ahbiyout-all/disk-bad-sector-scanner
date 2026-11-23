@@ -148,7 +148,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
                 <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
                   <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center justify-between">
                     <span>1. 순차 전수 검사 (Sequential)</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-600">HDD / SSD 권장</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400">HDD / SSD 권장</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                     LBA 0번부터 마지막 섹터까지 물리적 순서대로 블록을 순회하며 읽기 타임아웃과 전송 대역폭을 측정합니다. 전 영역에 걸친 배드섹터 전수 검출에 적합합니다.
@@ -168,7 +168,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
                 <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
                   <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center justify-between">
                     <span>3. 버터플라이 지터 탐색 (Butterfly)</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-950 text-purple-600">헤드 액추에이터</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-sky-100 dark:bg-sky-950 text-sky-600 dark:text-sky-400">헤드 액추에이터</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                     디스크의 안쪽 트랙과 바깥쪽 트랙을 교차 이동하며 헤드 시크 타임(Seek Time)과 액추에이터 모터의 물리적 흔들림(Jitter)을 집중 점검합니다.
@@ -273,8 +273,8 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
           {/* TAB 3: Bad Sector Repair Principles */}
           {activeGuideTab === 'repair' && (
             <div className="space-y-3">
-              <div className="p-3.5 rounded-xl border border-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-950/20 space-y-1.5">
-                <h3 className="font-bold text-sm text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl border border-blue-500/20 bg-blue-50/50 dark:bg-blue-950/20 space-y-1.5">
+                <h3 className="font-bold text-sm text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
                   <Binary className="w-4 h-4" />
                   <span>논리 배드섹터 vs 물리 배드섹터 및 수복 기법</span>
                 </h3>
@@ -285,7 +285,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
 
               <div className="space-y-3">
                 <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5">
-                  <div className="font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                  <div className="font-bold text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
                     <CheckCircle2 className="w-4 h-4" />
                     <span>1. 논리 배드섹터 (Logical Bad Sector) & Zero-Fill Remap</span>
                   </div>
@@ -322,7 +322,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
             <div className="space-y-3">
               <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-1">
                 <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                  <Keyboard className="w-4 h-4 text-indigo-500" />
+                  <Keyboard className="w-4 h-4 text-blue-500" />
                   <span>효율적인 진단을 위한 조작 팁 & 단축키</span>
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -390,11 +390,11 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
                   }}
                   className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors cursor-pointer group"
                 >
-                  <div className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1 group-hover:text-indigo-600">
-                    <Terminal className="w-3.5 h-3.5 text-indigo-500" />
-                    <span>Rust DLL 명세서</span>
+                  <div className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1 group-hover:text-blue-600">
+                    <Terminal className="w-3.5 h-3.5 text-blue-500" />
+                    <span>Penta-DLL 명세서</span>
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">코어 아키텍처</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">5대 네이티브 엔진</div>
                 </button>
               )}
 

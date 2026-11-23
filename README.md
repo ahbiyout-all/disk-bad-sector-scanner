@@ -37,6 +37,9 @@
 - **중요 폴더 LBA 익스텐트 매핑 · SHA-256 Bit-Rot 무결성 감시 & 스캔 체크포인트 재개**:
   - Win32 `FSCTL_GET_RETRIEVAL_POINTERS`로 중요 폴더/파일의 실제 물리 LBA 익스텐트 구간을 추출해 배드섹터/지연 LBA와의 중첩을 즉시 교차 추적하고 SHA-256 해시로 비트 부패(Bit-Rot) 감지
   - `scanCheckpoint` 기반 실시간 스캔 중단·재개 복구, OS 네이티브 토스트 기반 백그라운드 **Watchdog 규칙 엔진**, `Ctrl+K` 커맨드 팔레트, **S.M.A.R.T. 스냅샷 Diff & 인쇄용 진단서**, 한국어/영어(`KO/EN`) 다국어 UI 지원
+- **클래식 고밀도 하드웨어 유틸리티 UX/UI · 전 계층 감사 하드닝 (`v4.6.4`)**:
+  - 슬림 좌측 사이드바 + 인라인 도구 탭 승격 및 **Slate + Cobalt Blue** 다크/라이트 테마 일원화
+  - Win32 C# 로컬 브릿지 루프백 Origin 격리(`403`)·4Kn 동적 섹터 실측, Rust `DS_GetDriveDetails` 제로초기화, Tauri `CREATE_NO_WINDOW`·심볼릭 링크 차단·FFI 길이 경계 검사 등 전 스택 정합성·안전성 강화 ([작업 로그](docs/WORKLOG.md) · [패치 노트](docs/PATCHNOTES.md))
 - **GitHub Releases 기반 실시간 자동 업데이트 알림 & 데이터 마이그레이션**:
   - 실행 시 최신 릴리스를 자동 대조해 업데이트 팝업(버전 정보, GitHub 릴리스 링크, 다운로드 버튼) 제공
   - 사용자 설정 및 전체 검사 기록 JSON 백업/복원 지원

@@ -93,7 +93,7 @@ export const ResponseBucketsBar: React.FC<ResponseBucketsBarProps> = ({
           {activeBucket && (
             <button
               onClick={() => onSelectBucket(null)}
-              className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+              className="text-[10px] font-mono text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
             >
               필터 해제
             </button>

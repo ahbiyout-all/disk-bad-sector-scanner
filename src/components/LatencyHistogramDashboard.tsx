@@ -649,7 +649,7 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 pb-3 border-b border-slate-200 dark:border-slate-800">
         <div className="flex items-start gap-2.5">
           <div className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5">
-            <BarChart3 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <BarChart3 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -712,7 +712,7 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Quick vs Full Statistical Precision Selector */}
           <div className="flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md text-[11px]">
-            <SlidersHorizontal className="w-3 h-3 text-indigo-500 shrink-0" />
+            <SlidersHorizontal className="w-3 h-3 text-blue-500 shrink-0" />
             <label htmlFor="histogram-precision-select" className="text-slate-500 dark:text-slate-400 whitespace-nowrap">
               정밀도
             </label>
@@ -1093,7 +1093,7 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
                             opacity={isSelected || isHovered ? 1 : 0.94}
                             stroke={
                               isSelected
-                                ? '#6366F1'
+                                ? '#2563EB'
                                 : b.severity === 'critical' || b.severity === 'bad'
                                 ? '#991B1B'
                                 : b.isSlowHighlighted
@@ -1199,7 +1199,7 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
                     ? 'text-red-600 dark:text-red-400'
                     : activeBucket.isSlowHighlighted
                     ? 'text-orange-600 dark:text-orange-400'
-                    : 'text-indigo-600 dark:text-indigo-400'
+                    : 'text-blue-600 dark:text-blue-400'
                 }`}>
                   [{activeBucket.subLabel}{activeBucket.isSlowHighlighted ? ' · Slow 하이라이트' : ''}]
                 </span>
@@ -1229,7 +1229,7 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
                   className={`w-3.5 h-3.5 shrink-0 ${
                     predictiveReport.shouldWarnDegradation
                       ? 'text-red-600 dark:text-red-400'
-                      : 'text-indigo-500 dark:text-indigo-400'
+                      : 'text-blue-500 dark:text-blue-400'
                   }`}
                 />
                 <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
@@ -1546,7 +1546,7 @@ export const LatencyHistogramDashboard: React.FC<LatencyHistogramDashboardProps>
                               <button
                                 type="button"
                                 onClick={() => onSelectBlock(b)}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 text-[10px] font-sans font-semibold cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 text-[10px] font-sans font-semibold cursor-pointer"
                               >
                                 <Crosshair className="w-3 h-3" />
                                 블록 선택

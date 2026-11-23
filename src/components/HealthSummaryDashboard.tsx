@@ -394,7 +394,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                    {drive.isExternal ? <Usb className="w-3.5 h-3.5 text-indigo-500" /> : <HardDrive className="w-3.5 h-3.5 text-slate-500" />}
+                    {drive.isExternal ? <Usb className="w-3.5 h-3.5 text-blue-500" /> : <HardDrive className="w-3.5 h-3.5 text-slate-500" />}
                     <span>{drive.isExternal ? '외장 저장장치 사양' : '드라이브 하드웨어 사양'}</span>
                   </h3>
                   <div className="flex items-center gap-1">
@@ -403,7 +403,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                         {drive.mountPoint || '외장'}
                       </span>
                     )}
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/60">
                       {drive.type}
                     </span>
                   </div>
@@ -426,10 +426,10 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                   {drive.isExternal && drive.bridgeChipset && (
                     <div className="flex justify-between py-0.5 border-b border-slate-100 dark:border-slate-800/80">
                       <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                        <Cpu className="w-3 h-3 text-indigo-400" />
+                        <Cpu className="w-3 h-3 text-blue-400" />
                         브릿지 컨트롤러
                       </span>
-                      <span className="font-mono text-indigo-600 dark:text-indigo-400 text-right truncate max-w-[170px]">
+                      <span className="font-mono text-blue-600 dark:text-blue-400 text-right truncate max-w-[170px]">
                         {drive.bridgeChipset}
                       </span>
                     </div>
@@ -474,7 +474,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  {vitals.isMechanicalHdd ? <Disc className="w-3.5 h-3.5 text-indigo-500" /> : <Cpu className="w-3.5 h-3.5 text-cyan-500" />}
+                  {vitals.isMechanicalHdd ? <Disc className="w-3.5 h-3.5 text-blue-500" /> : <Cpu className="w-3.5 h-3.5 text-cyan-500" />}
                   <div className="truncate">
                     <div className="text-[9px] uppercase font-semibold text-slate-500">{vitals.isMechanicalHdd ? '회전 속도' : '스토리지 엔진'}</div>
                     <div className="text-[11px] font-bold font-mono text-slate-900 dark:text-slate-100 truncate">{vitals.rpmDisplay}</div>
@@ -482,7 +482,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                  <Clock className="w-3.5 h-3.5 text-blue-500" />
                   <div>
                     <div className="text-[9px] uppercase font-semibold text-slate-500">사용 시간</div>
                     <div className="text-xs font-bold font-mono text-slate-900 dark:text-slate-100">
@@ -496,11 +496,11 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
                   <button
                     onClick={onOpenHardwareDetails}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800/80 bg-blue-50/80 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-xs font-bold transition-all cursor-pointer shadow-2xs"
                   >
                     <Cpu className="w-3.5 h-3.5" />
                     <span>디스크 장치 상세 스펙 & 하드웨어 정보 보기</span>
-                    <ArrowRight className="w-3.5 h-3.5 ml-auto text-indigo-400" />
+                    <ArrowRight className="w-3.5 h-3.5 ml-auto text-blue-400" />
                   </button>
                 </div>
               )}
@@ -511,7 +511,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 sm:p-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <Cpu className="w-4 h-4 text-indigo-500 shrink-0" />
+                <Cpu className="w-4 h-4 text-blue-500 shrink-0" />
                 <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
                   Weibull 잔여 수명(RUL) · Arrhenius 열화 스트레스 예측
                 </h3>
@@ -591,7 +591,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                       </div>
                       <div>
                         <div className="font-sans text-[10px] text-slate-500 dark:text-slate-400">신뢰성 지수</div>
-                        <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                        <div className="text-sm font-bold text-blue-600 dark:text-blue-400 mt-0.5">
                           {weibullReport.reliabilityIndexPct.toFixed(1)}%
                         </div>
                       </div>
@@ -692,9 +692,9 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
           )}
 
           {/* Vendor & Storage Media Tailored Action Banner */}
-          <div className="p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/80 via-white to-slate-50 dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          <div className="p-3.5 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-gradient-to-r from-blue-50/80 via-white to-slate-50 dark:from-blue-950/30 dark:via-slate-900 dark:to-slate-900 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
             <div className="flex items-start gap-3">
-              <div className="p-2.5 rounded-lg bg-indigo-600 text-white font-bold shrink-0 shadow-xs mt-0.5">
+              <div className="p-2.5 rounded-lg bg-blue-600 text-white font-bold shrink-0 shadow-xs mt-0.5">
                 <Cpu className="w-4 h-4" />
               </div>
               <div className="space-y-1">
@@ -705,7 +705,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                   <span className={`px-2 py-0.2 rounded text-[10px] font-bold ${vendorProfile.badgeColor}`}>
                     {vendorProfile.vendor.toUpperCase()}
                   </span>
-                  <span className="px-2 py-0.2 rounded text-[10px] font-mono bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
+                  <span className="px-2 py-0.2 rounded text-[10px] font-mono bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-500/20">
                     {mediaAnalysis.connectionCategoryKo}
                   </span>
                 </div>
@@ -717,7 +717,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
 
                 <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-2 font-mono">
                   <span>권장 맞춤 조치 ({tailoredActions.length}건 준비됨):</span>
-                  <span className="font-semibold text-indigo-600 dark:text-indigo-400">
+                  <span className="font-semibold text-blue-600 dark:text-blue-400">
                     1. {tailoredActions[0]?.title || '제조사 진단'}
                   </span>
                 </div>
@@ -727,7 +727,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
             {onOpenVendorModal && (
               <button
                 onClick={onOpenVendorModal}
-                className="shrink-0 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer self-end md:self-center"
+                className="shrink-0 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer self-end md:self-center"
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <span>제조사 차별화 조치 센터</span>
@@ -863,7 +863,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                  <HardDrive className="w-3.5 h-3.5 text-indigo-500" />
+                  <HardDrive className="w-3.5 h-3.5 text-blue-500" />
                   S.M.A.R.T. Self-Monitoring Attributes
                 </h3>
                 {!hasSmartData ? (
@@ -896,7 +896,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                   onClick={onOpenThresholdSettings}
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors border border-slate-300 dark:border-slate-700 cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <Sliders className="w-3 h-3 text-indigo-500" />
+                  <Sliders className="w-3 h-3 text-blue-500" />
                   <span>임계치 설정</span>
                 </button>
               )}
@@ -904,7 +904,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                 <button
                   type="button"
                   onClick={onOpenFeaturesModal}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 transition-colors border border-indigo-200 dark:border-indigo-800 cursor-pointer whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 transition-colors border border-blue-200 dark:border-blue-800 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Sliders className="w-3 h-3" />
                   <span>기능 제어 (AAM·APM)</span>
@@ -928,7 +928,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
                 <div>
                   <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-indigo-500" />
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
                     <span>S.M.A.R.T. 하드웨어 자체 진단 (Hardware Self-Test)</span>
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -940,7 +940,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                     type="button"
                     disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') || smartSelfTestState?.status === 'running'}
                     onClick={() => onRunSmartSelfTest('short')}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     <Play className="w-3 h-3" />
                     Short Test (~2분)
@@ -949,7 +949,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                     type="button"
                     disabled={!isTauriRuntime || !drive.id.startsWith('drive-tauri-physical-') || smartSelfTestState?.status === 'running'}
                     onClick={() => onRunSmartSelfTest('extended')}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold border border-blue-500/40 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     <Play className="w-3 h-3" />
                     Extended Test
@@ -995,7 +995,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                     <span className="text-slate-700 dark:text-slate-300">
                       상태: <strong>{smartSelfTestState?.statusText || 'Idle (실행 대기)'}</strong>
                     </span>
-                    <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                    <span className="text-blue-600 dark:text-blue-400 font-bold">
                       {smartSelfTestState ? `${smartSelfTestState.progressPct}%` : '0%'}
                       {smartSelfTestState?.executionCode !== null && smartSelfTestState?.executionCode !== undefined
                         ? ` (0x${smartSelfTestState.executionCode.toString(16).padStart(2, '0').toUpperCase()})`
@@ -1009,7 +1009,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                           ? 'bg-red-500'
                           : smartSelfTestState?.status === 'completed'
                           ? 'bg-emerald-500'
-                          : 'bg-indigo-500'
+                          : 'bg-blue-500'
                       }`}
                       style={{ width: `${smartSelfTestState?.progressPct || 0}%` }}
                     />
@@ -1022,7 +1022,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
           {!hasSmartData ? (
             <div className="p-5 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/50 text-center space-y-1.5">
               <div className="flex items-center justify-center gap-1.5 text-slate-700 dark:text-slate-300 font-bold text-xs">
-                <Info className="w-4 h-4 text-indigo-500" />
+                <Info className="w-4 h-4 text-blue-500" />
                 <span>S.M.A.R.T. 하드웨어 속성 데이터 없음 (N/A)</span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-xl mx-auto leading-relaxed">
@@ -1168,7 +1168,7 @@ export const HealthSummaryDashboard: React.FC<HealthSummaryDashboardProps> = ({
                             </span>
                             {matchedRule && matchedRule.enabled && (
                               <span
-                                className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono whitespace-nowrap"
+                                className="text-[9px] text-blue-600 dark:text-blue-400 font-mono whitespace-nowrap"
                                 title={`사용자 설정: 주의 ${matchedRule.warningThreshold ?? '-'} / 위험 ${matchedRule.criticalThreshold ?? '-'}`}
                               >
                                 {matchedRule.comparisonMode === 'raw_above' ? 'R≥' : 'S≤'}

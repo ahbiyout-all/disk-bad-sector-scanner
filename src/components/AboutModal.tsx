@@ -93,16 +93,16 @@ export const AboutModal: React.FC<AboutModalProps> = ({
                 href={PROJECT_INFO.developer.githubProfileUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-500 hover:shadow-xs transition-all group flex flex-col justify-between"
+                className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 hover:shadow-xs transition-all group flex flex-col justify-between"
               >
                 <div className="flex items-center justify-between mb-2">
                   <Github className="w-5 h-5 text-slate-900 dark:text-white" />
-                  <ArrowUpRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-500 transition-colors" />
+                  <ArrowUpRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500 transition-colors" />
                 </div>
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-semibold">GitHub 저장소</div>
                   <div className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{PROJECT_INFO.developer.githubUsername}</div>
-                  <div className="text-[10px] text-indigo-500 truncate font-mono mt-0.5">AhBiYout-all</div>
+                  <div className="text-[10px] text-blue-500 truncate font-mono mt-0.5">AhBiYout-all</div>
                 </div>
               </a>
 
@@ -147,13 +147,13 @@ export const AboutModal: React.FC<AboutModalProps> = ({
           {/* 2026 Latest Online Telemetry Insights & Improvements */}
           <div className="bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 space-y-2.5">
             <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-purple-500" />
+              <Activity className="w-3.5 h-3.5 text-blue-500" />
               2026 최신 디스크 진단 표준 및 매체별 맞춤 검사 고도화
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
               <div className="p-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
-                <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1 text-indigo-500">
+                <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1 text-blue-500">
                   <Cpu className="w-3.5 h-3.5" />
                   NVMe & SATA SSD 낸드 맞춤형 검사
                 </div>
@@ -226,7 +226,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({
           {/* GitHub Release & Packaging Specification */}
           <div className="bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 space-y-2">
             <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <FileCode2 className="w-3.5 h-3.5 text-indigo-500" />
+              <FileCode2 className="w-3.5 h-3.5 text-blue-500" />
               GitHub 자동 배포 & 릴리스 정책 준수 사항
             </h3>
 

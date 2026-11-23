@@ -271,11 +271,11 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
             onClick={() => setActiveTab('probe32')}
             className={`pb-2 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'probe32'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
             }`}
           >
-            <Layers className="w-3.5 h-3.5 text-indigo-500" />
+            <Layers className="w-3.5 h-3.5 text-blue-500" />
             32개 채널 탐색
           </button>
 
@@ -328,7 +328,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                     <button
                       onClick={() => void handleForceRescan()}
                       disabled={isRescanning || !onRescanDrives}
-                      className="px-3.5 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                      className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
                       <span>32개 물리 슬롯 재검색</span>
@@ -350,7 +350,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                       key={drive.id}
                       className={`p-3.5 rounded-lg border transition-colors ${
                         selectedDriveId === drive.id
-                          ? 'border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/20'
+                          ? 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20'
                           : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
                       }`}
                     >
@@ -359,7 +359,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                           <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 mt-0.5 ${
                             drive.isUsb2
                               ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400'
-                              : 'bg-indigo-50 dark:bg-slate-800 text-indigo-500'
+                              : 'bg-blue-50 dark:bg-slate-800 text-blue-500'
                           }`}>
                             <Usb className="w-4 h-4" />
                           </div>
@@ -368,7 +368,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                               <span className="font-bold text-slate-900 dark:text-slate-100 text-xs">
                                 {drive.name}
                               </span>
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 whitespace-nowrap shrink-0">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 whitespace-nowrap shrink-0">
                                 {drive.mountPoint || drive.hardwareSpecs?.devicePhysicalPath || 'N/A'}
                               </span>
                               {topo ? (
@@ -432,12 +432,12 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                                 onSelectDrive(drive.id);
                                 onClose();
                               }}
-                              className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                              className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                             >
                               검사 대상으로 선택
                             </button>
                           ) : (
-                            <span className="px-2.5 py-1 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 font-bold text-xs flex items-center gap-1 whitespace-nowrap shrink-0">
+                            <span className="px-2.5 py-1 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-bold text-xs flex items-center gap-1 whitespace-nowrap shrink-0">
                               <Check className="w-3.5 h-3.5" /> 선택됨
                             </span>
                           )}
@@ -538,7 +538,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
 
                       <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40">
                         <div className="text-[10px] text-slate-400">적용 청크 &amp; 임계치</div>
-                        <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                        <div className="font-bold text-blue-600 dark:text-blue-400 mt-0.5">
                           {activeResolvedPolicy.chunkKb} KB ({activeResolvedPolicy.chunkSectors} sec)
                         </div>
                         <div className="text-[10px] text-slate-500">
@@ -588,7 +588,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                         </div>
                         <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40">
                           <div className="text-[10px] text-slate-400">적용 청크 &amp; 임계치</div>
-                          <div className="font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                          <div className="font-bold text-blue-600 dark:text-blue-400 mt-0.5">
                             {activeResolvedPolicy.chunkKb} KB ({activeResolvedPolicy.chunkSectors} sec)
                           </div>
                         </div>
@@ -608,7 +608,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                       외장 USB 장치를 선택하거나 아래 매트릭스 프로파일을 수동 테스트 정책으로 적용할 수 있습니다.
                     </span>
                     {activeResolvedPolicy && (
-                      <span className="font-mono text-indigo-600 dark:text-indigo-400 font-semibold">
+                      <span className="font-mono text-blue-600 dark:text-blue-400 font-semibold">
                         수동 적용 정책: {activeResolvedPolicy.profileName}
                       </span>
                     )}
@@ -635,7 +635,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                         onClick={() => setMatrixFilter(tab.id as any)}
                         className={`px-2 py-1 rounded border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                           matrixFilter === tab.id
-                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-bold'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-bold'
                             : 'border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
                         }`}
                       >
@@ -665,7 +665,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                             key={row.profileKey}
                             className={
                               isMatched
-                                ? 'bg-indigo-50/50 dark:bg-indigo-950/25'
+                                ? 'bg-blue-50/50 dark:bg-blue-950/25'
                                 : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                             }
                           >
@@ -673,7 +673,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                               <div className="font-sans font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                                 <span>{row.generationLabel}</span>
                                 {isMatched && (
-                                  <span className="px-1 py-0.5 rounded bg-indigo-600 text-white text-[9px] font-mono font-bold whitespace-nowrap shrink-0">
+                                  <span className="px-1 py-0.5 rounded bg-blue-600 text-white text-[9px] font-mono font-bold whitespace-nowrap shrink-0">
                                     {activeOverrideKey ? '수동 활성' : '자동 매칭'}
                                   </span>
                                 )}
@@ -685,7 +685,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                             <td className="py-2 px-2.5 whitespace-nowrap text-slate-700 dark:text-slate-300">
                               {row.transport}
                             </td>
-                            <td className="py-2 px-2.5 whitespace-nowrap text-indigo-600 dark:text-indigo-400 font-semibold">
+                            <td className="py-2 px-2.5 whitespace-nowrap text-blue-600 dark:text-blue-400 font-semibold">
                               {row.chunkKb} KB / {row.batchSize}B
                             </td>
                             <td className="py-2 px-2.5 whitespace-nowrap text-amber-600 dark:text-amber-400">
@@ -712,7 +712,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                                 disabled={!selectedDrive || !onApplyUsbMatrixPolicy}
                                 className={`px-2 py-1 rounded text-[10px] font-sans font-semibold transition-colors cursor-pointer disabled:opacity-40 ${
                                   isMatched
-                                    ? 'bg-indigo-600 text-white'
+                                    ? 'bg-blue-600 text-white'
                                     : 'border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                                 }`}
                               >
@@ -832,7 +832,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                                 <tr key={`${cp.label}-${idx}`}>
                                   <td className="py-1.5 px-2.5 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">{cp.label}</td>
                                   <td className="py-1.5 px-2.5 text-slate-600 dark:text-slate-400">{cp.lba.toLocaleString()}</td>
-                                  <td className="py-1.5 px-2.5 text-indigo-600 dark:text-indigo-400">0x{cp.crc32Hex}</td>
+                                  <td className="py-1.5 px-2.5 text-blue-600 dark:text-blue-400">0x{cp.crc32Hex}</td>
                                   <td className="py-1.5 px-2.5 text-slate-600 dark:text-slate-400">{cp.entropyBits.toFixed(2)} b</td>
                                   <td className="py-1.5 px-2.5 text-slate-600 dark:text-slate-400">{cp.latencyMs.toFixed(2)} ms</td>
                                   <td className="py-1.5 px-2.5 font-sans">
@@ -864,11 +864,11 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
           {activeTab === 'probe32' && (
             <div className="space-y-4">
               {/* Top Banner & Force Rescan Action */}
-              <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20">
+              <div className="p-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-indigo-600 text-white uppercase tracking-wider">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-blue-600 text-white uppercase tracking-wider">
                         Hardware IOCTL Engine
                       </span>
                       <h3 className="font-extrabold text-slate-900 dark:text-white text-sm">
@@ -884,7 +884,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                   <button
                     onClick={handleForceRescan}
                     disabled={isRescanning}
-                    className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-sm cursor-pointer transition-all disabled:opacity-50 shrink-0"
+                    className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm cursor-pointer transition-all disabled:opacity-50 shrink-0"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
                     <span>32개 채널 즉각 전수 재탐색</span>
@@ -892,7 +892,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                 </div>
 
                 {/* Key Technical Tags */}
-                <div className="mt-3 pt-3 border-t border-indigo-100 dark:border-indigo-900/40 flex flex-wrap items-center gap-2 text-[10px] font-mono">
+                <div className="mt-3 pt-3 border-t border-blue-100 dark:border-blue-900/40 flex flex-wrap items-center gap-2 text-[10px] font-mono">
                   <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 font-semibold">
                     탐색 범위: \\.\PhysicalDrive0 ~ 31
                   </span>
@@ -902,7 +902,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                   <span className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 border border-blue-500/30 text-blue-700 dark:text-blue-300 font-bold">
                     IOCTL_STORAGE_GET_DEVICE_NUMBER
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-purple-50 dark:bg-purple-950/60 border border-purple-500/30 text-purple-700 dark:text-purple-300 font-bold">
+                  <span className="px-2 py-0.5 rounded bg-sky-50 dark:bg-sky-950/60 border border-sky-500/30 text-sky-700 dark:text-sky-300 font-bold">
                     백엔드: {recognitionDiag?.accessModeFallback || '확인 중...'}
                   </span>
                 </div>
@@ -924,7 +924,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
                   <div className="flex items-center gap-1.5">
-                    <HardDrive className="w-4 h-4 text-indigo-500" />
+                    <HardDrive className="w-4 h-4 text-blue-500" />
                     <span>인식된 물리 스토리지 채널 목록</span>
                   </div>
                   <span className="text-[11px] font-mono text-slate-400 tabular-nums">
@@ -945,7 +945,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                         key={drive.id}
                         className={`p-3.5 rounded-xl border transition-all ${
                           isSelected
-                            ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30'
+                            ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/30'
                             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
                         }`}
                       >
@@ -955,7 +955,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                               isUsb
                                 ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400'
                                 : bus === 'NVMe'
-                                ? 'bg-violet-100 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400'
+                                ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400'
                                 : 'bg-sky-100 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400'
                             }`}>
                               {isUsb ? <Usb className="w-5 h-5" /> : bus === 'NVMe' ? <Zap className="w-5 h-5" /> : <HardDrive className="w-5 h-5" />}
@@ -966,7 +966,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                                 <span className="font-mono text-xs font-bold text-slate-900 dark:text-white">
                                   {drive.name}
                                 </span>
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
                                   {path}
                                 </span>
                                 {volumeList.length > 0 && volumeList.map((vol, vIdx) => (
@@ -995,7 +995,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
 
                           <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
                             {isSelected ? (
-                              <span className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-bold text-xs flex items-center gap-1">
+                              <span className="px-3 py-1.5 rounded-lg bg-blue-600 text-white font-bold text-xs flex items-center gap-1">
                                 <Check className="w-3.5 h-3.5" /> 현재 검사 대상
                               </span>
                             ) : (
@@ -1008,7 +1008,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                                   });
                                   setTimeout(() => setEjectFeedback(null), 3000);
                                 }}
-                                className="px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-100 hover:bg-indigo-600 dark:hover:bg-indigo-500 text-white dark:text-slate-900 hover:text-white dark:hover:text-white font-bold text-xs transition-colors cursor-pointer"
+                                className="px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-100 hover:bg-blue-600 dark:hover:bg-blue-500 text-white dark:text-slate-900 hover:text-white dark:hover:text-white font-bold text-xs transition-colors cursor-pointer"
                               >
                                 검사 대상으로 선택
                               </button>
@@ -1052,9 +1052,9 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                           }
                         }}
                         className={`p-1.5 rounded border text-center transition-all ${
-                          isOccupied
+                            isOccupied
                             ? isCurrent
-                              ? 'bg-indigo-600 text-white border-indigo-500 font-bold cursor-pointer'
+                              ? 'bg-blue-600 text-white border-blue-500 font-bold cursor-pointer'
                               : 'bg-emerald-50 dark:bg-emerald-950/70 border-emerald-500/40 text-emerald-800 dark:text-emerald-300 font-semibold cursor-pointer hover:border-emerald-500'
                             : 'bg-white dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 text-slate-400 opacity-60'
                         }`}
@@ -1073,7 +1073,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
               {/* Technical Insight Box */}
               <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 space-y-2 text-xs">
                 <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <Info className="w-4 h-4 text-indigo-500" />
+                  <Info className="w-4 h-4 text-blue-500" />
                   <span>SSD / HDD / USB 하드웨어 인식률 향상 핵심 알고리즘</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
@@ -1129,7 +1129,7 @@ export const ExternalDeviceModal: React.FC<ExternalDeviceModalProps> = ({
                 </div>
 
                 <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1">
-                  <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1 text-purple-500">
+                  <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1 text-sky-500">
                     <Cpu className="w-3.5 h-3.5" />
                     3. UASP 미지원 &amp; 단일 큐 BOT 방식
                   </div>

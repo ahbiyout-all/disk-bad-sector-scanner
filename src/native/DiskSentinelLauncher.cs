@@ -695,7 +695,20 @@ namespace DiskSentinel
                 string path = rawPath.ToLowerInvariant();
                 Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
                 res.Headers.Add("Cache-Control", "no-store, no-cache, must-revalidate");
-                res.Headers.Add("Access-Control-Allow-Origin", "*");
+                res.Headers.Add("Vary", "Origin");
+
+                string origin = req.Headers["Origin"];
+                bool isAllowedOrigin = IsAllowedLocalOrigin(origin);
+                if (!string.IsNullOrEmpty(origin))
+                {
+                    if (!isAllowedOrigin)
+                    {
+                        res.StatusCode = 403;
+                        WriteJsonResponse(res, "{\"ok\":false,\"error\":\"forbidden_origin\"}");
+                        return;
+                    }
+                    res.Headers.Add("Access-Control-Allow-Origin", origin);
+                }
 
                 if (string.Equals(req.HttpMethod, "OPTIONS", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1415,12 +1428,24 @@ namespace DiskSentinel
 
             try
             {
-                uint readBytes = Math.Min(count, 128U) * 512U;
-                if (readBytes < 512) readBytes = 512;
-                long offset = (long)(lba * 512UL);
+                uint sectorSize = QueryHandleSectorSize(hRaw);
+                if (lba > (ulong)long.MaxValue / sectorSize)
+                {
+                    return string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{{\"startLba\":{0},\"sectorCount\":{1},\"latencyMs\":0,\"statusCode\":4,\"win32ErrorCode\":87}}",
+                        lba,
+                        count
+                    );
+                }
+                uint clampedCount = Math.Max(1U, Math.Min(count, 128U));
+                uint readBytes = clampedCount * sectorSize;
+                if (readBytes > 524288U) readBytes = 524288U;
+                long offset = (long)(lba * sectorSize);
                 long newPos;
-                IntPtr buf = Marshal.AllocHGlobal((int)readBytes + 4096);
-                IntPtr aligned = new IntPtr(((buf.ToInt64() + 4095L) / 4096L) * 4096L);
+                int alignSize = Math.Max(4096, (int)sectorSize);
+                IntPtr buf = Marshal.AllocHGlobal((int)readBytes + alignSize);
+                IntPtr aligned = new IntPtr(((buf.ToInt64() + (alignSize - 1L)) / alignSize) * alignSize);
 
                 Stopwatch sw = Stopwatch.StartNew();
                 bool seekOk = SetFilePointerEx(hRaw, offset, out newPos, 0);
@@ -1448,6 +1473,46 @@ namespace DiskSentinel
             }
         }
 
+        private static bool IsAllowedLocalOrigin(string origin)
+        {
+            if (string.IsNullOrWhiteSpace(origin)) return true;
+            if (string.Equals(origin, "null", StringComparison.OrdinalIgnoreCase)) return true;
+            Uri uri;
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out uri)) return false;
+            if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            string host = uri.Host;
+            return string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static uint QueryHandleSectorSize(IntPtr hRaw)
+        {
+            IntPtr geomBuf = Marshal.AllocHGlobal(64);
+            try
+            {
+                uint returned = 0;
+                if (DeviceIoControl(hRaw, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IntPtr.Zero, 0, geomBuf, 64, out returned, IntPtr.Zero) && returned >= 24)
+                {
+                    int bps = Marshal.ReadInt32(geomBuf, 20);
+                    if (bps >= 512 && bps <= 65536 && (bps & (bps - 1)) == 0)
+                    {
+                        return (uint)bps;
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                Marshal.FreeHGlobal(geomBuf);
+            }
+            return 512U;
+        }
+
         private static string ExecuteRepairBlockJson(uint driveIndex, ulong lba, uint count)
         {
             if (!_dllLoaded) return "{\"success\":false,\"recoveredStatus\":0}";
@@ -1467,7 +1532,6 @@ namespace DiskSentinel
 
         private static string ExecuteReadSectorJson(uint driveIndex, ulong lba, uint requestedSize)
         {
-            uint alignedSize = ((Math.Max(512U, Math.Min(65536U, requestedSize)) + 511U) / 512U) * 512U;
             string devPath = string.Format("\\\\.\\PhysicalDrive{0}", driveIndex);
             IntPtr hRaw = CreateFileW(
                 devPath,
@@ -1485,10 +1549,18 @@ namespace DiskSentinel
 
             try
             {
-                long offset = (long)(lba * 512UL);
+                uint sectorSize = QueryHandleSectorSize(hRaw);
+                if (lba > (ulong)long.MaxValue / sectorSize)
+                {
+                    return "{\"ok\":false,\"bytes\":[]}";
+                }
+                uint clampedReq = Math.Max(sectorSize, Math.Min(65536U, requestedSize));
+                uint alignedSize = ((clampedReq + (sectorSize - 1U)) / sectorSize) * sectorSize;
+                long offset = (long)(lba * sectorSize);
                 long newPos;
-                IntPtr buf = Marshal.AllocHGlobal((int)alignedSize + 4096);
-                IntPtr aligned = new IntPtr(((buf.ToInt64() + 4095L) / 4096L) * 4096L);
+                int alignSize = Math.Max(4096, (int)sectorSize);
+                IntPtr buf = Marshal.AllocHGlobal((int)alignedSize + alignSize);
+                IntPtr aligned = new IntPtr(((buf.ToInt64() + (alignSize - 1L)) / alignSize) * alignSize);
                 uint bytesRead = 0;
                 bool ok = SetFilePointerEx(hRaw, offset, out newPos, 0) &&
                           ReadFile(hRaw, aligned, alignedSize, out bytesRead, IntPtr.Zero) &&
@@ -1496,7 +1568,7 @@ namespace DiskSentinel
                 byte[] data = null;
                 if (ok)
                 {
-                    uint count = Math.Min(requestedSize, bytesRead);
+                    uint count = Math.Min(Math.Max(512U, Math.Min(65536U, requestedSize)), bytesRead);
                     data = new byte[count];
                     Marshal.Copy(aligned, data, 0, (int)count);
                 }
@@ -1525,7 +1597,6 @@ namespace DiskSentinel
 
         private static string ExecuteForensicsEntropyJson(uint driveIndex, ulong lba, uint requestedSize)
         {
-            uint alignedSize = ((Math.Max(512U, Math.Min(65536U, requestedSize)) + 511U) / 512U) * 512U;
             string devPath = string.Format("\\\\.\\PhysicalDrive{0}", driveIndex);
             IntPtr hRaw = CreateFileW(
                 devPath,
@@ -1543,10 +1614,18 @@ namespace DiskSentinel
 
             try
             {
-                long offset = (long)(lba * 512UL);
+                uint sectorSize = QueryHandleSectorSize(hRaw);
+                if (lba > (ulong)long.MaxValue / sectorSize)
+                {
+                    return "{\"ok\":false,\"error\":\"lba_overflow\"}";
+                }
+                uint clampedReq = Math.Max(sectorSize, Math.Min(65536U, requestedSize));
+                uint alignedSize = ((clampedReq + (sectorSize - 1U)) / sectorSize) * sectorSize;
+                long offset = (long)(lba * sectorSize);
                 long newPos;
-                IntPtr buf = Marshal.AllocHGlobal((int)alignedSize + 4096);
-                IntPtr aligned = new IntPtr(((buf.ToInt64() + 4095L) / 4096L) * 4096L);
+                int alignSize = Math.Max(4096, (int)sectorSize);
+                IntPtr buf = Marshal.AllocHGlobal((int)alignedSize + alignSize);
+                IntPtr aligned = new IntPtr(((buf.ToInt64() + (alignSize - 1L)) / alignSize) * alignSize);
                 uint bytesRead = 0;
                 bool ok = SetFilePointerEx(hRaw, offset, out newPos, 0) &&
                           ReadFile(hRaw, aligned, alignedSize, out bytesRead, IntPtr.Zero) &&
@@ -1554,7 +1633,7 @@ namespace DiskSentinel
                 byte[] data = null;
                 if (ok)
                 {
-                    uint count = Math.Min(requestedSize, bytesRead);
+                    uint count = Math.Min(Math.Max(512U, Math.Min(65536U, requestedSize)), bytesRead);
                     data = new byte[count];
                     Marshal.Copy(aligned, data, 0, (int)count);
                 }

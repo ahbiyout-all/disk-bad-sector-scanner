@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * 
- * DiskSentinel Pro - Storage Media Tailored Bad Sector Inspection Engine
+ * Disk Bad Sector Scanner - Storage Media Tailored Bad Sector Inspection Engine
  * Specialized scanning profiles and algorithms for HDD, SATA SSD, NVMe SSD, and USB Storage.
  */
 
@@ -145,7 +145,7 @@ export const SCAN_METHOD_DEFINITIONS: Record<SpecializedScanMethodId, ScanMethod
     slowThresholdMs: 25,
     criticalThresholdMs: 80,
     blockSizeKb: 128,
-    badgeColor: 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20',
+    badgeColor: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
     description: 'NVMe Spec Log Page 02h(Available Spare, Percentage Used, Media Errors)와 70°C+ 써멀 스로틀링을 인지하여 온도 저하를 배드 블록으로 오판하지 않습니다.',
     features: [
       'Available Spare (<10% 임계치) 및 Percentage Used 플래시 수명 마모율 실시간 추적',
@@ -244,7 +244,7 @@ export const SCAN_METHOD_DEFINITIONS: Record<SpecializedScanMethodId, ScanMethod
     slowThresholdMs: 12,
     criticalThresholdMs: 45,
     blockSizeKb: 2048,
-    badgeColor: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
+    badgeColor: 'bg-sky-500/10 text-sky-500 border-sky-500/20',
     description: 'USB4 / Thunderbolt 호스트의 PCIe 직결 터널(stornvme)을 통해 USB 브릿지 변환 오버헤드 없이 2MB 대용량 DMA 버스트로 외장 NVMe 셀을 전수 진단합니다.',
     features: [
       '40Gbps PCIe 터널링 2MB 블록 버스트 + 12ms/45ms 서브밀리초 판정',

@@ -134,7 +134,7 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
         <div className="flex items-center gap-2">
           <h3 className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-            <Terminal className="w-3.5 h-3.5 text-indigo-500" />
+            <Terminal className="w-3.5 h-3.5 text-blue-500" />
             System Activity Log
           </h3>
           <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
@@ -204,7 +204,7 @@ export const ErrorLogStream: React.FC<ErrorLogStreamProps> = ({
             onClick={() => setAutoScroll(!autoScroll)}
             className={`p-1 rounded text-[10px] border transition-colors ${
               autoScroll
-                ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500/30 text-indigo-500'
+                ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-500/30 text-blue-500'
                 : 'border-slate-200 dark:border-slate-800 text-slate-400'
             }`}
             title={autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF'}

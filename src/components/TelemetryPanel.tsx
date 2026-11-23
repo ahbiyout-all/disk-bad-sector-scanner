@@ -125,7 +125,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
           <button
             onClick={onOpenReport}
-            className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors cursor-pointer shadow-xs min-h-[34px]"
+            className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors cursor-pointer shadow-xs min-h-[34px]"
             title="진단 보고서 열기"
           >
             <FileText className="w-3.5 h-3.5 shrink-0" />
@@ -153,7 +153,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               title="빠른 검사 (Quick Scan): 매 10번째 블록만 샘플링"
               className={`px-2.5 py-1 rounded transition-colors ${
                 scanMode === 'quick'
-                  ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
+                  ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 font-semibold shadow-xs'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 disabled:opacity-50'
               }`}
             >
@@ -165,7 +165,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               title="전체 검사 (Full Scan): 모든 블록 100% 검사"
               className={`px-2.5 py-1 rounded transition-colors ${
                 scanMode === 'full'
-                  ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
+                  ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 font-semibold shadow-xs'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 disabled:opacity-50'
               }`}
             >
@@ -181,7 +181,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
                 onClick={() => onChangeSpeedMultiplier(spd)}
                 className={`px-1.5 py-0.5 rounded text-[11px] transition-colors ${
                   scanSpeedMultiplier === spd
-                    ? 'bg-indigo-600 text-white font-bold'
+                    ? 'bg-blue-600 text-white font-bold'
                     : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
                 }`}
                 title={`스캔 배치 크기 ${spd}x 배속`}
@@ -212,7 +212,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden flex">
           <div
             className={`h-full transition-all duration-100 ${
-              telemetry.badCount > 0 ? 'bg-amber-500' : 'bg-indigo-600'
+              telemetry.badCount > 0 ? 'bg-amber-500' : 'bg-blue-600'
             }`}
             style={{ width: `${Math.min(100, telemetry.scannedPercentage)}%` }}
           />
@@ -224,7 +224,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         <div className="bg-slate-50 dark:bg-slate-950/80 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
           <div className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 mb-0.5 flex items-center justify-between">
             <span>Scan Speed</span>
-            <Gauge className="w-3 h-3 text-indigo-400" />
+            <Gauge className="w-3 h-3 text-blue-400" />
           </div>
           <div className="text-sm sm:text-base font-semibold font-mono text-emerald-600 dark:text-emerald-400">
             {telemetry.scanSpeedMbPerSec.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">MB/s</span>
@@ -291,7 +291,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
       <div className="mt-3.5 pt-3 border-t border-slate-200 dark:border-slate-800">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-1.5">
-            <Activity className="w-3.5 h-3.5 text-indigo-500" />
+            <Activity className="w-3.5 h-3.5 text-blue-500" />
             <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
               하드웨어 상태
             </h4>
@@ -428,7 +428,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1">
                 {vitals.isMechanicalHdd ? (
-                  <Disc className="w-3.5 h-3.5 text-indigo-500" />
+                  <Disc className="w-3.5 h-3.5 text-blue-500" />
                 ) : (
                   <Cpu className="w-3.5 h-3.5 text-cyan-500" />
                 )}
@@ -436,7 +436,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               </span>
               <span className={`text-[10px] font-mono font-medium px-1.5 py-0.2 rounded ${
                 vitals.isMechanicalHdd
-                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
                   : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
               }`}>
                 {vitals.isMechanicalHdd ? 'Spindle Motor' : 'Solid State'}
@@ -451,7 +451,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
             <div className="mt-2 text-[10px] font-mono text-slate-500 dark:text-slate-400 flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-800">
               <span className="truncate max-w-[190px]">{vitals.rpmSubtext}</span>
-              <span className="font-semibold text-indigo-600 dark:text-indigo-400 shrink-0">
+              <span className="font-semibold text-blue-600 dark:text-blue-400 shrink-0">
                 부하 {vitals.controllerLoadPct !== null ? `${vitals.controllerLoadPct}%` : 'N/A'}
               </span>
             </div>
@@ -470,7 +470,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
                   {nvmeTelemetry ? (
                     <>
                       가용 예비영역: <b className="font-mono text-emerald-600 dark:text-emerald-400">{nvmeTelemetry.availableSpare !== null ? `${nvmeTelemetry.availableSpare}%` : 'N/A'}</b> &nbsp;|&nbsp;
-                      수명 마모율: <b className="font-mono text-indigo-600 dark:text-indigo-400">{nvmeTelemetry.percentageUsed !== null ? `${nvmeTelemetry.percentageUsed}%` : 'N/A'}</b> &nbsp;|&nbsp;
+                      수명 마모율: <b className="font-mono text-blue-600 dark:text-blue-400">{nvmeTelemetry.percentageUsed !== null ? `${nvmeTelemetry.percentageUsed}%` : 'N/A'}</b> &nbsp;|&nbsp;
                       누적 쓰기(TBW): <b className="font-mono text-amber-600 dark:text-amber-400">{nvmeTelemetry.dataUnitsWrittenTb !== null ? `${nvmeTelemetry.dataUnitsWrittenTb.toFixed(1)} TB` : 'N/A'}</b>
                     </>
                   ) : (
@@ -485,7 +485,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
                 </span>
                 <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
                   스핀들 엔진: <b className="font-mono text-emerald-600 dark:text-emerald-400">{drive.hardwareSpecs?.rotationalSpeedRpm ? `${drive.hardwareSpecs.rotationalSpeedRpm.toLocaleString()} RPM` : 'N/A'}</b> &nbsp;|&nbsp;
-                  치환 섹터(05h): <b className="font-mono text-indigo-600 dark:text-indigo-400">{drive.smartAttributes.find(a => a.id === 5)?.raw || 'N/A'}</b> &nbsp;|&nbsp;
+                  치환 섹터(05h): <b className="font-mono text-blue-600 dark:text-blue-400">{drive.smartAttributes.find(a => a.id === 5)?.raw || 'N/A'}</b> &nbsp;|&nbsp;
                   총 사용시간: <b className="font-mono text-amber-600 dark:text-amber-400">{drive.powerOnHours !== null ? `${drive.powerOnHours.toLocaleString()} 시간` : 'N/A'}</b>
                 </span>
               </>
@@ -499,7 +499,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
                     {drive.smartAttributes.find(a => a.id === 231 || a.id === 177 || a.id === 173 || a.id === 233)?.raw ||
                       (drive.hardwareSpecs?.percentageUsed !== null && drive.hardwareSpecs?.percentageUsed !== undefined ? `${drive.hardwareSpecs.percentageUsed}%` : 'N/A')}
                   </b> &nbsp;|&nbsp;
-                  예비 셀 잔여율: <b className="font-mono text-indigo-600 dark:text-indigo-400">
+                  예비 셀 잔여율: <b className="font-mono text-blue-600 dark:text-blue-400">
                     {drive.smartAttributes.find(a => a.id === 232 || a.id === 170)?.raw ||
                       (drive.hardwareSpecs?.availableSparePercent !== null && drive.hardwareSpecs?.availableSparePercent !== undefined ? `${drive.hardwareSpecs.availableSparePercent}%` : 'N/A')}
                   </b> &nbsp;|&nbsp;
@@ -511,11 +511,11 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
               </>
             ) : (
               <>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30 whitespace-nowrap shrink-0">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-400 border border-blue-500/30 whitespace-nowrap shrink-0">
                   {usbTopo ? `${generationIdToLabel(usbTopo.generation)} · ${usbTopo.transport}` : 'USB (Win32 PnP 프로브 미수신)'}
                 </span>
                 <span className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">
-                  브릿지: <b className="font-mono text-indigo-600 dark:text-indigo-400">{usbTopo?.bridgeChipset || drive.bridgeChipset || 'N/A'}</b> &nbsp;|&nbsp;
+                  브릿지: <b className="font-mono text-blue-600 dark:text-blue-400">{usbTopo?.bridgeChipset || drive.bridgeChipset || 'N/A'}</b> &nbsp;|&nbsp;
                   {activeUsbPolicy ? (
                     <>
                       청크: <b className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">{activeUsbPolicy.chunkKb}KB</b> &nbsp;|&nbsp;

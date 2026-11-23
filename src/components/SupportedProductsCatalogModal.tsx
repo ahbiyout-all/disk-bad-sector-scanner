@@ -198,7 +198,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
                   setSelectedCategory('ALL');
                   setSelectedVendor('ALL');
                 }}
-                className="mt-2 px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold cursor-pointer"
+                className="mt-2 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold cursor-pointer"
               >
                 검색 조건 초기화
               </button>
@@ -210,7 +210,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
                 return (
                   <div
                     key={item.id}
-                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between gap-3 hover:border-indigo-500/50 transition-all shadow-xs"
+                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between gap-3 hover:border-blue-500/50 transition-all shadow-xs"
                   >
                     <div className="space-y-2.5">
                       {/* Top Badges */}
@@ -225,7 +225,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
 
                       {/* Series Title */}
                       <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
+                        <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
                         <span>{item.seriesName}</span>
                       </h3>
 
@@ -245,7 +245,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
 
                       {/* Precision Diagnostic Features */}
                       <div className="space-y-1.5">
-                        <div className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-1">
+                        <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider flex items-center gap-1">
                           <Zap className="w-3 h-3 text-amber-500" />
                           정밀진단 지원 특화 기능
                         </div>
@@ -268,7 +268,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
                           {item.smartMonitoringIds.map((attr) => (
                             <span
                               key={attr.id}
-                              className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60"
+                              className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60"
                               title={attr.targetMetric}
                             >
                               ID #{attr.id}: {attr.name}
@@ -290,7 +290,7 @@ export const SupportedProductsCatalogModal: React.FC<SupportedProductsCatalogMod
                             onClose();
                             onSelectVendorForDiagnostic(item.vendor);
                           }}
-                          className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
                         >
                           <span>제조사 특성 열기</span>
                           <ExternalLink className="w-3 h-3" />

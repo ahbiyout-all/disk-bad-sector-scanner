@@ -1,17 +1,17 @@
-# DiskSentinel Pro 모듈 및 순수 창작 DLL 시스템 명세서 (MODULES.md)
+# Disk Bad Sector Scanner 모듈 및 순수 창작 DLL 시스템 명세서 (MODULES.md)
 
-- **프로젝트명**: DiskSentinel Pro (디스크 배드섹터 정밀 검사기)
+- **프로젝트명**: Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기)
 - **개발자**: AhBiYout (GitHub: [AhBiYout-all](https://github.com/AhBiYout-all))
 - **소속**: [CISNet](https://www.cisnet.co.kr)
 - **공식 기술 블로그**: [ahbiyoutvibe.blogspot.com](https://ahbiyoutvibe.blogspot.com/)
 - **라이선스**: Apache-2.0
-- **버전**: v4.6.0
+- **버전**: v4.6.0 (최신 감사 패치: v4.6.4)
 
 ---
 
 ## 1. 개요 (Overview)
 
-DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로, 웹 프론트엔드 UI 계층과 저수준 하드웨어 다이렉트 I/O를 제어하는 **순수 독자 창작 C++ 네이티브 엔진(`DiskSentinelNativeCore.dll`)**, OS 핸들 의존 없이 고속 통계·엔트로피·파티션 무결성을 연산하는 **순수 창작 포렌식 엔진(`DiskSentinelForensics.dll`)**, Weibull RUL·음향 탐색 RMSSD 지터·Arrhenius 열가속·S.M.A.R.T. OLS 추세 회귀를 연산하는 **순수 창작 예지 진단 엔진(`DiskSentinelPredictive.dll`)**, 16-시그니처 파일 카빙·NTFS `$MFT` USA/Runlist 디코더·NIST SP 800-88 `Xoshiro256**` 소거 검증·ddrescue 도메인 구간 플래너를 제공하는 **순수 창작 데이터 복구 엔진(`DiskSentinelRecovery.dll`)**, 그리고 스트리밍 FIPS 180-4 SHA-256·Slicing-by-8 CRC32·$O((E+B)\log B)$ 익스텐트 Bit-Rot/배드섹터 생존성 평가·시점 간 S.M.A.R.T. 열화 속도(Diff)·플릿 Watchdog SLA 매트릭스를 연산하는 **순수 창작 무결성·Watchdog 엔진(`DiskSentinelIntegrity.dll`)**의 **5-DLL(Penta-DLL) 순수 창작 아키텍처**로 구성되어 있습니다.
+Disk Bad Sector Scanner는 고성능 하드웨어 표면 정밀 진단 시스템으로, 웹 프론트엔드 UI 계층과 저수준 하드웨어 다이렉트 I/O를 제어하는 **순수 독자 창작 C++ 네이티브 엔진(`DiskSentinelNativeCore.dll`)**, OS 핸들 의존 없이 고속 통계·엔트로피·파티션 무결성을 연산하는 **순수 창작 포렌식 엔진(`DiskSentinelForensics.dll`)**, Weibull RUL·음향 탐색 RMSSD 지터·Arrhenius 열가속·S.M.A.R.T. OLS 추세 회귀를 연산하는 **순수 창작 예지 진단 엔진(`DiskSentinelPredictive.dll`)**, 16-시그니처 파일 카빙·NTFS `$MFT` USA/Runlist 디코더·NIST SP 800-88 `Xoshiro256**` 소거 검증·ddrescue 도메인 구간 플래너를 제공하는 **순수 창작 데이터 복구 엔진(`DiskSentinelRecovery.dll`)**, 그리고 스트리밍 FIPS 180-4 SHA-256·Slicing-by-8 CRC32·$O((E+B)\log B)$ 익스텐트 Bit-Rot/배드섹터 생존성 평가·시점 간 S.M.A.R.T. 열화 속도(Diff)·플릿 Watchdog SLA 매트릭스를 연산하는 **순수 창작 무결성·Watchdog 엔진(`DiskSentinelIntegrity.dll`)**의 **5-DLL(Penta-DLL) 순수 창작 아키텍처**로 구성되어 있습니다.
 
 본 문서는 프로젝트 내 모든 핵심 모듈의 역할, 아키텍처, 기존 네이티브 코드 감사 결과(버그 및 개선 사항), 그리고 **순수 창작 DLL들의 동작 원리와 세부 인터페이스**를 상세히 기록합니다.
 
@@ -40,6 +40,7 @@ DiskSentinel Pro는 고성능 하드웨어 표면 정밀 진단 시스템으로,
 | **10. Quad-DLL 감사 패치 & Tauri 번들 리소스 통합 (v4.6.0)** | `DS_AdaptiveScanChunk`에서 `DS_ScanLbaBlock`이 `DS_STATUS_BAD`에도 `true`를 반환해 치명 핸들 중단(`isFatalHandleError`)이 도달 불가 데드코드였던 결함, `DS_VerifyLbaBlock`/`DS_CopyLbaRangeToMappedFile` 핸들 읽기 권한 및 QPF 주파수 미검증, `DSP_ComputeWeibullRul`의 `availableSparePct == 0` 누락, TypeScript 브리지 1바이트 비트 CRC32, MFT/PE 헤더 32비트 정수 래핑 가능성, `tauri.conf.json`/`tauri-desktop.yml` DLL 번들 누락 | `DS_AdaptiveScanChunk` 반환값/win32Err 직결 검사 수정, 핸들·`QueryPerformanceFrequency` 가드 추가, NVMe 예비 블록 완전 고갈(`availableSparePct == 0`) 감점 수정, `DS_CRC32_LUT` 테이블 가속 통일, Recovery MFT/PE 64비트 감산·오버플로 경계 하드닝, `tauri.conf.json` `bundle.resources` 및 GitHub Actions 선행 DLL 스테이징 통합 |
 | **11. MSVC `C3861` 빌드 수정 및 v4.6.2 심층 자기성찰 감사 패치 (v4.6.2)** | `DiskSentinelEngine.cpp`의 `<math.h>`/`<cmath>` 누락으로 인한 MSVC `C3861 ('pow', 'fmax')` 실패, USB Hub IOCTL 비정렬 역참조 UB, `main.rs`의 `DEVPKEY_PciDevice_*` PID `10`/`11` 교차 오류, `ERROR_HANDLE_EOF` 시 `CloseHandle` 누락, `extent_count` 미검증 버퍼 오프셋 접근, NTFS 정션/심볼릭 링크 순환 탐색, PowerShell 알림 보간 | `<math.h>`+`<cmath>` 추가 및 USB Hub `memcpy` 교체, PCIe PID `10(Width)/11(Speed)` 교정 및 부모 DevNode `0..6` 확장, `ERROR_HANDLE_EOF` `CloseHandle`·`rp_buf` 경계 클램핑, `symlink_metadata` + 방문 `HashSet` 차단, 환경 변수 전달 + `CREATE_NO_WINDOW` 격리 적용 |
 | **12. Penta-DLL 전수 감사 & Rust/TS 수리 패리티 보정 (v4.6.3)** | `Forensics` 512B 미만 입력에서 92B GPT 헤더 CRC32(LBA1) 검증 누락, `Predictive` 1시간 미만 초단기 샘플(`spanDays < 1/24`)의 OLS 일 기울기 과대 외삽(C++·Rust·TS 불일치), `Recovery` UTF-8 다중바이트(한글·일본어 등) 로그의 바이너리 오분류 및 `targetLba == 0` 시 `$MFT` 상주 오탐(Rust 미러·TS 포함), `NativeCore` 1차 읽기 실패(`ERROR_CRC`) 후 비정렬 재할당 버퍼 정렬 보증 및 `Rust` 미러 포렌식/카빙 패리티 격차 | `Forensics`에 `bufLen >= 92` GPT CRC32 직접 검증 추가, `Predictive`/`main.rs`/`predictiveAnalyticsBridge.ts` 전 계층 `< 1h` 기울기 0 가드 통일, `Recovery`/`main.rs`/`recoveryDllBridge.ts`에 2/3/4바이트 UTF-8 유효 시퀀스 인쇄율 가산 및 `targetLba > 0 && != UINT64_MAX` 가드 적용, `NativeCore` USB 토폴로지·Slicing-by-8·지연 DMA 정렬 경계 하드닝 |
+| **13. 전 스택 심층 감사·Win32/IPC 경계 하드닝 & Cobalt Blue 테마 일원화 (v4.6.4)** | C# 런처 비로컬 Origin 허용 가능성·512B 고정 섹터 가정·LBA 곱셈 64비트 경계, Rust 미러 `DS_GetDriveDetails` 미초기화 필드 및 SMART/NVMe health/온도 폴백 격차, Tauri `fsutil`/`defrag` 콘솔 노출·`sha256_file_streaming` 심볼릭 링크 추적·FFI `u32` 길이 캐스트 경계, UI 스캔 비교 1→2건 자동 선택 잠금·과거 기록 배드섹터 보고서 LBA 복원 누락·폴더 LBA `DSI` 미연동·잔여 `indigo`/`purple` 색조 혼재 | `DiskSentinelLauncher.cs` `IsAllowedLocalOrigin`(403 차단)·`QueryHandleSectorSize`(4Kn 실측)·64비트 LBA 오버플로 가드·`integrityDllLoaded` 적용, Rust `DS_GetDriveDetails` 제로초기화 및 health/온도 폴백 C++ 동등화, `main.rs` `CREATE_NO_WINDOW`·`symlink_metadata` 리파스 스킵·`u32::try_from` FFI 길이 검증, `HistoryAndComparison` 자동 선택 해제·`FolderLbaIntegrityPanel` `DSI` 실연동·Watchdog 중복 스캔 가드·`resolveBadBlocksForRecord` 및 전 UI **Slate + Cobalt Blue** 테마 통일 |
 
 ### 2.3 3대 순수 창작 알고리즘 및 Zero-Copy I/O 동작 원리
 

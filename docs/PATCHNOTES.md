@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file. This projec
 
 ---
 
+## [v4.6.4] - 2026-11-23
+### Changed
+- **클래식 고밀도 하드웨어 유틸리티 UX/UI · Slate + Cobalt Blue(`blue-*`/`sky-*`) 테마 전면 일원화**:
+  - `SectorGrid`, `LatencyHistogramDashboard`, `SmartAttributeTrendChart`, `SmartRemapModal`, `ScanMethodSelector`, `LbaGraphView`, `TemperatureLineChart`, `SmartExtendedLogsPanel`, `ErrorLogStream`, `SupportedProductsCatalogModal`, `ResponseBucketsBar`, `vendorDiagnostics.ts`, `scanProfiles.ts`를 포함한 전 UI 모듈의 잔여 보라·인디고 계열 크롬을 코발트 블루와 슬레이트 팔레트로 일원화(미디어 카테고리·제조사 브랜드 고유색 및 의미론적 헬스 스펙트럼은 보존).
+  - 앱 트레이 툴팁, 테스트 알림 제목, 복구/스캔 주석 및 활성 문서 전반의 명칭을 `Disk Bad Sector Scanner`로 통일.
+
+### Fixed (Self-Reflection Deep Audit & Full-Stack Hardening)
+- **Win32 C# 브릿지 Origin 격리·4Kn 섹터 실측 & 64비트 LBA 오버플로 가드 (`src/native/DiskSentinelLauncher.cs`)**:
+  - `IsAllowedLocalOrigin` 검증으로 루프백(`localhost`/`127.0.0.1`/`[::1]`) 외 Origin의 로컬 브릿지 API 접근을 `403 forbidden_origin` + `Vary: Origin`으로 차단.
+  - `QueryHandleSectorSize`(`IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`)로 실제 섹터 크기(512B/4096B)를 동적 판독하고 64비트 LBA×섹터 바이트 계산에 오버플로 검사를 적용, `/api/native/status`에 `integrityDllLoaded` 플래그 추가.
+- **Rust 코어 & Tauri IPC 백엔드 안전성·패리티 보정 (`src/native/rust/src/lib.rs`, `src-tauri/src/main.rs`)**:
+  - Rust `DS_GetDriveDetails` 구조체 제로 초기화 및 S.M.A.R.T./NVMe 기반 `health_score`·온도 폴백 연산을 C++ `DiskSentinelEngine.cpp`와 일치시킴.
+  - Tauri `fsutil`/`defrag` 서브프로세스에 `CREATE_NO_WINDOW(0x0800_0000)` 플래그를 적용해 백그라운드 실행 시 콘솔 창 노출 제거, `sha256_file_streaming`에서 `symlink_metadata`로 심볼릭 링크/리파스 포인트 배제, C ABI FFI 전달 전 `u32::try_from` 길이 경계 검증 추가.
+- **프론트엔드 진단 정합성 & 패키징 문서 오기 시정 (`HistoryAndComparison.tsx`, `FolderLbaIntegrityPanel.tsx`, `App.tsx`, `Native_EXE_Packaging_Guide.md`)**:
+  - 검사 이력 1→2건 전환 시 비교 대상 선택이 강제 초기화되던 `useEffect` 자동 잠금 결함 수정, 폴더 LBA 무결성 패널에 `evaluateExtentIntegrityNative` 네이티브 평가 및 한국어 라벨 연동, Watchdog 중복 퀵스캔 방지 가드 및 과거 기록 보고서 배드섹터 LBA 복원(`resolveBadBlocksForRecord`) 추가.
+  - `docs/Native_EXE_Packaging_Guide.md`의 구형 `14대 C ABI DLL` 표기를 현행 **5종 순수 창작 Penta-DLL** 구조로 정정.
+
+---
+
 ## [v4.6.3] - 2026-11-22
 ### Added
 - **제5 순수 창작 네이티브 DLL `DiskSentinelIntegrity.dll` (Penta-DLL 아키텍처 완성 & 공식 기술 명세서 등록)**:

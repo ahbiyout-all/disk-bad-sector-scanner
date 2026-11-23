@@ -229,10 +229,10 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
           <div className="p-3.5 rounded-lg border bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                <Wrench className="w-3.5 h-3.5 text-indigo-500" />
+                <Wrench className="w-3.5 h-3.5 text-blue-500" />
                 수복 대상 물리 섹터 (Physical LBA) 및 탐색 클러스터 범위
               </div>
-              <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 font-semibold">
+              <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 font-semibold">
                 {isNativeHardwareRuntime() ? 'Tauri Win32 Raw LBA Active' : 'Tauri IPC 연결 필요'}
               </span>
             </div>
@@ -273,7 +273,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 <button
                   onClick={handleStartCarving}
                   disabled={isProcessing}
-                  className="w-full py-2 px-3 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-400 text-white flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                  className="w-full py-2 px-3 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-400 text-white flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
                 >
                   {isProcessing ? (
                     <>
@@ -310,7 +310,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                       </div>
                       <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center gap-3 flex-wrap">
                         <span>판독 클러스터 크기: <b className="font-mono">{(result.carvedSizeBytes / 1024).toFixed(2)} KB</b></span>
-                        <span>ECC 교정 비트: <b className="font-mono text-indigo-600 dark:text-indigo-400">{result.eccRecoveredBits}비트</b></span>
+                        <span>ECC 교정 비트: <b className="font-mono text-blue-600 dark:text-blue-400">{result.eccRecoveredBits}비트</b></span>
                       </div>
                     </div>
 
@@ -329,7 +329,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                         <span className="font-bold text-slate-800 dark:text-slate-200">
                           Deep 16-Signature Carve Telemetry ({carveReport.signatureName})
                         </span>
-                        <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                        <span className="font-mono text-blue-600 dark:text-blue-400">
                           {carveReport.engineSource === 'native-cpp-dll'
                             ? 'DiskSentinelRecovery.dll'
                             : carveReport.engineSource === 'rust-parity-fallback'
@@ -358,7 +358,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                         </div>
                         <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
                           <div className="text-[10px] font-sans text-slate-500">Shannon Entropy</div>
-                          <div className="font-bold text-indigo-600 dark:text-indigo-400">
+                          <div className="font-bold text-blue-600 dark:text-blue-400">
                             {carveReport.shannonEntropy.toFixed(3)} bits/B
                           </div>
                         </div>

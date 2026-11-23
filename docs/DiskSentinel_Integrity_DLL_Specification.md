@@ -13,7 +13,7 @@
 
 ## 1. 개발 배경 및 순수 창작 설계 의의 (Design Philosophy)
 
-기존 4-DLL 아키텍처에 **5번째 순수 창작 네이티브 라이브러리(`DiskSentinelIntegrity.dll`)**가 합류함으로써 DiskSentinel Pro는 **Penta-DLL(5-DLL) 순수 창작 네이티브 엔진 스위트**를 완성합니다:
+기존 4-DLL 아키텍처에 **5번째 순수 창작 네이티브 라이브러리(`DiskSentinelIntegrity.dll`)**가 합류함으로써 Disk Bad Sector Scanner는 **Penta-DLL(5-DLL) 순수 창작 네이티브 엔진 스위트**를 완성합니다:
 
 1. **`DiskSentinelNativeCore.dll`**: OS 캐시 우회 Direct DMA, Memory-Mapped Zero-Copy I/O, $O(\log K)$ 이진 분할 탐색, S.M.A.R.T./NVMe 패스스루
 2. **`DiskSentinelForensics.dll`**: Welford 단일 패스 Z-Score, 익스텐트 히트맵, 섀넌 엔트로피, GPT CRC32/VBR 구조 검증

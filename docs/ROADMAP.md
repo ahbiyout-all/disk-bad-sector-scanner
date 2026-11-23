@@ -1,7 +1,7 @@
 # Disk Bad Sector Scanner - Project Implementation Roadmap (ROADMAP.md)
 
 - **Application**: Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기)
-- **Current Version**: v4.6.0
+- **Current Version**: v4.6.0 (Audit Patch v4.6.4)
 - **Author**: AhBiYout (GitHub: [AhBiYout-all](https://github.com/AhBiYout-all))
 - **Affiliation**: CISNet (https://www.cisnet.co.kr)
 - **Official Blog**: https://ahbiyoutvibe.blogspot.com/
@@ -353,5 +353,33 @@
   - `npm run lint`: PASS (0 errors)
   - `npm run build`: PASS (0 errors)
   - C++ native compilation check: PASS (0 warnings)
+- **Current Status**: `VERIFIED`
+- **Remaining Blockers**: None
+
+---
+
+### [TASK-AUDIT-13] Penta-DLL Deep Self-Reflection Audit, IPC/Win32 Boundary Hardening, Slate+Cobalt Blue UX Theme & Docs Sync
+- **Description**: Penta-DLL(5종) 네이티브 아키텍처, Win32 C# 런처, Rust 코어, Tauri IPC, 프론트엔드 상태·테마(Slate + Cobalt Blue) 및 기술 문서 전반에 대한 2차 전수 감사(v4.6.4) 수행 및 4계층 정합성 일괄 시정.
+- **Priority**: P0
+- **Dependencies**: None
+- **Target Files**:
+  - `src/native/DiskSentinelLauncher.cs`
+  - `src/native/rust/src/lib.rs`
+  - `src-tauri/src/main.rs`
+  - `src/App.tsx`, `src/utils/nativeDriveEngine.ts`, `src/components/HistoryAndComparison.tsx`, `src/components/FolderLbaIntegrityPanel.tsx`
+  - `src/components/*` (Slate + Cobalt Blue UI Theme Unification)
+  - `docs/MODULES.md`, `docs/WORKLOG.md`, `docs/PATCHNOTES.md`, `docs/Native_EXE_Packaging_Guide.md`, `docs/SECURITY_REPORT.md`, `README.md`
+- **Implementation Plan**:
+  1. C# 브릿지 루프백 Origin 화이트리스트(`IsAllowedLocalOrigin` / 403), `QueryHandleSectorSize` 4Kn 동적 섹터 크기 실측, 64비트 LBA 곱셈 오버플로 가드 및 `integrityDllLoaded` 상태 노출 적용.
+  2. Rust `DS_GetDriveDetails` 구조체 제로 초기화·SMART/NVMe health/온도 폴백 C++ 동등화, Tauri `fsutil`/`defrag` `CREATE_NO_WINDOW` 플래그·`sha256_file_streaming` `symlink_metadata` 심볼릭 링크 차단·`u32::try_from` FFI 길이 검증 적용.
+  3. React 비교 이력 자동 선택 잠금 버그 해소, 폴더 LBA `evaluateExtentIntegrityNative` 실연동, Watchdog 중복 퀵스캔 가드, `resolveBadBlocksForRecord` 과거 보고서 LBA 복원 및 전 컴포넌트 코발트 블루 테마 일원화.
+  4. Linux `g++ -std=c++17 -O2 -Wall -Wextra -Werror` 기반 4종 핸들 무의존성 DLL(`Forensics`, `Predictive`, `Recovery`, `Integrity`) KAT/ABI 검증 및 `tsc --noEmit` + `vite build` 검증.
+- **Acceptance Criteria**:
+  - 무의존성 C++ DLL 4종 `g++` 컴파일 경고 0건 및 전 KAT/ABI 테스트 통과.
+  - `npm run lint` 및 `npm run build` 오류 0건, 활성 문서 브랜드·DLL 수치·테마 일치.
+- **Validation**:
+  - Linux `g++` KAT & C ABI struct parity tests: PASS
+  - `npm run lint` & `npm run build`: PASS (0 errors)
+  - *(Windows `cl.exe`/`csc.exe`/`cargo` 타깃은 Linux 환경 제약상 정적 코드 감사로 검증)*
 - **Current Status**: `VERIFIED`
 - **Remaining Blockers**: None

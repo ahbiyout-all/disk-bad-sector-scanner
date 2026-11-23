@@ -464,7 +464,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
 
             <div className="flex items-center gap-3 text-xs">
               <div className="flex items-center gap-1.5">
-                <Cpu className="w-3.5 h-3.5 text-indigo-500" />
+                <Cpu className="w-3.5 h-3.5 text-blue-500" />
                 <span className="text-slate-600 dark:text-slate-400">동시 스레드:</span>
                 <select
                   value={concurrencyThreads}
@@ -530,7 +530,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                           <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
                             {drive.capacityGb !== null ? `${drive.capacityGb} GB` : '용량 N/A'}
                           </span>
-                          <span className="text-[10px] uppercase font-bold text-indigo-500">
+                          <span className="text-[10px] uppercase font-bold text-blue-500">
                             {drive.interface}
                           </span>
                         </div>
@@ -588,7 +588,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                     다중 드라이브 병렬 I/O 검사 완료 ({elapsedSeconds}초 소요)
                   </h4>
                 </div>
-                <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 font-mono">
+                <span className="text-xs font-bold text-blue-700 dark:text-blue-400 font-mono">
                   실측 성공 {completedSummaries.length} / {summaries.length}대
                 </span>
               </div>
@@ -634,7 +634,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                         <td className="py-1.5 px-2 font-bold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">
                           {s.driveName}
                         </td>
-                        <td className="py-1.5 px-2 text-center text-indigo-600 dark:text-indigo-400 font-semibold">
+                        <td className="py-1.5 px-2 text-center text-blue-600 dark:text-blue-400 font-semibold">
                           {s.throughputMbSec !== null ? `${s.throughputMbSec} MB/s` : 'N/A'}
                         </td>
                         <td className="py-1.5 px-2 text-center text-slate-700 dark:text-slate-300">
@@ -690,7 +690,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                       value={fleetSearch}
                       onChange={e => setFleetSearch(e.target.value)}
                       placeholder="모델 / 시리얼 / 마운트 검색"
-                      className="pl-7 pr-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 w-52"
+                      className="pl-7 pr-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 w-52"
                     />
                   </div>
 
@@ -702,7 +702,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                         onClick={() => setFleetStatusFilter(st)}
                         className={`px-2 py-1 cursor-pointer ${
                           fleetStatusFilter === st
-                            ? 'bg-indigo-600 text-white font-bold'
+                            ? 'bg-blue-600 text-white font-bold'
                             : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
@@ -726,7 +726,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                     type="button"
                     disabled={fleetRows.length === 0}
                     onClick={handleExportFleetJson}
-                    className="px-2.5 py-1.5 rounded border border-indigo-500/40 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                    className="px-2.5 py-1.5 rounded border border-blue-500/40 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-40"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Fleet JSON</span>
@@ -786,7 +786,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                     ) : (
                       filteredFleetRows.map(row => (
                         <tr key={row.driveId} className="hover:bg-slate-50 dark:hover:bg-slate-900/60">
-                          <td className="py-2 px-2.5 font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                          <td className="py-2 px-2.5 font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">
                             PD{row.driveIndex} <span className="text-slate-400 font-normal">({row.mountPoint})</span>
                           </td>
                           <td className="py-2 px-2.5 max-w-[230px]">
@@ -859,7 +859,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                      <Terminal className="w-4 h-4 text-indigo-500" />
+                      <Terminal className="w-4 h-4 text-blue-500" />
                       <span>CLI 헤드리스 배치 자동화 빌더 (--batch)</span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -914,7 +914,7 @@ export const ParallelDriveScanModal: React.FC<ParallelDriveScanModalProps> = ({
                     type="checkbox"
                     checked={cliFailOnBad}
                     onChange={e => setCliFailOnBad(e.target.checked)}
-                    className="rounded border-slate-300 text-indigo-600"
+                    className="rounded border-slate-300 text-blue-600"
                   />
                   <span>배드섹터·재할당 경고 감지 시 비정상 종료 코드 반환 (--fail-on-bad: Warning=10, Bad=20)</span>
                 </label>

@@ -21,7 +21,9 @@ import {
   queryTauriProbePathsIntegrity
 } from '../utils/nativeDriveEngine';
 import {
+  evaluateExtentIntegrityNative,
   evaluateExtentIntegritySync,
+  ExtentIntegrityReport,
   IntegrityEngineStatus,
   queryIntegrityEngineStatus
 } from '../utils/integrityDllBridge';
@@ -83,6 +85,7 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [feedback, setFeedback] = useState<{ type: 'info' | 'error'; message: string } | null>(null);
   const [integrityEngine, setIntegrityEngine] = useState<IntegrityEngineStatus | null>(null);
+  const [extentEvalMap, setExtentEvalMap] = useState<Record<string, ExtentIntegrityReport>>({});
 
   const tauriAvailable = isTauriDesktopRuntime();
 
@@ -95,6 +98,40 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
       active = false;
     };
   }, []);
+
+  React.useEffect(() => {
+    let active = true;
+    if (entries.length === 0) {
+      setExtentEvalMap({});
+      return;
+    }
+    void Promise.all(
+      entries.map(async entry => {
+        const rep = await evaluateExtentIntegrityNative(
+          entry.extents,
+          entry.overlappingBadLbas,
+          entry.overlappingSlowLbas,
+          {
+            hashMismatch: entry.status === 'HASH_MISMATCH',
+            isUnreadable: entry.status === 'UNREADABLE',
+            isMissing: entry.status === 'MISSING_FILE',
+            hasSha256: Boolean(entry.currentSha256)
+          }
+        );
+        return [entry.id, rep] as const;
+      })
+    ).then(pairs => {
+      if (!active) return;
+      const next: Record<string, ExtentIntegrityReport> = {};
+      for (const [id, rep] of pairs) {
+        next[id] = rep;
+      }
+      setExtentEvalMap(next);
+    });
+    return () => {
+      active = false;
+    };
+  }, [entries]);
 
   const summary = useMemo(() => {
     let verified = 0;
@@ -403,7 +440,7 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
                 <button
                   type="button"
                   onClick={() => handleRemoveRoot(root)}
-                  aria-label={`${root} 감시 해제`}
+                  aria-label={locale === 'en' ? `Stop watching ${root}` : `${root} 감시 해제`}
                   className="text-slate-400 hover:text-red-500 cursor-pointer"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -551,17 +588,19 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
                     entry.driveIndex !== null
                       ? drives.find(d => d.id === `drive-tauri-physical-${entry.driveIndex}`)
                       : undefined;
-                  const extentEval = evaluateExtentIntegritySync(
-                    entry.extents,
-                    entry.overlappingBadLbas,
-                    entry.overlappingSlowLbas,
-                    {
-                      hashMismatch: entry.status === 'HASH_MISMATCH',
-                      isUnreadable: entry.status === 'UNREADABLE',
-                      isMissing: entry.status === 'MISSING_FILE',
-                      hasSha256: Boolean(entry.currentSha256)
-                    }
-                  );
+                  const extentEval =
+                    extentEvalMap[entry.id] ??
+                    evaluateExtentIntegritySync(
+                      entry.extents,
+                      entry.overlappingBadLbas,
+                      entry.overlappingSlowLbas,
+                      {
+                        hashMismatch: entry.status === 'HASH_MISMATCH',
+                        isUnreadable: entry.status === 'UNREADABLE',
+                        isMissing: entry.status === 'MISSING_FILE',
+                        hasSha256: Boolean(entry.currentSha256)
+                      }
+                    );
 
                   return (
                     <tr key={entry.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
@@ -577,7 +616,7 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
                         <div className="flex items-center gap-1.5">
                           {renderStatusBadge(entry.status)}
                           <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                            생존성 {extentEval.survivabilityPct.toFixed(0)}%
+                            {locale === 'en' ? 'Surv.' : '생존성'} {extentEval.survivabilityPct.toFixed(0)}%
                           </span>
                         </div>
                         {entry.overlappingBadLbas.length > 0 && (

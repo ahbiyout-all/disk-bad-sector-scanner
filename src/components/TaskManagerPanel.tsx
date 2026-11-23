@@ -24,7 +24,7 @@ const TEST_BADGE: Record<DiagnosticTask['testType'], { label: string; cls: strin
   },
   butterfly: {
     label: 'BFLY',
-    cls: 'text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60'
+    cls: 'text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60'
   },
   erase: {
     label: 'ERASE',
@@ -56,7 +56,7 @@ export const TaskManagerPanel: React.FC<TaskManagerPanelProps> = ({
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md p-2.5">
       <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
         <div className="flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-indigo-500" />
+          <Layers className="w-3.5 h-3.5 text-blue-500" />
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
             작업 큐
           </span>
@@ -95,7 +95,7 @@ export const TaskManagerPanel: React.FC<TaskManagerPanelProps> = ({
                 onClick={() => onSelectTask(task.id)}
                 className={`p-2 rounded border transition-colors cursor-pointer ${
                   isSelected
-                    ? 'border-indigo-500 bg-indigo-50/60 dark:bg-indigo-950/35'
+                    ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/35'
                     : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 hover:bg-slate-100/70 dark:hover:bg-slate-800/50'
                 }`}
               >
@@ -120,7 +120,7 @@ export const TaskManagerPanel: React.FC<TaskManagerPanelProps> = ({
                       badTotal > 0
                         ? 'bg-red-500'
                         : task.status === 'running'
-                        ? 'bg-indigo-500'
+                        ? 'bg-blue-500'
                         : task.status === 'completed'
                         ? 'bg-emerald-500'
                         : 'bg-amber-500'

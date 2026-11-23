@@ -409,7 +409,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
           {/* 2. Hardware Sanitize / Security Capabilities Telemetry */}
           <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 space-y-3">
             <div className="flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-indigo-500" />
+              <Cpu className="w-4 h-4 text-blue-500" />
               <span className="font-bold text-slate-900 dark:text-white">
                 컨트롤러 펌웨어 보안 삭제(Sanitize / Security Erase) 지원 매트릭스
               </span>
@@ -431,7 +431,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
                 </div>
                 <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
                   <div className="text-[10px] text-slate-500 font-sans">SANICAP (Block/Crypto)</div>
-                  <div className="font-bold text-indigo-500">
+                  <div className="font-bold text-blue-500">
                     0x{cap.nvmeFormat.sanicapRaw.toString(16).toUpperCase().padStart(2, '0')}
                   </div>
                 </div>
@@ -535,7 +535,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
           <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-indigo-500" />
+                <CheckCircle2 className="w-4 h-4 text-blue-500" />
                 <div>
                   <div className="font-bold text-slate-900 dark:text-white">
                     NIST SP 800-88 / Xoshiro256** 보안 소거 패턴 생성 &amp; 잔존 데이터 검증기
@@ -546,7 +546,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
                 </div>
               </div>
               {wipeVerifyResult && (
-                <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 font-semibold">
+                <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 font-semibold">
                   {wipeVerifyResult.engineSource === 'native-cpp-dll'
                     ? 'DiskSentinelRecovery.dll'
                     : wipeVerifyResult.engineSource === 'rust-parity-fallback'
@@ -610,7 +610,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
                 type="button"
                 disabled={wipeBusy}
                 onClick={() => void handleGenerateAndVerifyWipePattern()}
-                className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 whitespace-nowrap"
               >
                 패턴 버퍼 생성 &amp; 무결성 검증
               </button>
@@ -639,7 +639,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
                 {wipeGenResult && (
                   <div className="text-slate-600 dark:text-slate-300 truncate">
                     생성 버퍼 ({wipeGenResult.bufferLength}B · CRC32 0x{wipeGenResult.crc32.toString(16).toUpperCase().padStart(8, '0')}):{' '}
-                    <span className="text-indigo-600 dark:text-indigo-400">
+                    <span className="text-blue-600 dark:text-blue-400">
                       {wipeGenResult.previewBytes.slice(0, 16).map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ')}
                     </span>
                   </div>
@@ -722,7 +722,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
             type="button"
             disabled={executing !== null}
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold cursor-pointer disabled:opacity-40"
+            className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold cursor-pointer disabled:opacity-40"
           >
             닫기
           </button>

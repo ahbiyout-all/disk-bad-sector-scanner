@@ -553,7 +553,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                       setOutputPath(d.outputPath);
                       setMapPath(d.mapPath);
                     }}
-                    className="px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 hover:border-indigo-500 text-[11px] font-mono text-slate-700 dark:text-slate-300 cursor-pointer disabled:opacity-40"
+                    className="px-2.5 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 hover:border-blue-500 text-[11px] font-mono text-slate-700 dark:text-slate-300 cursor-pointer disabled:opacity-40"
                   >
                     #{part.index} {part.name} ({part.sizeGb}GB · LBA {part.startLba.toLocaleString()}~{part.endLba.toLocaleString()})
                   </button>
@@ -677,7 +677,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                   disabled={isRunning}
                   checked={autoZeroFillBad}
                   onChange={e => setAutoZeroFillBad(e.target.checked)}
-                  className="rounded border-slate-300 text-indigo-600"
+                  className="rounded border-slate-300 text-blue-600"
                 />
                 <span>최대 재시도 실패 섹터에 자동으로 0x00 패딩 기록 (파일시스템 이미지 오프셋 정렬 유지)</span>
               </label>
@@ -698,7 +698,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
           <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 space-y-3.5">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <HardDrive className="w-4 h-4 text-indigo-500" />
+                <HardDrive className="w-4 h-4 text-blue-500" />
                 <span className="font-bold text-slate-900 dark:text-white">
                   {renderPhaseBadge(currentPhase)}
                 </span>
@@ -711,7 +711,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
               <div className="flex items-center gap-3 font-mono tabular-nums text-[11px]">
                 <span className="text-slate-500 dark:text-slate-400">{writtenMb} MB</span>
                 <span className="text-slate-500 dark:text-slate-400">{elapsedSec}s</span>
-                <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                <span className="text-blue-600 dark:text-blue-400 font-bold">
                   {backendStatus ? `${backendStatus.throughputMbSec.toFixed(1)} MB/s` : '0.0 MB/s'}
                 </span>
                 <span className="text-slate-900 dark:text-white font-bold">
@@ -725,20 +725,20 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
               {/* Pass 1 */}
               <div className={`p-3 rounded-lg border transition-colors ${
                 currentPhase === 'copying'
-                  ? 'border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/30'
+                  ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/30'
                   : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50'
               }`}>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[11px] font-bold text-slate-900 dark:text-slate-100">
                     Pass 1 · 고속 복사 (Copying)
                   </span>
-                  <span className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                  <span className="text-[11px] font-mono font-bold text-blue-600 dark:text-blue-400">
                     {multiPassMetrics.pass1Pct}%
                   </span>
                 </div>
                 <div className="w-full h-1.5 rounded bg-slate-200 dark:bg-slate-800 overflow-hidden mb-1.5">
                   <div
-                    className="h-full bg-indigo-500 transition-all duration-200"
+                    className="h-full bg-blue-500 transition-all duration-200"
                     style={{ width: `${multiPassMetrics.pass1Pct}%` }}
                   />
                 </div>
@@ -856,7 +856,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                     · 병합 구간 {recoveryPlan.coalescedIntervalCount.toLocaleString()}개
                   </span>
                   <span>
-                    권고 다음 패스: <strong className="text-indigo-600 dark:text-indigo-400 uppercase">{recoveryPlan.suggestedPhase}</strong>
+                    권고 다음 패스: <strong className="text-blue-600 dark:text-blue-400 uppercase">{recoveryPlan.suggestedPhase}</strong>
                     {recoveryPlan.hasNextWork
                       ? ` (LBA #${recoveryPlan.nextWorkStartLba.toLocaleString()} · ${recoveryPlan.nextWorkSectorCount} sec)`
                       : ' (전 구간 처리 완료)'}
@@ -887,7 +887,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
               </div>
               <div className="p-2 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
                 <div className="text-[10px] text-slate-500 font-sans">총 재시도 횟수</div>
-                <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400">
+                <div className="text-sm font-bold text-blue-600 dark:text-blue-400">
                   {multiPassMetrics.totalRetries.toLocaleString()}회
                 </div>
               </div>
@@ -1024,7 +1024,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                   type="button"
                   disabled={!tauriActive || !pathValidation.valid}
                   onClick={() => void handleStartBackendDdrescue(false)}
-                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
                   다중 패스 이미지 복제 시작

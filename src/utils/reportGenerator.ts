@@ -214,12 +214,12 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
   // Top Accent Header
   const headerGrad = ctx.createLinearGradient(0, 0, width, 0);
   headerGrad.addColorStop(0, '#0F172A');
-  headerGrad.addColorStop(1, '#1E1B4B');
+  headerGrad.addColorStop(1, '#1E3A8A');
   ctx.fillStyle = headerGrad;
   ctx.fillRect(0, 0, width, 140);
 
   // Decorative Top Line
-  ctx.fillStyle = '#6366F1';
+  ctx.fillStyle = '#2563EB';
   ctx.fillRect(0, 0, width, 6);
 
   // Header Title
@@ -227,7 +227,7 @@ export async function exportPdfReport(record: SavedScanRecord, badBlocks: Sector
   ctx.font = 'bold 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif';
   ctx.fillText('Disk Bad Sector Scanner - 디스크 표면 정밀 진단 보고서', 50, 60);
 
-  ctx.fillStyle = '#A5B4FC';
+  ctx.fillStyle = '#93C5FD';
   ctx.font = '600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", monospace';
   ctx.fillText('STORAGE INTEGRITY & BAD SECTOR DIAGNOSTIC CERTIFICATE', 50, 90);
 

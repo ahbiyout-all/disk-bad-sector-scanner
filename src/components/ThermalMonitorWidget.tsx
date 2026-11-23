@@ -95,7 +95,7 @@ export const ThermalMonitorWidget: React.FC<ThermalMonitorWidgetProps> = ({
               key={d.id}
               className={`flex items-center justify-between gap-2 px-2 py-1 rounded text-[11px] border ${
                 isActive
-                  ? 'border-indigo-500/40 bg-indigo-50/40 dark:bg-indigo-950/25'
+                  ? 'border-blue-500/40 bg-blue-50/40 dark:bg-blue-950/25'
                   : 'border-transparent bg-slate-50/70 dark:bg-slate-950/50'
               }`}
             >

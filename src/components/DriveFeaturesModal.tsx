@@ -275,7 +275,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
           {!loading && status && !ataAvailable && (
             <div className="p-4 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/50 space-y-2">
               <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-slate-200">
-                <Info className="w-4 h-4 text-indigo-500 shrink-0" />
+                <Info className="w-4 h-4 text-blue-500 shrink-0" />
                 <span>
                   {status.protocol === 'NVMe'
                     ? 'NVMe 컨트롤러 — ATA AAM/APM/스핀다운 패스스루 대상 아님'
@@ -293,7 +293,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
           <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 space-y-2.5">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
-                <Volume2 className="w-4 h-4 text-indigo-500" />
+                <Volume2 className="w-4 h-4 text-blue-500" />
                 <div>
                   <div className="font-bold text-slate-900 dark:text-slate-100">
                     AAM · 자동 음향 관리 (ATA SET FEATURES 0x42 / 0xC2)
@@ -321,7 +321,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
               <div className="flex-1 space-y-1">
                 <div className="flex justify-between text-[10px] font-mono tabular-nums text-slate-500">
                   <span>0x80 (128 · 저소음 Seek)</span>
-                  <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                  <span className="font-bold text-blue-600 dark:text-blue-400">
                     0x{aamLevel.toString(16).toUpperCase().padStart(2, '0')} ({aamLevel})
                   </span>
                   <span>0xFE (254 · 최고 성능)</span>
@@ -333,7 +333,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                   value={aamLevel}
                   disabled={!ataAvailable || !status?.aamSupported || executing !== null}
                   onChange={e => setAamLevel(Number(e.target.value))}
-                  className="w-full accent-indigo-600 cursor-pointer disabled:opacity-40"
+                  className="w-full accent-blue-600 cursor-pointer disabled:opacity-40"
                   aria-label="AAM 레벨 슬라이더"
                 />
               </div>
@@ -342,7 +342,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                   type="button"
                   disabled={!ataAvailable || !status?.aamSupported || executing !== null}
                   onClick={() => void runCommand('aam-on', () => invokeTauriSetAam(drive, true, aamLevel))}
-                  className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {executing === 'aam-on' ? '적용 중...' : '적용'}
                 </button>
@@ -387,7 +387,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                     onClick={() => setApmLevel(p.val)}
                     className={`px-1.5 py-0.5 rounded border cursor-pointer disabled:opacity-40 ${
                       apmLevel === p.val
-                        ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-bold'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-bold'
                         : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-400'
                     }`}
                   >
@@ -401,7 +401,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
               <div className="flex-1 space-y-1">
                 <div className="flex justify-between text-[10px] font-mono tabular-nums text-slate-500">
                   <span>0x01 (최대 절전)</span>
-                  <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                  <span className="font-bold text-blue-600 dark:text-blue-400">
                     0x{apmLevel.toString(16).toUpperCase().padStart(2, '0')} ({apmLevel})
                   </span>
                   <span>0xFE (254 · 최고 성능)</span>
@@ -413,7 +413,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                   value={apmLevel}
                   disabled={!ataAvailable || !status?.apmSupported || executing !== null}
                   onChange={e => setApmLevel(Number(e.target.value))}
-                  className="w-full accent-indigo-600 cursor-pointer disabled:opacity-40"
+                  className="w-full accent-blue-600 cursor-pointer disabled:opacity-40"
                   aria-label="APM 레벨 슬라이더"
                 />
               </div>
@@ -422,7 +422,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                   type="button"
                   disabled={!ataAvailable || !status?.apmSupported || executing !== null}
                   onClick={() => void runCommand('apm-on', () => invokeTauriSetApm(drive, true, apmLevel))}
-                  className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {executing === 'apm-on' ? '적용 중...' : '적용'}
                 </button>
@@ -472,7 +472,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                 type="button"
                 disabled={!ataAvailable || executing !== null}
                 onClick={() => void runCommand('timer', () => invokeTauriSetStandbyTimer(drive, standbyCode))}
-                className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
               >
                 {executing === 'timer' ? '설정 중...' : '타이머 적용'}
               </button>
@@ -606,7 +606,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
                   type="button"
                   disabled={!ataAvailable || !status?.readLookAheadSupported || executing !== null}
                   onClick={() => void runCommand('rl-on', () => invokeTauriSetReadLookAhead(drive, true))}
-                  className="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex-1 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   활성화 (0xAA)
                 </button>
@@ -644,7 +644,7 @@ export const DriveFeaturesModal: React.FC<DriveFeaturesModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold cursor-pointer"
+              className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold cursor-pointer"
             >
               닫기
             </button>

@@ -1,5 +1,21 @@
 # Disk Bad Sector Scanner - Developer Work Log (작업 로그)
 
+### 2026-11-23 (v4.6.4 전수 자아성찰 감사(Self-Reflection Deep Audit), Slate+Cobalt Blue UI 일원화 및 문서 정합성 정비)
+- **Win32 C# 런처(`src/native/DiskSentinelLauncher.cs`) CORS/Origin·4Kn 섹터·64비트 LBA 가드 강화**:
+  - 로컬 HTTP 브릿지에 `IsAllowedLocalOrigin` 루프백 Origin 화이트리스트(`localhost` / `127.0.0.1` / `[::1]`) 검증을 도입해 비로컬 Origin 요청을 `403 forbidden_origin` + `Vary: Origin`으로 차단.
+  - `QueryHandleSectorSize`(`IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`)로 물리/가상 드라이브의 실제 섹터 크기(512B / 4Kn 4096B)를 동적 실측하고, `lba * sectorSize` 및 `sectorCount * sectorSize` 64비트 오버플로 경계 검사를 적용.
+  - `/api/native/status` JSON 응답에 제5 DLL 로드 상태(`integrityDllLoaded`) 노출 및 `src/utils/nativeDriveEngine.ts` 브리지 타입 동기화.
+- **Rust 코어(`src/native/rust/src/lib.rs`) & Tauri IPC 백엔드(`src-tauri/src/main.rs`) 정밀 감사 패치**:
+  - `DS_GetDriveDetails`에서 출력 구조체 제로 초기화(`std::mem::zeroed`)를 보장하고 S.M.A.R.T./NVMe 데이터 기반 `health_score`·온도 폴백 연산을 C++ 엔진과 동등화.
+  - `fsutil`/`defrag` 서브프로세스 실행에 `CREATE_NO_WINDOW(0x0800_0000)` 플래그를 적용해 백그라운드 LBA/TRIM 프로브 시 콘솔 창 깜빡임 제거.
+  - `sha256_file_streaming`에서 `symlink_metadata`로 심볼릭 링크·리파스 포인트를 배제하고, `DiskSentinelForensics`/`Predictive`/`Recovery`/`Integrity` DLL FFI 호출 전 `u32::try_from` 길이 경계 검증 추가.
+- **프론트엔드 상태 정합성 수정 & 클래식 고밀도 Slate + Cobalt Blue 테마 전면 일원화**:
+  - `HistoryAndComparison.tsx`: 스캔 이력이 1→2건으로 늘어날 때 사용자의 비교 선택을 덮어쓰던 `useEffect` 자동 선택 잠금 버그 해결.
+  - `FolderLbaIntegrityPanel.tsx`: `evaluateExtentIntegrityNative`를 통해 `DiskSentinelIntegrity.dll`의 $O((E+B)\log B)$ 익스텐트 생존성 평가를 실시간 연동하고 한국어 접근성 라벨 정비.
+  - `App.tsx`: 트레이 툴팁·알림 제목(`Disk Bad Sector Scanner`) 일원화, Watchdog 동일 드라이브 중복 퀵스캔 실행 방지 가드, `resolveBadBlocksForRecord` 기반 과거 기록 보고서/내보내기 시 결함 LBA 재구성 보강.
+  - `LbaGraphView`, `ScanMethodSelector`, `SmartAttributeTrendChart`, `SmartRemapModal`, `SectorGrid`, `LatencyHistogramDashboard` 등 전 컴포넌트의 잔여 `indigo-*`/`purple-*` UI 크롬을 코발트 블루(`blue-*`/`sky-*`)로 일원화(Solidigm 벤더 배지·의미론적 미디어 상태색 제외).
+- **문서·스펙 정합성 업데이트**: `Native_EXE_Packaging_Guide.md`의 구형 `14대 DLL` 표기를 Penta-DLL(5종)으로 교정하고 `MODULES.md`, `PATCHNOTES.md`, `ROADMAP.md`, `SECURITY_REPORT.md`, `README.md` 및 개별 DLL 명세서의 구형 제품명·감사 이력을 현행화.
+
 ### 2026-11-22 (v4.6.3 제5 순수 창작 DLL `DiskSentinelIntegrity.dll` 구축, 기존 4-DLL 심층 감사 패치 및 명세서 등록)
 - **제5 순수 창작 네이티브 DLL `DiskSentinelIntegrity.dll` 설계·구현 (`src/native/DiskSentinelIntegrity.h`, `DiskSentinelIntegrity.cpp`)**:
   - 디바이스 핸들 의존성 없이 동작하는 무결성·Bit-Rot·LBA 익스텐트 상관·시점 Diff·플릿 Watchdog SLA 전용 C ABI 엔진(8대 익스포트, `#pragma pack(push, 8)` 명시 패딩 Zero-Padding 구조체, 4종 KAT 자가진단) 구현.

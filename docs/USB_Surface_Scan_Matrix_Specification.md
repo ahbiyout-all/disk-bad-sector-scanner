@@ -1,6 +1,6 @@
 # USB 버전 및 장치 클래스별 적응형 표면검사 매트릭스 명세서
 
-- **프로젝트명**: DiskSentinel Pro (디스크 배드섹터 정밀 검사기)
+- **프로젝트명**: Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기)
 - **버전**: v4.6.0
 - **라이선스**: Apache-2.0
 - **연계 모듈**:
@@ -23,7 +23,7 @@
 3. **용량 위조(Fake-Capacity) 플래시 메모리/microSD 검출 부재**:
    - 컨트롤러 펌웨어를 조작해 실제 `8GB`/`32GB` NAND 위에 `1TB`/`2TB`로 LBA 주소를 래핑(Aliasing)하거나 가비지(`0x00`/`0xFF`)를 반환하는 위조 장치는 일반 순차 읽기(`ReadFile` 성공)만으로는 가려낼 수 없습니다.
 
-이를 해결하기 위해 DiskSentinel Pro는 **(1) Win32 USB 토폴로지 실측**, **(2) 버전×장치 매트릭스 기반 네이티브 엔진 동적 튜닝**, **(3) 2단계 위조 용량 가드(Fake-Capacity Flash Guard)**를 엔드투엔드 통합했습니다.
+이를 해결하기 위해 Disk Bad Sector Scanner는 **(1) Win32 USB 토폴로지 실측**, **(2) 버전×장치 매트릭스 기반 네이티브 엔진 동적 튜닝**, **(3) 2단계 위조 용량 가드(Fake-Capacity Flash Guard)**를 엔드투엔드 통합했습니다.
 
 ---
 

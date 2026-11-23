@@ -367,10 +367,10 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
 
                 <div className="p-3 rounded-lg border bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800">
                   <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 mb-1">
-                    <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                    <Clock className="w-3.5 h-3.5 text-blue-500" />
                     폴링 주기
                   </div>
-                  <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400 font-mono tabular-nums">
+                  <div className="text-sm font-bold text-blue-600 dark:text-blue-400 font-mono tabular-nums">
                     {pollInterval}초 간격
                   </div>
                   <div className="text-[9px] text-slate-400 mt-1 font-mono">
@@ -525,7 +525,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 space-y-3"
               >
                 <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <Plus className="w-3.5 h-3.5 text-indigo-500" />
+                  <Plus className="w-3.5 h-3.5 text-blue-500" />
                   <span>새 워치독 경보 규칙 / 정기 검사 스케줄 추가</span>
                 </div>
 
@@ -616,7 +616,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                 <div className="flex justify-end">
                   <button
                     type="submit"
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>규칙 저장</span>
@@ -718,7 +718,7 @@ export const TrayGuardianModal: React.FC<TrayGuardianModalProps> = ({
                             ? 'border-red-500/30 bg-red-50/70 dark:bg-red-950/30 text-red-800 dark:text-red-200'
                             : ev.severity === 'warning'
                             ? 'border-amber-500/30 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200'
-                            : 'border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-950/30 text-indigo-800 dark:text-indigo-200'
+                            : 'border-blue-500/30 bg-blue-50/70 dark:bg-blue-950/30 text-blue-800 dark:text-blue-200'
                         }`}
                       >
                         <div className="space-y-0.5">

@@ -385,7 +385,7 @@ export const DiskBenchmarkProfilerModal: React.FC<DiskBenchmarkProfilerModalProp
                       onClick={() => setPreset(opt.id)}
                       className={`px-2.5 py-1 text-[11px] font-semibold cursor-pointer disabled:opacity-50 ${
                         preset === opt.id
-                          ? 'bg-indigo-600 text-white'
+                          ? 'bg-blue-600 text-white'
                           : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                       }`}
                     >
@@ -406,7 +406,7 @@ export const DiskBenchmarkProfilerModal: React.FC<DiskBenchmarkProfilerModalProp
                       onClick={() => setSampleCount(cnt)}
                       className={`px-2.5 py-1 text-[11px] font-mono font-semibold cursor-pointer disabled:opacity-50 ${
                         sampleCount === cnt
-                          ? 'bg-indigo-600 text-white'
+                          ? 'bg-blue-600 text-white'
                           : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                       }`}
                     >
@@ -482,10 +482,10 @@ export const DiskBenchmarkProfilerModal: React.FC<DiskBenchmarkProfilerModalProp
 
             <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
               <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1">
-                <Zap className="w-3.5 h-3.5 text-indigo-500" />
+                <Zap className="w-3.5 h-3.5 text-blue-500" />
                 4KB 랜덤 IOPS
               </div>
-              <div className="text-base font-mono font-bold tabular-nums text-indigo-600 dark:text-indigo-400 mt-1">
+              <div className="text-base font-mono font-bold tabular-nums text-blue-600 dark:text-blue-400 mt-1">
                 {stats.avgIops !== null ? stats.avgIops.toLocaleString() : 'N/A'}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">Q1 Random 4K Read</div>
@@ -644,7 +644,7 @@ export const DiskBenchmarkProfilerModal: React.FC<DiskBenchmarkProfilerModalProp
                       <td className="px-3 py-1.5 text-slate-500">
                         #{s.zoneIndex + 1} ({s.positionPct}%)
                       </td>
-                      <td className="px-3 py-1.5 text-indigo-600 dark:text-indigo-400">
+                      <td className="px-3 py-1.5 text-blue-600 dark:text-blue-400">
                         {s.startLba.toLocaleString()}
                       </td>
                       <td className="px-3 py-1.5 font-bold text-emerald-600 dark:text-emerald-400">

@@ -71,7 +71,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       case 'PC (Windows/Mac/Linux)':
         return <Laptop className="w-4 h-4 text-blue-400 shrink-0" />;
       default:
-        return <Globe className="w-4 h-4 text-purple-400 shrink-0" />;
+        return <Globe className="w-4 h-4 text-sky-400 shrink-0" />;
     }
   };
 

@@ -1,4 +1,4 @@
-# DiskSentinel Pro - Rust 마이그레이션 및 네이티브 코어 구축 가이드
+# Disk Bad Sector Scanner - Rust 마이그레이션 및 네이티브 코어 구축 가이드
 
 - **문서 버전**: v1.0.0
 - **저작자**: AhBiYout (GitHub: [AhBiYout-all](https://github.com/AhBiYout-all))

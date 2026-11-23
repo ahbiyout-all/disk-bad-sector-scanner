@@ -29,16 +29,30 @@ export const HistoryAndComparison: React.FC<HistoryAndComparisonProps> = ({
   useEffect(() => {
     const validIds = new Set(records.map(r => r.id));
     if (records.length === 0) {
-      setSelectedScanAId('');
-      setSelectedScanBId('');
+      if (selectedScanAId !== '') setSelectedScanAId('');
+      if (selectedScanBId !== '') setSelectedScanBId('');
       return;
     }
-    if (!validIds.has(selectedScanBId)) {
-      setSelectedScanBId(records[0].id);
+
+    if (records.length === 1) {
+      const onlyId = records[0].id;
+      if (selectedScanBId !== onlyId) setSelectedScanBId(onlyId);
+      if (selectedScanAId !== onlyId) setSelectedScanAId(onlyId);
+      return;
     }
-    if (!validIds.has(selectedScanAId) || (records.length >= 2 && selectedScanAId === selectedScanBId)) {
-      setSelectedScanAId(records[1]?.id || records[0].id);
+
+    let nextBId = validIds.has(selectedScanBId) ? selectedScanBId : records[0].id;
+    let nextAId = validIds.has(selectedScanAId)
+      ? selectedScanAId
+      : (records.find(r => r.id !== nextBId)?.id || records[0].id);
+
+    if (nextAId === nextBId) {
+      nextBId = records[0].id;
+      nextAId = records[1].id;
     }
+
+    if (nextBId !== selectedScanBId) setSelectedScanBId(nextBId);
+    if (nextAId !== selectedScanAId) setSelectedScanAId(nextAId);
   }, [records, selectedScanAId, selectedScanBId]);
 
   const scanA = records.find(r => r.id === selectedScanAId);

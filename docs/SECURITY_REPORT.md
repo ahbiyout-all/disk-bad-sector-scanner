@@ -22,12 +22,17 @@ This document specifies the protocols used to ensure that no confidential data, 
    - **Symlink & NTFS Junction Loop Protection**: `collect_target_files` inspects entries via `symlink_metadata` to skip reparse points/symlinks and maintains a canonicalized visited directory set.
    - **Path Boundary & CSV Export Neutralization**: Watch-root matching normalizes directory separators and trailing slashes to prevent sibling-prefix collisions, while CSV reports neutralize leading formula characters (`=`, `+`, `-`, `@`, `\t`, `\r`).
    - **Dependency Surface Minimization**: Unused runtime `express` / `@types/express` packages removed from `package.json`.
+- **v4.6.4 Bridge, Symlink, Subprocess & Boundary Hardening**:
+  - `DiskSentinelLauncher.cs` enforces a strict loopback Origin allowlist (`IsAllowedLocalOrigin`, rejecting non-local origins with HTTP `403` + `Vary: Origin`), probes physical sector size dynamically (`QueryHandleSectorSize`), and applies 64-bit LBA overflow checks.
+  - `src-tauri/src/main.rs` adds `CREATE_NO_WINDOW (0x0800_0000)` to `fsutil`/`defrag` helper invocations, guards `sha256_file_streaming` against symlinks/reparse points via `symlink_metadata`, and validates slice lengths with `u32::try_from` prior to C ABI FFI calls.
+  - `src/native/rust/src/lib.rs` zero-initializes `DS_GetDriveDetails` output structs before populating drive descriptors.
 
 5. **Security Scan Checklist**:
    - [x] No personal API keys or OAuth tokens in code.
    - [x] No personal email addresses exposed across source, docs, or workflows.
    - [x] Local push script (`git-push-auto.bat`) excluded from GitHub uploads.
    - [x] Release assets restricted strictly to verified Windows Installer (`.exe`) binaries.
-   - [x] Native OS notifications isolated from command-string interpolation and console popups.
-   - [x] Kernel retrieval-pointer reads bounds-checked and file handles closed on all paths.
-   - [x] CSV export fields sanitized against formula prefix injection.
+   - [x] Native OS notifications and Win32 helper commands isolated from command-string interpolation and console popups.
+   - [x] Local HTTP native bridge restricted to loopback Origin callers.
+   - [x] Kernel retrieval-pointer reads and FFI buffer lengths bounds-checked; file handles closed on all paths.
+   - [x] Directory traversal and file hashing guard against symlink/junction loops; CSV export fields sanitized against formula prefix injection.

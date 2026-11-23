@@ -187,7 +187,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = React.memo(({
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md p-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
         <div className="flex items-center gap-2 min-w-0">
-          <Activity className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+          <Activity className="w-3.5 h-3.5 text-blue-500 shrink-0" />
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
             실시간 LBA {metric === 'latency' ? '응답 지연' : '전송 대역폭'} 오실로스코프
           </span>
@@ -215,7 +215,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = React.memo(({
               onClick={() => setMetric('latency')}
               className={`px-2 py-0.5 text-[10px] font-sans font-semibold cursor-pointer ${
                 metric === 'latency'
-                  ? 'bg-indigo-600 text-white'
+                  ? 'bg-blue-600 text-white'
                   : 'bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
               }`}
             >
@@ -226,7 +226,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = React.memo(({
               onClick={() => setMetric('throughput')}
               className={`px-2 py-0.5 text-[10px] font-sans font-semibold cursor-pointer flex items-center gap-1 ${
                 metric === 'throughput'
-                  ? 'bg-indigo-600 text-white'
+                  ? 'bg-blue-600 text-white'
                   : 'bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
               }`}
             >
@@ -338,7 +338,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = React.memo(({
                 <path
                   d={linePath}
                   fill="none"
-                  className={metric === 'latency' ? 'stroke-indigo-500' : 'stroke-emerald-500'}
+                  className={metric === 'latency' ? 'stroke-blue-500' : 'stroke-emerald-500'}
                   strokeWidth={1.5}
                 />
               )}
@@ -354,7 +354,7 @@ export const LbaGraphView: React.FC<LbaGraphViewProps> = React.memo(({
                     : pt.throughputMbSec;
                 const cy = yScale(val);
 
-                let fillClass = metric === 'latency' ? 'fill-indigo-500' : 'fill-emerald-500';
+                let fillClass = metric === 'latency' ? 'fill-blue-500' : 'fill-emerald-500';
                 if (pt.status === 'bad') fillClass = 'fill-red-600';
                 else if (pt.status === 'critical' || pt.latencyMs >= 150) fillClass = 'fill-orange-500';
                 else if (pt.status === 'slow' || pt.latencyMs >= 100) fillClass = 'fill-amber-500';

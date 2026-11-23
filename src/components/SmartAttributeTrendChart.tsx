@@ -893,7 +893,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-200 dark:border-slate-800">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-indigo-500 shrink-0" />
+            <TrendingUp className="w-4 h-4 text-blue-500 shrink-0" />
             <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
               S.M.A.R.T. 주요 속성 장기 열화 추이
             </h3>
@@ -907,7 +907,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             {(Object.values(nativeProjections) as SmartTrendProjectionReport[]).some(p => p?.engineSource === 'native-cpp-dll') ? (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                <span className="font-mono text-blue-600 dark:text-blue-400">
                   DiskSentinelPredictive.dll OLS
                 </span>
               </>
@@ -938,7 +938,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                 key={opt.id}
                 type="button"
                 onClick={() => setRangeFilter(opt.id)}
-                className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   rangeFilter === opt.id
                     ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-2xs font-semibold'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -954,7 +954,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             <button
               type="button"
               onClick={() => setValueMode('raw')}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+              className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                 valueMode === 'raw'
                   ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-2xs font-semibold'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -965,7 +965,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             <button
               type="button"
               onClick={() => setValueMode('normalized')}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+              className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                 valueMode === 'normalized'
                   ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-2xs font-semibold'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -979,9 +979,9 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             type="button"
             onClick={() => setShowTrendline(prev => !prev)}
             aria-pressed={showTrendline}
-            className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+            className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               showTrendline
-                ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+                ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
                 : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
@@ -993,7 +993,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
               type="button"
               onClick={() => setIncludeLiveSnapshot(prev => !prev)}
               aria-pressed={includeLiveSnapshot}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+              className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                 includeLiveSnapshot
                   ? 'bg-slate-800 dark:bg-slate-200 border-slate-800 dark:border-slate-200 text-white dark:text-slate-900'
                   : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -1007,9 +1007,9 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
             <button
               type="button"
               onClick={handleManualSnapshot}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             >
-              <BookmarkPlus className="w-3.5 h-3.5 text-indigo-500" />
+              <BookmarkPlus className="w-3.5 h-3.5 text-blue-500" />
               <span>{snapshotSavedHint ? '저장됨' : '스냅샷 저장'}</span>
             </button>
           )}
@@ -1022,7 +1022,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                <Activity className="w-4 h-4 text-indigo-500 shrink-0" />
+                <Activity className="w-4 h-4 text-blue-500 shrink-0" />
                 <span>누적된 S.M.A.R.T. 이력 스냅샷이 없습니다</span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -1036,7 +1036,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   onClick={handleManualSnapshot}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <BookmarkPlus className="w-3.5 h-3.5 text-indigo-500" />
+                  <BookmarkPlus className="w-3.5 h-3.5 text-blue-500" />
                   <span>현재 S.M.A.R.T. 기록</span>
                 </button>
               )}
@@ -1044,7 +1044,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                 <button
                   type="button"
                   onClick={onStartScan}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Play className="w-3.5 h-3.5" />
                   <span>표면 검사 시작</span>
@@ -1097,7 +1097,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   type="button"
                   disabled={!hasData}
                   onClick={() => toggleSeries(series.config.id)}
-                  className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-[11px] transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-[11px] transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                     isActive
                       ? 'bg-slate-50 dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-semibold'
                       : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1163,14 +1163,14 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                     y={padding.top}
                     width={Math.max(0, getX(totalSlots) - getX(timelinePoints.length - 1))}
                     height={innerHeight}
-                    className="fill-indigo-500/5 dark:fill-indigo-400/5"
+                    className="fill-blue-500/5 dark:fill-blue-400/5"
                   />
                   <line
                     x1={getX(timelinePoints.length - 1)}
                     y1={padding.top}
                     x2={getX(timelinePoints.length - 1)}
                     y2={padding.top + innerHeight}
-                    stroke="#6366F1"
+                    stroke="#3B82F6"
                     strokeWidth="1"
                     strokeDasharray="3 3"
                     strokeOpacity="0.45"
@@ -1179,7 +1179,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                     x={getX(totalSlots) - 4}
                     y={padding.top + 11}
                     textAnchor="end"
-                    className="fill-indigo-500/80 dark:fill-indigo-400/80 text-[9px] font-mono"
+                    className="fill-blue-500/80 dark:fill-blue-400/80 text-[9px] font-mono"
                   >
                     예측 구간 (+2회)
                   </text>
@@ -1503,7 +1503,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                   y1={padding.top}
                   x2={getX(hoverIndex)}
                   y2={padding.top + innerHeight}
-                  stroke="#6366F1"
+                  stroke="#3B82F6"
                   strokeWidth="1.2"
                   strokeDasharray="3 3"
                 />
@@ -1562,7 +1562,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                         y1={padding.top + innerHeight}
                         x2={x}
                         y2={padding.top + innerHeight + 4}
-                        stroke="#818CF8"
+                        stroke="#60A5FA"
                         strokeWidth="1"
                         strokeOpacity="0.6"
                       />
@@ -1570,7 +1570,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                         x={x}
                         y={padding.top + innerHeight + 16}
                         textAnchor="middle"
-                        className="fill-indigo-500/80 dark:fill-indigo-400/80 text-[10px] font-mono"
+                        className="fill-blue-500/80 dark:fill-blue-400/80 text-[10px] font-mono"
                       >
                         +{step}회
                       </text>
@@ -1587,7 +1587,7 @@ export const SmartAttributeTrendChart: React.FC<SmartAttributeTrendChartProps> =
                 }`}
               >
                 <div className="flex items-center justify-between gap-3 border-b border-slate-700 pb-1">
-                  <span className="font-bold text-indigo-300">
+                  <span className="font-bold text-blue-300">
                     {hoveredPoint.sourceKind === 'live'
                       ? '현재 라이브 측정'
                       : hoveredPoint.sourceKind === 'scan'

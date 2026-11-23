@@ -405,6 +405,7 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
     }
 
     let detail = &mut *out_detail;
+    *detail = std::mem::zeroed();
     let ctx = &*(drive_handle as *const DriveContext);
     
     detail.drive_index = ctx.drive_index;
@@ -660,6 +661,34 @@ pub unsafe extern "system" fn DS_GetDriveDetails(
             let t_c = temp_desc.TemperatureInfo[0].Temperature;
             if t_c > 0 && t_c < 150 {
                 detail.temperature_celsius = t_c as u32;
+            }
+        }
+
+        // 6. Populate health_score & SMART temperature fallback (parity with C++ core)
+        let mut smart_entries: [DSSmartEntry; 32] = std::mem::zeroed();
+        let smart_cnt = DS_GetSmartTelemetry(drive_handle, smart_entries.as_mut_ptr(), 32);
+        if smart_cnt > 0 {
+            let mut h_rep: DSDriveHealthReport = std::mem::zeroed();
+            if DS_EvaluateDriveReliability(smart_entries.as_ptr(), smart_cnt, &mut h_rep) {
+                detail.health_score = (h_rep.reliability_score + 0.5).clamp(0.0, 100.0) as u32;
+                if detail.temperature_celsius == 0 && h_rep.temperature_celsius > 0 {
+                    detail.temperature_celsius = h_rep.temperature_celsius;
+                }
+            }
+        } else if detail.is_ssd {
+            let mut nvme_log: DSNvmeHealthLog = std::mem::zeroed();
+            if DS_GetNvmeDeepTelemetry(drive_handle, &mut nvme_log) {
+                if detail.temperature_celsius == 0 && nvme_log.temperature_celsius > 0 {
+                    detail.temperature_celsius = nvme_log.temperature_celsius as u32;
+                }
+                let mut nvme_score: i32 = (100 - (nvme_log.percentage_used.min(100) as i32)).max(10);
+                if nvme_log.media_errors > 0 {
+                    nvme_score = (nvme_score - (nvme_log.media_errors.min(40) as i32)).max(0);
+                }
+                if nvme_log.critical_warning != 0 {
+                    nvme_score = nvme_score.min(45);
+                }
+                detail.health_score = nvme_score as u32;
             }
         }
 

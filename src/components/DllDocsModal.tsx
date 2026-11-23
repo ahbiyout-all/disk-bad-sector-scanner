@@ -271,7 +271,7 @@ DSI_API bool DSI_CALL DSI_EvaluateWatchdogMatrix(const DSIWatchdogDriveState* pD
                 <div>│  └─ Image/Clone: CreateFileMappingW / MapViewOfFile Zero-Copy                        │</div>
                 <div>│  └─ O(log K) AdaptiveBurstSeeker + Slicing-by-8 CRC32 + ATA 0xA0/NVMe IOCTL          │</div>
                 <div>│                                                                                      │</div>
-                <div>│  <span className="text-purple-400">[DiskSentinelForensics.dll] Zero-Handle Forensics Engine</span>                          │</div>
+                <div>│  <span className="text-sky-400">[DiskSentinelForensics.dll] Zero-Handle Forensics Engine</span>                             │</div>
                 <div>│  └─ Welford One-Pass Z-Score(N-1) &amp; Contiguous Cluster Detector                      │</div>
                 <div>│  └─ O(N log M) Extent Heatmap + Shannon Entropy + 512B GPT CRC32/UTF-8 + VBR         │</div>
                 <div>│                                                                                      │</div>
@@ -308,7 +308,7 @@ DSI_API bool DSI_CALL DSI_EvaluateWatchdogMatrix(const DSIWatchdogDriveState* pD
               </div>
 
               <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 space-y-1.5">
-                <div className="flex items-center gap-2 font-bold text-purple-600 dark:text-purple-400 text-xs">
+                <div className="flex items-center gap-2 font-bold text-sky-600 dark:text-sky-400 text-xs">
                   <Zap className="w-4 h-4 shrink-0" />
                   <span>2. AdaptiveBurstSeeker (O(log K) 이진 분할)</span>
                 </div>
@@ -477,7 +477,7 @@ DSI_API bool DSI_CALL DSI_EvaluateWatchdogMatrix(const DSIWatchdogDriveState* pD
                   </div>
 
                   <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-bold text-purple-500 mr-2">[v4.6.0 신규 DLL]</span>
+                    <span className="font-bold text-sky-500 mr-2">[v4.6.0 신규 DLL]</span>
                     <strong className="text-slate-900 dark:text-slate-100">DiskSentinelForensics.dll 순수 창작 포렌식·수리연산 엔진 출범:</strong>
                     <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                       커널 핸들 비의존 알고리즘(Welford Z-Score 군집 탐지, O(N log M) 익스텐트 히트맵, 섀넌 엔트로피·소거 NAND 판별, GPT IEEE 802.3 CRC32 검증, VBR 디코더) 6종 API를 독립 DLL로 분리해 런처(<code>/api/native/forensics/entropy</code>)와 Inno Setup 패키징에 통합했습니다.
@@ -509,7 +509,7 @@ DSI_API bool DSI_CALL DSI_EvaluateWatchdogMatrix(const DSIWatchdogDriveState* pD
                   </div>
 
                   <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-bold text-emerald-500 mr-2">[v4.6.0 감사 &amp; Quad-DLL]</span>
+                    <span className="font-bold text-emerald-500 mr-2">[v4.6.0 감사 &amp; 4-DLL]</span>
                     <strong className="text-slate-900 dark:text-slate-100">DiskSentinelRecovery.dll 출범 및 기존 3종 DLL 버그 전수 패치:</strong>
                     <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                       (1) <code>DS_AdaptiveScanChunk</code> 내 <code>DS_ScanLbaBlock</code> 반환 규약으로 인한 치명 핸들 오류 데드코드 수정 및 <code>DS_VerifyLbaBlock</code>·<code>DS_CopyLbaRangeToMappedFile</code> 핸들/QPF 가드 추가, (2) <code>DSP_ComputeWeibullRul</code> NVMe <code>availableSparePct==0</code> 고갈 판정 보강, (3) TypeScript <code>DS_CalculateAvx2ChecksumAndZeroCheck</code> 룩업 테이블 가속 통일, (4) MFT/PE 헤더 32비트 정수 래핑 방어, (5) <code>tauri.conf.json</code> 리소스 번들 및 GitHub Actions 선행 DLL 스테이징과 함께 신규 <code>DiskSentinelRecovery.dll</code> 7대 API를 전 기능에 통합했습니다.
@@ -521,6 +521,14 @@ DSI_API bool DSI_CALL DSI_EvaluateWatchdogMatrix(const DSIWatchdogDriveState* pD
                     <strong className="text-slate-900 dark:text-slate-100">제5 순수 창작 DLL(DiskSentinelIntegrity.dll) 출범 및 4대 DLL 결함 추가 패치:</strong>
                     <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                       (1) <code>Core</code>: <code>DS_ScanLbaBlock</code> 실패 시 <code>false</code> 반환 일관화, <code>DS_EvaluateDriveReliability</code> <code>0xC2</code>/<code>0xBE</code> 이중 온도 감점·<code>0xFF</code> 오감점 차단, ATA <code>0xA0</code> 우선 프로브 + 홀수 드라이브 <code>0xB0</code> 폴백(C++/Rust 동시 적용), (2) <code>Forensics</code>: GPT CRC 버퍼 <code>512B</code> 확장 및 LDM/LVM/LUKS/APFS GUID 추가, (3) <code>Predictive</code>: 1시간 미만 OLS 기울기 폭주 가드(C++/Rust/TS), (4) <code>Recovery</code>: UTF-8 한글 로그 오분류·MFT <code>targetLba==0</code> 오탐 차단, (5) 신규 <strong><code>DiskSentinelIntegrity.dll</code></strong> 8종 API 구축 및 스트리밍 SHA-256·LBA 무결성·스캔 속도 차분·워치독 매트릭스 전면 연동 완료.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-sky-500 mr-2">[v4.6.4 전수 자가점검 &amp; 하드닝]</span>
+                    <strong className="text-slate-900 dark:text-slate-100">로컬 브리지·4Kn 섹터·Rust Core·Tauri FFI·UI 상태 버그 통합 패치:</strong>
+                    <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                      (1) <code>Launcher(C#)</code>: <code>localhost/127.0.0.1</code> Origin 검증(비로컬 Origin <code>403</code> 차단) 및 <code>QueryHandleSectorSize</code> 기반 4Kn(4096B) 실측 정렬·64비트 LBA 곱셈 오버플로 가드 적용, (2) <code>Rust Core(lib.rs)</code>: <code>DS_GetDriveDetails</code> 구조체 제로 초기화 및 SMART/NVMe 기반 <code>health_score</code>/온도 폴백 C++ 동등화, (3) <code>Tauri 백엔드</code>: <code>CREATE_NO_WINDOW</code> 콘솔 숨김, 심볼릭 링크 차단 <code>symlink_metadata</code> 및 FFI <code>u32::try_from</code> 길이 검증, (4) <code>UI/UX</code>: 스캔 비교 1→2건 자동 선택 잠금 해제, 폴더 LBA <code>DSI</code> 네이티브 익스텐트 평가 연동 및 과거 기록 보고서 LBA 재구성 보강 완료.
                     </p>
                   </div>
                 </div>

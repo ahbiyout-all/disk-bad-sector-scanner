@@ -103,7 +103,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-xs">
+            <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs">
               <Share2 className="w-5 h-5" />
             </div>
             <div>
@@ -130,7 +130,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         <div className="p-5 space-y-4">
           <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-indigo-500 shrink-0">
+              <div className="p-2.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-blue-500 shrink-0">
                 <HardDrive className="w-5 h-5" />
               </div>
               <div>
@@ -253,13 +253,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
 
             {/* Option 3: Print / Browser PDF */}
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500/50 dark:hover:border-indigo-500/50 bg-white dark:bg-slate-900/40 transition-all flex flex-col justify-between group">
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-blue-500/50 dark:hover:border-blue-500/50 bg-white dark:bg-slate-900/40 transition-all flex flex-col justify-between group">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center">
                     <Printer className="w-4 h-4" />
                   </div>
-                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30">
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-400 border border-blue-500/30">
                     PRINT
                   </span>
                 </div>
@@ -281,13 +281,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
 
             {/* Option 4: JSON & OTel */}
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-purple-500/50 dark:hover:border-purple-500/50 bg-white dark:bg-slate-900/40 transition-all flex flex-col justify-between group">
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-sky-500/50 dark:hover:border-sky-500/50 bg-white dark:bg-slate-900/40 transition-all flex flex-col justify-between group">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400 flex items-center justify-center">
                     <Activity className="w-4 h-4" />
                   </div>
-                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-400 border border-purple-500/30">
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 border border-sky-500/30">
                     RAW DATA
                   </span>
                 </div>
@@ -309,7 +309,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </button>
                 <button
                   onClick={handleExportOtel}
-                  className="py-2 px-2 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                  className="py-2 px-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors flex items-center justify-center gap-1 cursor-pointer"
                 >
                   <Activity className="w-3 h-3" />
                   <span>OTel (.prom)</span>

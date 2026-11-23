@@ -51,7 +51,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
         {/* Top Modal Header */}
         <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 print:hidden bg-slate-50 dark:bg-slate-900">
           <div className="flex items-center gap-2">
-            <HardDrive className="w-4 h-4 text-indigo-500" />
+            <HardDrive className="w-4 h-4 text-blue-500" />
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">
               Disk Surface Integrity Diagnostic Report
             </h2>
@@ -88,7 +88,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
 
             <button
               onClick={handleExportJson}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors cursor-pointer shadow-xs"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors cursor-pointer shadow-xs"
               title="JSON 파일로 진단 원본 다운로드"
             >
               <Download className="w-3.5 h-3.5" />
@@ -97,7 +97,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
 
             <button
               onClick={handleExportOtel}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-purple-600 hover:bg-purple-500 text-white transition-colors cursor-pointer shadow-xs"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer shadow-xs"
               title="OpenTelemetry / Prometheus 호환 메트릭 내보내기"
             >
               <Activity className="w-3.5 h-3.5" />
@@ -119,7 +119,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
           {/* Report Header Title Block */}
           <div className="border-b border-slate-200 dark:border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-end justify-between gap-2.5">
             <div>
-              <div className="text-[10px] uppercase tracking-widest text-indigo-600 dark:text-indigo-400 font-bold mb-0.5">
+              <div className="text-[10px] uppercase tracking-widest text-blue-600 dark:text-blue-400 font-bold mb-0.5">
                 STORAGE INTEGRITY DIAGNOSTIC CERTIFICATE
               </div>
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
@@ -155,7 +155,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
             </div>
             <div>
               <span className="text-slate-400 block text-[10px] uppercase font-semibold">적용된 맞춤 알고리즘</span>
-              <span className="font-semibold text-indigo-600 dark:text-indigo-400 text-xs truncate block" title={record.scanMethodName || '표준 검사'}>
+              <span className="font-semibold text-blue-600 dark:text-blue-400 text-xs truncate block" title={record.scanMethodName || '표준 검사'}>
                 {record.scanMethodName || '매체 맞춤 정밀 검사'}
               </span>
             </div>
@@ -163,9 +163,9 @@ export const ReportModal: React.FC<ReportModalProps> = ({
 
           {/* Media-Specific Tailored Diagnosis Callout */}
           {record.mediaSpecificDiagnosis && (
-            <div className="p-3 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/80 text-xs">
-              <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-1.5 mb-1">
-                <ShieldCheck className="w-4 h-4 text-indigo-500" />
+            <div className="p-3 rounded-lg bg-blue-50/70 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 text-xs">
+              <div className="font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5 mb-1">
+                <ShieldCheck className="w-4 h-4 text-blue-500" />
                 저장 매체별 맞춤형 진단 소견 (Storage Tailored Analysis)
               </div>
               <p className="text-slate-700 dark:text-slate-200 leading-relaxed text-xs">

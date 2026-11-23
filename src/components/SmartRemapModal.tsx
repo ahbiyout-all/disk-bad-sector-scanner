@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * DiskSentinel Pro - S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine
+ * Disk Bad Sector Scanner - S.M.A.R.T. Sector Remapping & Zero-Fill Bad Sector Repair Engine
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
@@ -829,7 +829,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
               <div className="text-[10px] text-slate-400 font-semibold uppercase flex items-center gap-1">
-                <HardDrive className="w-3.5 h-3.5 text-indigo-400" />
+                <HardDrive className="w-3.5 h-3.5 text-blue-400" />
                 수복 대상 드라이브
               </div>
               <div className="text-xs font-bold text-white truncate">{activeDrive.name}</div>
@@ -865,10 +865,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+                <Sliders className="w-3.5 h-3.5 text-blue-400" />
                 수복 방식 및 난이도 선택 (Repair Method &amp; Difficulty)
               </div>
-              <div className="text-[11px] font-mono text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded border border-indigo-500/20">
+              <div className="text-[11px] font-mono text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded border border-blue-500/20">
                 예상 소요:{' '}
                 <strong className="text-white">
                   {estimatedSeconds !== null ? formatEstimatedTime(estimatedSeconds) : '실행 시 실측'}
@@ -884,7 +884,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 onClick={() => setRepairMode('standard')}
                 className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
                   repairMode === 'standard'
-                    ? 'bg-indigo-950/70 border-indigo-500 text-white shadow-sm ring-1 ring-indigo-500/30'
+                    ? 'bg-blue-950/70 border-blue-500 text-white shadow-sm ring-1 ring-blue-500/30'
                     : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                 }`}
               >
@@ -901,7 +901,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 onClick={() => setRepairMode('deep_ecc')}
                 className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
                   repairMode === 'deep_ecc'
-                    ? 'bg-indigo-950/70 border-indigo-500 text-white shadow-sm ring-1 ring-indigo-500/30'
+                    ? 'bg-blue-950/70 border-blue-500 text-white shadow-sm ring-1 ring-blue-500/30'
                     : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                 }`}
               >
@@ -918,7 +918,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                 onClick={() => setRepairMode('firmware_realloc')}
                 className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
                   repairMode === 'firmware_realloc'
-                    ? 'bg-indigo-950/70 border-indigo-500 text-white shadow-sm ring-1 ring-indigo-500/30'
+                    ? 'bg-blue-950/70 border-blue-500 text-white shadow-sm ring-1 ring-blue-500/30'
                     : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                 }`}
               >
@@ -942,9 +942,9 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           </div>
 
           {/* Info Panel */}
-          <div className="p-3.5 rounded-lg bg-indigo-950/30 border border-indigo-800/50 space-y-2">
-            <div className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
-              <Zap className="w-4 h-4 text-indigo-400" />
+          <div className="p-3.5 rounded-lg bg-blue-950/30 border border-blue-800/50 space-y-2">
+            <div className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
+              <Zap className="w-4 h-4 text-blue-400" />
               S.M.A.R.T. 제로필(Zero-Fill) 동작 안내
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300">
@@ -1035,7 +1035,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                       onClick={() => handleToggleBlock(block.id)}
                       className={`p-2 rounded border flex items-center justify-between gap-2 cursor-pointer transition-colors ${
                         stepState?.status === 'running'
-                          ? 'bg-indigo-950/60 border-indigo-500 text-white'
+                          ? 'bg-blue-950/60 border-blue-500 text-white'
                           : stepState?.status === 'verified'
                           ? 'bg-emerald-950/40 border-emerald-700/70 text-emerald-200'
                           : stepState?.status === 'failed'
@@ -1057,7 +1057,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                         <span className="text-slate-500">|</span>
                         <span className="truncate">LBA #{block.lba.toLocaleString()}</span>
                         {block.zoneTag && (
-                          <span className="text-[10px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 hidden sm:inline whitespace-nowrap">
+                          <span className="text-[10px] px-1 py-0.2 rounded bg-blue-500/20 text-blue-300 hidden sm:inline whitespace-nowrap">
                             {block.zoneTag}
                           </span>
                         )}
@@ -1068,7 +1068,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
                           <span
                             className={`text-[10px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${
                               stepState.status === 'running'
-                                ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-400/50'
+                                ? 'bg-blue-500/25 text-blue-300 border border-blue-400/50'
                                 : stepState.status === 'verified'
                                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                                 : stepState.status === 'failed'

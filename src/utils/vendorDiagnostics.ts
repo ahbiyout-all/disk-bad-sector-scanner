@@ -419,7 +419,7 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
         vendor: 'crucial',
         nameKo: '크루셜 / 마이크론 (Crucial / Micron)',
         nameEn: 'Crucial Micron',
-        badgeColor: 'bg-indigo-600 text-white',
+        badgeColor: 'bg-blue-600 text-white',
         officialToolName: 'Crucial Storage Executive',
         officialToolDescription: 'Momentum Cache RAM 가속기, Over-Provisioning 맞춤 설정, RAIN 다중 하드웨어 이중화 셀 복구',
         coreTechHighlights: [
@@ -582,7 +582,7 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
             ? '엠에스아이 (MSI SPATIUM)'
             : '에이수스 (ASUS ROG Strix Storage)',
         nameEn: vendor.toUpperCase(),
-        badgeColor: 'bg-indigo-700 text-white',
+        badgeColor: 'bg-blue-700 text-white',
         officialToolName: '제조사 공식 SSD Toolbox & 표준 NVMe/ATA 커널 진단',
         officialToolDescription: '표준 NVMe 1.4/2.0 Log Page 02h 및 ATA-8 S.M.A.R.T. 표준 규격 기반 펌웨어/수명 정밀 모니터링',
         coreTechHighlights: [
@@ -601,7 +601,7 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
         vendor: 'generic',
         nameKo: '표준 프로토콜 범용 스토리지 (Universal OEM / Next-Gen)',
         nameEn: 'Universal Standard Storage',
-        badgeColor: 'bg-indigo-600 text-white',
+        badgeColor: 'bg-blue-600 text-white',
         officialToolName: '표준 NVMe 2.0 / ATA-8 / UASP 커널 직접 진단',
         officialToolDescription: '특정 제조사 DB에 아직 등록되지 않은 신제품·OEM 디스크도 OS 커널 NVMe/ATA/SCSI 표준 디스크립터로 100% 호환 진단합니다.',
         coreTechHighlights: [
@@ -611,7 +611,7 @@ export function getVendorProfile(vendor: StorageVendor): VendorProfileInfo {
         ],
         controllerFamily: 'Standard Host Kernel Storage Driver (NVMe / AHCI / UASP)',
         knownHardwareTraits: '신규 출시 제조사 및 커스텀 OEM 드라이브는 모델명 대신 표준 버스(BusType), 섹터 크기(512e/4Kn), 및 커널 레이턴시 특성을 기준으로 자동 보정 스캔이 적용됩니다.',
-        recommendedRemediation: 'DiskSentinel Pro의 표면 검사(Verify/Read/Butterfly) 및 실시간 지연 히스토그램으로 하드웨어 이상 유무를 직접 검증하세요.'
+        recommendedRemediation: 'Disk Bad Sector Scanner의 표면 검사(Verify/Read/Butterfly) 및 실시간 지연 히스토그램으로 하드웨어 이상 유무를 직접 검증하세요.'
       };
   }
 }
