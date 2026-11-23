@@ -4,6 +4,12 @@
 
 use disksentinel_core::*;
 
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn FreeLibrary(hModule: isize) -> i32;
+}
+
 #[tauri::command]
 fn get_native_engine_version() -> String {
     "4.6.0".to_string()
@@ -936,13 +942,13 @@ fn probe_fake_capacity_checkpoints(
                     };
                     if !rb_ok || readback != prng_buf {
                         status = "WRITE_CORRUPTION";
-                        note = "Xoshiro256** write-readback mismatch (fake / black-hole NAND)";
+                        note = "Xoshiro256** write-readback mismatch (fake / black-hole NAND)".to_string();
                         suspected_fake = true;
                         if failure_reason.is_empty() {
                             failure_reason = format!("Tier-2 write-readback failure at {}", label);
                         }
                     } else {
-                        note = "Tier-2 Xoshiro256** non-destructive roundtrip verified";
+                        note = "Tier-2 Xoshiro256** non-destructive roundtrip verified".to_string();
                     }
                     // Restore original sector payload immediately
                     unsafe {
@@ -953,7 +959,7 @@ fn probe_fake_capacity_checkpoints(
                     }
                 } else {
                     status = "WRITE_LOCKED";
-                    note = "Controller write-protected or volume mounted (Tier-1 read-only passed)";
+                    note = "Controller write-protected or volume mounted (Tier-1 read-only passed)".to_string();
                 }
             }
 
@@ -3220,7 +3226,7 @@ static PREDICTIVE_DLL_DISPATCH: std::sync::OnceLock<Option<PredictiveDllDispatch
 fn get_predictive_dll() -> Option<&'static PredictiveDllDispatch> {
     PREDICTIVE_DLL_DISPATCH
         .get_or_init(|| {
-            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+            use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
             let mut candidates: Vec<std::path::PathBuf> = Vec::new();
             if let Ok(exe) = std::env::current_exe() {
@@ -4212,7 +4218,7 @@ static FORENSICS_DLL_DISPATCH: std::sync::OnceLock<Option<ForensicsDllDispatch>>
 fn get_forensics_dll() -> Option<&'static ForensicsDllDispatch> {
     FORENSICS_DLL_DISPATCH
         .get_or_init(|| {
-            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+            use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
             let mut candidates: Vec<std::path::PathBuf> = Vec::new();
             if let Ok(exe) = std::env::current_exe() {
@@ -5378,7 +5384,7 @@ static RECOVERY_DLL_DISPATCH: std::sync::OnceLock<Option<RecoveryDllDispatch>> =
 fn get_recovery_dll() -> Option<&'static RecoveryDllDispatch> {
     RECOVERY_DLL_DISPATCH
         .get_or_init(|| {
-            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+            use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
             let mut candidates: Vec<std::path::PathBuf> = Vec::new();
             if let Ok(exe) = std::env::current_exe() {
@@ -6581,7 +6587,7 @@ fn probe_pci_devnode_link_for_drive(
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::IO::DeviceIoControl;
-    use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -7360,7 +7366,7 @@ static INTEGRITY_DLL_DISPATCH: std::sync::OnceLock<Option<IntegrityDllDispatch>>
 fn get_integrity_dll() -> Option<&'static IntegrityDllDispatch> {
     INTEGRITY_DLL_DISPATCH
         .get_or_init(|| {
-            use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+            use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
             let mut candidates: Vec<std::path::PathBuf> = Vec::new();
             if let Ok(exe) = std::env::current_exe() {
@@ -8608,7 +8614,7 @@ fn probe_paths_lba_integrity(
 fn pick_integrity_paths(pick_folder: bool) -> Result<Vec<String>, String> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
         let mut results = Vec::new();
 
         if pick_folder {
