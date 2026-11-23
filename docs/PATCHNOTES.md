@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file. This projec
 - **Rust 코어 & Tauri IPC 백엔드 안전성·패리티 보정 (`src/native/rust/src/lib.rs`, `src-tauri/src/main.rs`)**:
   - Rust `DS_GetDriveDetails` 구조체 제로 초기화 및 S.M.A.R.T./NVMe 기반 `health_score`·온도 폴백 연산을 C++ `DiskSentinelEngine.cpp`와 일치시킴.
   - Tauri `fsutil`/`defrag` 서브프로세스에 `CREATE_NO_WINDOW(0x0800_0000)` 플래그를 적용해 백그라운드 실행 시 콘솔 창 노출 제거, `sha256_file_streaming`에서 `symlink_metadata`로 심볼릭 링크/리파스 포인트 배제, C ABI FFI 전달 전 `u32::try_from` 길이 경계 검증 추가.
+  - 대형 `serde_json::json!` 매크로 중첩 확장에 따른 Rust 컴파일러 재귀 한계 오류를 해소하기 위해 `src-tauri/src/main.rs`에 `#![recursion_limit = "512"]` 선언 추가.
 - **프론트엔드 진단 정합성 & 패키징 문서 오기 시정 (`HistoryAndComparison.tsx`, `FolderLbaIntegrityPanel.tsx`, `App.tsx`, `Native_EXE_Packaging_Guide.md`)**:
   - 검사 이력 1→2건 전환 시 비교 대상 선택이 강제 초기화되던 `useEffect` 자동 잠금 결함 수정, 폴더 LBA 무결성 패널에 `evaluateExtentIntegrityNative` 네이티브 평가 및 한국어 라벨 연동, Watchdog 중복 퀵스캔 방지 가드 및 과거 기록 보고서 배드섹터 LBA 복원(`resolveBadBlocksForRecord`) 추가.
   - `docs/Native_EXE_Packaging_Guide.md`의 구형 `14대 C ABI DLL` 표기를 현행 **5종 순수 창작 Penta-DLL** 구조로 정정.
