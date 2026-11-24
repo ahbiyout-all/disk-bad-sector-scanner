@@ -26,6 +26,8 @@ This document specifies the protocols used to ensure that no confidential data, 
   - `DiskSentinelLauncher.cs` enforces a strict loopback Origin allowlist (`IsAllowedLocalOrigin`, rejecting non-local origins with HTTP `403` + `Vary: Origin`), probes physical sector size dynamically (`QueryHandleSectorSize`), and applies 64-bit LBA overflow checks.
   - `src-tauri/src/main.rs` adds `CREATE_NO_WINDOW (0x0800_0000)` to `fsutil`/`defrag` helper invocations, guards `sha256_file_streaming` against symlinks/reparse points via `symlink_metadata`, and validates slice lengths with `u32::try_from` prior to C ABI FFI calls.
   - `src/native/rust/src/lib.rs` zero-initializes `DS_GetDriveDetails` output structs before populating drive descriptors.
+- **v4.6.5 Stepper Guide & Recovery Completion Modal Hardening**:
+  - `RecoveryCompletionSummaryModal.tsx` and `UserRecoveryWizardModal.tsx` ensure secure handling of recovery completion metadata, strict validation of success percentage calculations, and explicit permission checks (`Notification.permission === 'granted'`) prior to dispatching system native notifications.
 
 5. **Security Scan Checklist**:
    - [x] No personal API keys or OAuth tokens in code.

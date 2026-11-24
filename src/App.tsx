@@ -54,6 +54,7 @@ import { ResponseBucketsBar, BucketKey } from './components/ResponseBucketsBar';
 import { LbaGraphView } from './components/LbaGraphView';
 import { TaskManagerPanel } from './components/TaskManagerPanel';
 import { ThermalMonitorWidget } from './components/ThermalMonitorWidget';
+import { UserRecoveryWizardModal } from './components/UserRecoveryWizardModal';
 
 const ReportModal = React.lazy(() => import('./components/ReportModal').then(m => ({ default: m.ReportModal })));
 const ExportModal = React.lazy(() => import('./components/ExportModal').then(m => ({ default: m.ExportModal })));
@@ -770,6 +771,7 @@ export default function App() {
   const [updateErrorMessage, setUpdateErrorMessage] = useState<string | undefined>(undefined);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
+  const [isRecoveryWizardOpen, setIsRecoveryWizardOpen] = useState<boolean>(false);
 
   // Workbench Tool Target Parameters
   const [bitCarvingTargetLba, setBitCarvingTargetLba] = useState<number>(0);
@@ -2014,6 +2016,7 @@ export default function App() {
       { id: 'tool-remap', label: en ? 'S.M.A.R.T. Remap & Zero-Fill Repair' : 'S.M.A.R.T. 섹터 재매핑 & 제로필 수복', category: 'tools', keywords: ['remap', 'zerofill', 'repair'], disabled: !activeDrive, execute: () => openRecoveryTool('remap') },
       { id: 'tool-sanitize', label: en ? 'NVMe/ATA Sanitize & TRIM' : 'NVMe/ATA 보안 삭제 & SSD TRIM', category: 'tools', keywords: ['trim', 'sanitize', 'erase'], disabled: !activeDrive, execute: () => openRecoveryTool('sanitize') },
       { id: 'tool-usb', label: en ? 'External Storage & USB Scan Matrix' : '외장 장치 및 USB 표면검사 매트릭스', category: 'tools', keywords: ['usb', 'uasp', 'bot', 'external'], execute: () => openExternalDeviceModal('matrix') },
+      { id: 'tool-recovery-wizard', label: en ? 'Advanced Recovery & Forensics Wizard' : '데이터 복구 및 포렌식 전문가 마법사', category: 'tools', keywords: ['wizard', 'recovery', 'forensics', 'carving', 'sanitize'], execute: () => setIsRecoveryWizardOpen(true) },
       { id: 'tool-parallel', label: en ? 'Parallel Multi-Drive Scanner' : '병렬 다중 드라이브 스캐너', category: 'tools', keywords: ['parallel', 'rayon', 'multi'], execute: () => openHardwareTool('parallel') },
       { id: 'tool-tray', label: en ? 'Background Watchdog & Tray Guardian' : '백그라운드 워치독 & 트레이 가디언', category: 'tools', keywords: ['watchdog', 'tray', 'alert'], execute: () => openHardwareTool('watchdog') },
       { id: 'tool-vendor', label: en ? 'Vendor Specific Diagnostics' : '제조사 특화 펌웨어 진단', category: 'tools', keywords: ['vendor', 'samsung', 'wd'], disabled: !activeDrive, execute: () => openHardwareTool('vendor') },
@@ -2940,6 +2943,7 @@ export default function App() {
               onRefreshHardware={handleRescanDrives}
               onRescanDrives={handleRescanDrives}
               isRescanning={isRescanningDrives}
+              onOpenRecoveryWizard={() => setIsRecoveryWizardOpen(true)}
             />
           </Suspense>
         )}
@@ -3088,6 +3092,14 @@ export default function App() {
             locale={locale}
           />
         )}
+
+        <UserRecoveryWizardModal
+          isOpen={isRecoveryWizardOpen}
+          onClose={() => setIsRecoveryWizardOpen(false)}
+          drives={drives}
+          selectedDriveId={selectedDriveId}
+          locale={locale}
+        />
       </Suspense>
 
       {/* Compact Footer */}

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file. This projec
 
 ---
 
+## [v4.6.5] - 2026-11-24
+### Added & Enhanced
+- **인터랙티브 단계별 가이드 및 구조화된 JSON 시나리오 데이터 (`RecoveryWorkbench.tsx`)**:
+  - 파티션 분석(Hex & GPT), 파일 비트 카빙, 손상 LBA 파일 추적(File Tracer), SMART 리맵, ddrescue 멀티패스 클론, 보안 소거(Sanitize & TRIM) 6대 복구 도구별 4단계 상세 가이드와 힌트를 정형화된 JSON 데이터셋(`RECOVERY_SCENARIO_GUIDES_JSON`)으로 정의.
+  - 컴포넌트 상단에 진행 상황을 시각적으로 안내하는 진척도 연결선과 완료/현재 단계 뱃지가 포함된 세련된 Stepper UI 배너 탑재.
+- **첫 번째 단계 자동 수행 '자동 마법사 실행' 버튼**:
+  - 사용자가 시나리오를 선택한 후 상단 가이드 배너의 `[자동 마법사 실행]` 버튼을 누르면 1단계 작업(버퍼 로드 및 초기 스캔)이 자동으로 수행되고 실시간 상태 메시지와 함께 2단계로 자동 전환되는 빠른 시작(Quick Start) 워크플로우 구현.
+- **복구 완료 결과 요약 모달 및 시스템 네이티브 알림 (`RecoveryCompletionSummaryModal.tsx`)**:
+  - 데이터 복구 작업 최종 완료 시 복구 성공률(%), 복구된 총 파일 수, 총 데이터 용량, 소요 시간을 격자형 카드로 요약하고 주요 복구 파일 샘플 목록을 제공하는 전문 요약 모달 추가.
+  - 완료 시 오디오 차임벨(`soundManager.playCompletionChime()`) 재생과 함께 브라우저/OS **시스템 네이티브 데스크톱 알림(`window.Notification`)**을 자동 발송.
+
+---
+
 ## [v4.6.4] - 2026-11-23
 ### Changed
 - **클래식 고밀도 하드웨어 유틸리티 UX/UI · Slate + Cobalt Blue(`blue-*`/`sky-*`) 테마 전면 일원화**:

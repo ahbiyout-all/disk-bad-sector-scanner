@@ -5,7 +5,7 @@
 - **소속**: [CISNet](https://www.cisnet.co.kr)
 - **공식 기술 블로그**: [ahbiyoutvibe.blogspot.com](https://ahbiyoutvibe.blogspot.com/)
 - **라이선스**: Apache-2.0
-- **버전**: v4.6.0 (최신 감사 패치: v4.6.4)
+- **버전**: v4.6.0 (최신 감사 패치: v4.6.5)
 
 ---
 

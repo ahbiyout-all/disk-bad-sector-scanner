@@ -1,4 +1,4 @@
-# Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기 v4.6.0)
+# Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기 v4.6.5)
 
 > **고성능 물리 스토리지 정밀 진단 · HDDScan 방식 4종 표면 검사 · D3 레이턴시 히스토그램 · 자동 수복 엔진**  
 > **Official Repository**: [https://github.com/AhBiYout-all/disk-bad-sector-scanner](https://github.com/AhBiYout-all/disk-bad-sector-scanner)  
@@ -20,11 +20,11 @@
   - 선택된 검사 방식(`Quick` 8-Bin/0.1ms vs `Full` 20-Bin/0.01ms) 연동 통계 정밀도 동적 제어
   - **100ms 이상 지연(Slow/Critical) 섹터 오렌지/레드 컬러 하이라이트** 및 차트 상단 실시간 요약 카운터, 클릭 시 LBA 상세 드릴다운 지원
 - **5대(Penta-DLL) 순수 창작 C++ DLL 네이티브 엔진 스위트 (`src/native/`)**:
-  - **`DiskSentinelNativeCore.dll`**: Direct DMA (`VirtualAlloc` 64KB 정렬 + `StorageAdapterProperty`), Memory-Mapped Zero-Copy I/O, $O(\log K)$ 이진 분할 탐색, Slicing-by-8 CRC32 및 ATA/NVMe 패스스루
+  - **`DiskSentinelNativeCore.dll`**: Direct DMA (`VirtualAlloc` 64KB 정렬 + `StorageAdapterProperty`), Memory-Mapped Zero-Copy I/O, $O(\log K)$ 이진 분할 탐색, Slicing-by-8 CRC32 및 ATA/NVMe 패스ส루
   - **`DiskSentinelForensics.dll`**: 무의존성 Welford Z-Score 군집 탐지, $O(N \log M)$ 익스텐트 히트맵, 256-bin 섀넌 엔트로피·소거 NAND 판별, GPT IEEE 802.3 CRC32(UTF-16LE→UTF-8) & VBR 디코더
   - **`DiskSentinelPredictive.dll`**: **Weibull 욕조 곡선 잔여 수명(RUL) 예측**, **음향 탐색 RMSSD 지터·FTL 스톨 프로파일링**, **Arrhenius(0.7 eV) 열가속·TBW 수명 모델**, **중심화 OLS S.M.A.R.T. 추세 회귀** ([기술 명세서](docs/DiskSentinel_Predictive_DLL_Specification.md))
   - **`DiskSentinelRecovery.dll`**: **16+ 시그니처 카빙·Hamming 비트 반전 복원**, **NTFS `$MFT` USA/Runlist 디코더**, **NIST SP 800-88 `Xoshiro256**` 소거 패턴 생성·검증**, **ddrescue 도메인 구간 병합 플래너** ([기술 명세서](docs/DiskSentinel_Recovery_DLL_Specification.md))
-  - **`DiskSentinelIntegrity.dll`** *(신규)*: **스트리밍 FIPS 180-4 SHA-256 + Slicing-by-8 CRC32 + FNV-1a64**, **$O((E+B)\log B)$ 익스텐트 Bit-Rot/생존성 평가**, **시점 간 S.M.A.R.T. 열화 속도(Diff)**, **플릿 Watchdog SLA 매트릭스** ([기술 명세서](docs/DiskSentinel_Integrity_DLL_Specification.md) · [모듈 레지스트리](docs/MODULES.md))
+  - **`DiskSentinelIntegrity.dll`**: **스트리밍 FIPS 180-4 SHA-256 + Slicing-by-8 CRC32 + FNV-1a64**, **$O((E+B)\log B)$ 익스텐트 Bit-Rot/생존성 평가**, **시점 간 S.M.A.R.T. 열화 속도(Diff)**, **플릿 Watchdog SLA 매트릭스** ([기술 명세서](docs/DiskSentinel_Integrity_DLL_Specification.md) · [모듈 레지스트리](docs/MODULES.md))
 - **Windows IOCTL/WMI 네이티브 32-드라이브 전수 탐색 & 제로 더미(Zero-Dummy) 실측 엔진**:
   - `\\.\PhysicalDrive0`~`31` 물리 장치 및 논리 볼륨 매핑 정밀 인식 (SSD/HDD/NVMe/USB 자동 분류)
   - C++, Rust, Tauri, TypeScript 전 계층의 가짜/더미 폴백을 완전 제거하고 커널 Direct I/O 및 실측 텔레메트리 전면 적용 (미지원 항목 `N/A` 표기)
@@ -37,15 +37,9 @@
 - **중요 폴더 LBA 익스텐트 매핑 · SHA-256 Bit-Rot 무결성 감시 & 스캔 체크포인트 재개**:
   - Win32 `FSCTL_GET_RETRIEVAL_POINTERS`로 중요 폴더/파일의 실제 물리 LBA 익스텐트 구간을 추출해 배드섹터/지연 LBA와의 중첩을 즉시 교차 추적하고 SHA-256 해시로 비트 부패(Bit-Rot) 감지
   - `scanCheckpoint` 기반 실시간 스캔 중단·재개 복구, OS 네이티브 토스트 기반 백그라운드 **Watchdog 규칙 엔진**, `Ctrl+K` 커맨드 팔레트, **S.M.A.R.T. 스냅샷 Diff & 인쇄용 진단서**, 한국어/영어(`KO/EN`) 다국어 UI 지원
-- **클래식 고밀도 하드웨어 유틸리티 UX/UI · 전 계층 감사 하드닝 (`v4.6.4`)**:
-  - 슬림 좌측 사이드바 + 인라인 도구 탭 승격 및 **Slate + Cobalt Blue** 다크/라이트 테마 일원화
-  - Win32 C# 로컬 브릿지 루프백 Origin 격리(`403`)·4Kn 동적 섹터 실측, Rust `DS_GetDriveDetails` 제로초기화, Tauri `CREATE_NO_WINDOW`·심볼릭 링크 차단·FFI 길이 경계 검사 등 전 스택 정합성·안전성 강화 ([작업 로그](docs/WORKLOG.md) · [패치 노트](docs/PATCHNOTES.md))
-- **GitHub Releases 기반 실시간 자동 업데이트 알림 & 데이터 마이그레이션**:
-  - 실행 시 최신 릴리스를 자동 대조해 업데이트 팝업(버전 정보, GitHub 릴리스 링크, 다운로드 버튼) 제공
-  - 사용자 설정 및 전체 검사 기록 JSON 백업/복원 지원
-- **Inno Setup 6 폴더 풀림(Unpacked Multi-File) Windows 인스톨러 (`setup.iss`)**:
-  - 기존 실행 중인 앱 강제 종료 → 기존 설치 감지(삭제/덮어쓰기 선택) → 라이선스 선언 → 폴더 풀림 개별 파일 설치(불필요한 문서/포터블 파일 제외) → 바탕화면 바로가기 → 자동 실행
-  - Windows 프로그램 추가/제거 정식 등록, 무인 설치(`/SILENT`, `/VERYSILENT`), 기본명(`Disk Bad Sector Scanner`) 및 버전 표기(`Disk Bad Sector Scanner v4.6.0`) 방화벽 규칙 조용히 자동 등록
+- **인터랙티브 단계별 가이드, 자동 마법사 & 복구 완료 결과 모달 (`v4.6.5`)**:
+  - 6대 복구 도구별 4단계 상세 가이드와 힌트를 정형화된 JSON 데이터셋(`RECOVERY_SCENARIO_GUIDES_JSON`)으로 정의하고 상단에 세련된 **Stepper UI** 및 **[자동 마법사 실행]** 버튼 제공.
+  - 데이터 복구 최종 완료 시 오디오 차임벨(`soundManager.playCompletionChime()`) 재생 및 브라우저/OS **시스템 네이티브 데스크톱 알림(`window.Notification`)**을 자동 발송하는 **복구 완료 결과 요약 모달 (`RecoveryCompletionSummaryModal`)** 탑재.
 
 ---
 

@@ -1,7 +1,7 @@
 # Disk Bad Sector Scanner - Project Implementation Roadmap (ROADMAP.md)
 
 - **Application**: Disk Bad Sector Scanner (디스크 배드섹터 정밀 검사기)
-- **Current Version**: v4.6.0 (Audit Patch v4.6.4)
+- **Current Version**: v4.6.0 (Audit Patch v4.6.5)
 - **Author**: AhBiYout (GitHub: [AhBiYout-all](https://github.com/AhBiYout-all))
 - **Affiliation**: CISNet (https://www.cisnet.co.kr)
 - **Official Blog**: https://ahbiyoutvibe.blogspot.com/
