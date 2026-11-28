@@ -132,6 +132,8 @@ export const UserRecoveryWizardModal: React.FC<UserRecoveryWizardModalProps> = (
   const [executionError, setExecutionError] = useState<string | null>(null);
   const [resultSummary, setResultSummary] = useState<WizardResultSummary | null>(null);
   const [recoveredArtifacts, setRecoveredArtifacts] = useState<RecoveredFileArtifact[]>([]);
+  const [progressPct, setProgressPct] = useState<number>(0);
+  const [progressStatusText, setProgressStatusText] = useState<string>('');
 
   // Recovery Completion Summary Modal state
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState<boolean>(false);
@@ -233,12 +235,30 @@ export const UserRecoveryWizardModal: React.FC<UserRecoveryWizardModalProps> = (
     setExecutionLog([]);
     setResultSummary(null);
     setRecoveredArtifacts([]);
+    setProgressPct(15);
+    setProgressStatusText(en ? 'Opening media stream & initializing real binary recovery pipeline...' : '미디어 스트림 오픈 및 실제 바이너리 복구 엔진 초기화 중...');
 
     const startTime = performance.now();
     const logs: string[] = [];
     const targetDesc = getTargetLabel();
     appendLog(logs, `[Wizard Init] Target: ${targetDesc}`);
     appendLog(logs, `[Scenario] ${activeScenario.toUpperCase()} Real Recovery Pipeline`);
+
+    const progressInterval = setInterval(() => {
+      setProgressPct(prev => {
+        if (prev < 35) {
+          setProgressStatusText(en ? 'Phase 1: Scanning sector structures & VBR / GPT headers...' : '단계 1: 섹터 구조 및 VBR/GPT 헤더 스캔 중...');
+          return prev + 10;
+        } else if (prev < 70) {
+          setProgressStatusText(en ? 'Phase 2: Parsing filesystem records ($MFT / FAT32) & carving signatures...' : '단계 2: 파일시스템 레코드($MFT/FAT32) 파싱 및 시그니처 카빙 중...');
+          return prev + 7;
+        } else if (prev < 92) {
+          setProgressStatusText(en ? 'Phase 3: Verifying payload checksums, CRC32 & Shannon entropy...' : '단계 3: 페이로드 무결성, CRC32 및 Shannon 엔트로피 검증 중...');
+          return prev + 4;
+        }
+        return prev;
+      });
+    }, 200);
 
     try {
       let summaryItems: RecoverySummaryItem[] = [];
@@ -532,11 +552,16 @@ export const UserRecoveryWizardModal: React.FC<UserRecoveryWizardModalProps> = (
         recoveredItemList: summaryItems
       });
 
+      clearInterval(progressInterval);
+      setProgressPct(100);
+      setProgressStatusText(en ? 'Recovery pipeline completed successfully.' : '복구 파이프라인이 성공적으로 완료되었습니다.');
+
       appendLog(logs, `[Wizard Complete] Execution finished in ${durationSec}s.`);
       setIsExecuting(false);
       setStep(4);
       setIsCompletionModalOpen(true);
     } catch (err: any) {
+      clearInterval(progressInterval);
       const msg = err?.message || String(err) || 'Unknown error';
       appendLog(logs, `[Error] ${msg}`);
       setExecutionError(msg);
@@ -1134,8 +1159,20 @@ export const UserRecoveryWizardModal: React.FC<UserRecoveryWizardModalProps> = (
                 {isExecuting ? (
                   <div className="p-8 text-center space-y-4">
                     <Cpu className="w-10 h-10 animate-spin text-blue-600 mx-auto" />
-                    <div className="font-bold text-slate-900 dark:text-slate-100">
-                      {en ? 'Executing Real Binary Recovery Pipeline...' : '실제 바이너리 복구 및 포렌식 분석 실행 중...'}
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-900 dark:text-slate-100 text-sm">
+                        {en ? 'Executing Real Binary Recovery Pipeline...' : '실제 바이너리 복구 및 포렌식 분석 실행 중...'}
+                      </div>
+                      <div className="text-xs font-mono text-blue-600 dark:text-blue-400 font-semibold">
+                        {progressStatusText} ({progressPct}%)
+                      </div>
+                    </div>
+                    {/* Progress Bar */}
+                    <div className="max-w-md mx-auto h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden shadow-inner">
+                      <div
+                        className="h-full bg-blue-600 transition-all duration-200 ease-out"
+                        style={{ width: `${progressPct}%` }}
+                      />
                     </div>
                     <div className="max-w-lg mx-auto p-3 rounded bg-slate-900 text-emerald-400 font-mono text-[11px] text-left max-h-40 overflow-y-auto">
                       {executionLog.map((l, i) => (
