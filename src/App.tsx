@@ -45,6 +45,7 @@ import { Navbar } from './components/Navbar';
 import { SectorGrid } from './components/SectorGrid';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { ErrorLogStream } from './components/ErrorLogStream';
+import { HighRiskSectorClusterWidget } from './components/HighRiskSectorClusterWidget';
 import { HealthSummaryDashboard } from './components/HealthSummaryDashboard';
 import { HistoryAndComparison } from './components/HistoryAndComparison';
 import { AlertBanner } from './components/AlertBanner';
@@ -2878,6 +2879,18 @@ export default function App() {
         {/* Tab 2: Error Logs & Activity Stream View */}
         {activeTab === 'logs' && activeDrive && (
           <div className="space-y-3">
+            <HighRiskSectorClusterWidget
+              logs={errorLogs}
+              onSelectLba={(lba) => {
+                const found = blocks.find(b => b.lba === lba);
+                if (found) setSelectedBlock(found);
+                setActiveTab('scan');
+              }}
+              onTraceRange={(startLba, endLba) => openRecoveryTool('tracer', { targetLba: startLba })}
+              onCloneRange={(startLba, endLba) => openRecoveryTool('cloner', { range: { startLba, endLba } })}
+              onOpenHex={(lba) => openRecoveryTool('hex', { targetLba: lba })}
+            />
+
             <ErrorLogStream
               logs={errorLogs}
               onClearLogs={() => setErrorLogs([])}
