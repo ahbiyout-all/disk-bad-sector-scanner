@@ -3,6 +3,7 @@ import { DiskDrive, ScanTelemetry, UsbSurfaceScanPolicy } from '../types';
 import { calculateHardwareVitals } from '../utils/hardwareTelemetry';
 import { DS_GetNvmeDeepTelemetry } from '../utils/nativeDllBridge';
 import { isNativeHardwareRuntime } from '../utils/nativeDriveEngine';
+import { isBrowserMountedDrive } from '../utils/browserImageMount';
 import {
   detectUsbPortBottleneck,
   generationIdToLabel,
@@ -61,6 +62,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
   // NVMe Deep Telemetry (Log Page 02h - null when kernel Log 02h unavailable)
   const nvmeTelemetry = DS_GetNvmeDeepTelemetry(drive);
   const isTauri = isNativeHardwareRuntime() || drive.id.startsWith('drive-tauri-physical-');
+  const isBrowserImg = isBrowserMountedDrive(drive);
   const usbTopo = resolveDriveUsbTopology(drive);
   const usbBottleneck = usbTopo ? detectUsbPortBottleneck(drive, usbTopo) : undefined;
 
@@ -545,10 +547,10 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-500 dark:text-slate-400 shrink-0">
-            <span className={`w-1.5 h-1.5 rounded-full ${isTauri ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+            <span className={`w-1.5 h-1.5 rounded-full ${isTauri || isBrowserImg ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
             <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1 whitespace-nowrap">
               <ShieldCheck className="w-3 h-3 text-emerald-500" />
-              {isTauri ? 'Tauri Win32 Direct IOCTL' : 'Tauri IPC 대기 중'}
+              {isTauri ? 'Tauri Win32 Direct IOCTL' : isBrowserImg ? 'Browser OPFS / Image Block I/O' : 'Tauri IPC 대기 중'}
             </span>
           </div>
         </div>

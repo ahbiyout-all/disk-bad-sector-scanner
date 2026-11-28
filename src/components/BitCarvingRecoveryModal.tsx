@@ -17,7 +17,8 @@ import {
   RecoveryCarveInspectionReport,
   runRecoveryCarveInspection
 } from '../utils/recoveryDllBridge';
-import { isNativeHardwareRuntime, queryTauriRawSector } from '../utils/nativeDriveEngine';
+import { isNativeHardwareRuntime, queryTauriRawSectorBytes } from '../utils/nativeDriveEngine';
+import { isBrowserMountedDrive } from '../utils/browserImageMount';
 import { DiskDrive } from '../types';
 
 interface BitCarvingRecoveryModalProps {
@@ -40,6 +41,16 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
   const [targetLba, setTargetLba] = useState<number>(initialLba);
   const [clusterSpan, setClusterSpan] = useState<number>(8);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isSweeping, setIsSweeping] = useState<boolean>(false);
+  const [sweepHits, setSweepHits] = useState<
+    Array<{
+      lba: number;
+      signatureName: string;
+      fileExtension: string;
+      confidenceScore: number;
+      estimatedPayloadBytes: number;
+    }>
+  >([]);
   const [result, setResult] = useState<DSCarvedSectorResult | null>(null);
   const [carveReport, setCarveReport] = useState<RecoveryCarveInspectionReport | null>(null);
 
@@ -65,6 +76,7 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
       setTargetLba(initialLba);
       setResult(null);
       setCarveReport(null);
+      setSweepHits([]);
     }
   }, [isOpen, initialLba, drive?.id]);
 
@@ -73,15 +85,16 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
 
   if (!isOpen) return null;
 
-  const handleStartCarving = async () => {
+  const inspectSingleLba = async (lbaToInspect: number) => {
     const reqId = ++carveReqIdRef.current;
     const reqDriveId = drive?.id;
+    setTargetLba(lbaToInspect);
     setIsProcessing(true);
     setResult(null);
     setCarveReport(null);
 
     try {
-      const carved = await DS_ExecuteBitCarvingRecovery(targetLba, clusterSpan, drive);
+      const carved = await DS_ExecuteBitCarvingRecovery(lbaToInspect, clusterSpan, drive);
       if (
         !isMountedRef.current ||
         !isOpenRef.current ||
@@ -94,11 +107,15 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
 
       if (carved.isSalvaged) {
         let rawBytes: Uint8Array | null = null;
-        if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
-          const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
-          if (Number.isFinite(driveIndex) && driveIndex >= 0) {
-            const readLen = Math.min(64 * secSize, Math.max(secSize, carved.carvedSizeBytes));
-            rawBytes = await queryTauriRawSector(driveIndex, targetLba, readLen);
+        if (
+          drive &&
+          ((drive.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) ||
+            isBrowserMountedDrive(drive))
+        ) {
+          const spanSectors = Math.max(1, Math.min(64, Math.ceil(carved.carvedSizeBytes / secSize)));
+          const rawRes = await queryTauriRawSectorBytes(drive, lbaToInspect, spanSectors);
+          if (rawRes.supported && rawRes.bytes.length > 0) {
+            rawBytes = rawRes.bytes;
           }
         }
         if (!rawBytes && carved.hexPreview) {
@@ -128,18 +145,94 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
     }
   };
 
+  const handleStartCarving = async () => {
+    await inspectSingleLba(targetLba);
+  };
+
+  const handleSweepVolumeSignatures = async () => {
+    if (!drive || isProcessing || isSweeping) return;
+    const reqId = ++carveReqIdRef.current;
+    const reqDriveId = drive.id;
+    setIsSweeping(true);
+    setSweepHits([]);
+    try {
+      const total = Math.max(1, drive.totalSectors || 4096);
+      const maxScanSectors = Math.min(total, 4096);
+      const step = Math.max(1, Math.min(clusterSpan, 8));
+      const found: Array<{
+        lba: number;
+        signatureName: string;
+        fileExtension: string;
+        confidenceScore: number;
+        estimatedPayloadBytes: number;
+      }> = [];
+
+      for (let start = 0; start < maxScanSectors; start += 256) {
+        if (!isMountedRef.current || !isOpenRef.current || activeDriveIdRef.current !== reqDriveId || carveReqIdRef.current !== reqId) {
+          return;
+        }
+        const take = Math.min(256, maxScanSectors - start);
+        const batch = await queryTauriRawSectorBytes(drive, start, take);
+        if (!batch.supported || batch.bytes.length < secSize) continue;
+
+        for (let s = 0; s < take; s += step) {
+          const off = s * secSize;
+          if (off + 32 > batch.bytes.length) break;
+          const slice = batch.bytes.subarray(off, Math.min(batch.bytes.length, off + secSize * 4));
+          // Quick zero skip
+          let nonZero = false;
+          for (let k = 0; k < Math.min(32, slice.length); k++) {
+            if (slice[k] !== 0) {
+              nonZero = true;
+              break;
+            }
+          }
+          if (!nonZero) continue;
+
+          const report = await runRecoveryCarveInspection(slice);
+          if (report.signatureType > 0 && !report.isZeroFilled && report.confidenceScore >= 50 && report.fileExtension !== 'bin') {
+            found.push({
+              lba: start + s,
+              signatureName: report.signatureName,
+              fileExtension: report.fileExtension,
+              confidenceScore: report.confidenceScore,
+              estimatedPayloadBytes: report.estimatedPayloadBytes
+            });
+          }
+        }
+      }
+
+      if (
+        isMountedRef.current &&
+        isOpenRef.current &&
+        activeDriveIdRef.current === reqDriveId &&
+        carveReqIdRef.current === reqId
+      ) {
+        setSweepHits(found);
+        if (found.length > 0) {
+          await inspectSingleLba(found[0].lba);
+        }
+      }
+    } finally {
+      if (isMountedRef.current && activeDriveIdRef.current === reqDriveId && carveReqIdRef.current === reqId) {
+        setIsSweeping(false);
+      }
+    }
+  };
+
   const handleExportCarvedData = async () => {
     if (!result || !result.isSalvaged) return;
 
     let blobPayload: Uint8Array | null = null;
-    if (drive?.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) {
-      const driveIndex = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
-      if (Number.isFinite(driveIndex) && driveIndex >= 0) {
-        const exportBytes = Math.min(64 * 4096, Math.max(secSize, result.carvedSizeBytes));
-        const rawTauriBytes = await queryTauriRawSector(driveIndex, targetLba, exportBytes);
-        if (rawTauriBytes && rawTauriBytes.length > 0) {
-          blobPayload = rawTauriBytes;
-        }
+    if (
+      drive &&
+      ((drive.id.startsWith('drive-tauri-physical-') && isNativeHardwareRuntime()) ||
+        isBrowserMountedDrive(drive))
+    ) {
+      const spanSectors = Math.max(1, Math.min(512, Math.ceil(result.carvedSizeBytes / secSize)));
+      const rawRes = await queryTauriRawSectorBytes(drive, targetLba, spanSectors);
+      if (rawRes.supported && rawRes.bytes.length > 0) {
+        blobPayload = rawRes.bytes;
       }
     }
 
@@ -207,7 +300,9 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Tauri 데스크톱 네이티브 IPC를 통해 물리 디스크 Raw LBA 섹터에서 매직 바이트 시그니처를 직접 판독하여 복구합니다
+                {isBrowserMountedDrive(drive)
+                  ? '마운트된 브라우저 디스크 이미지(OPFS / .img)의 지정된 LBA 섹터에서 매직 바이트 시그니처를 직접 판독하여 복구합니다'
+                  : 'Tauri 데스크톱 네이티브 IPC를 통해 물리 디스크 Raw LBA 섹터에서 매직 바이트 시그니처를 직접 판독하여 복구합니다'}
               </p>
             </div>
           </div>
@@ -233,7 +328,11 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 수복 대상 물리 섹터 (Physical LBA) 및 탐색 클러스터 범위
               </div>
               <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 font-semibold">
-                {isNativeHardwareRuntime() ? 'Tauri Win32 Raw LBA Active' : 'Tauri IPC 연결 필요'}
+                {isNativeHardwareRuntime()
+                  ? 'Tauri Win32 Raw LBA Active'
+                  : isBrowserMountedDrive(drive)
+                  ? 'Browser OPFS / Image LBA Active'
+                  : 'Tauri IPC 또는 이미지 마운트 필요'}
               </span>
             </div>
 
@@ -269,30 +368,85 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
                 </select>
               </div>
 
-              <div className="flex items-end">
+              <div className="flex items-end gap-1.5">
                 <button
+                  type="button"
                   onClick={handleStartCarving}
-                  disabled={isProcessing}
-                  className="w-full py-2 px-3 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-400 text-white flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                  disabled={isProcessing || isSweeping}
+                  className="flex-1 py-2 px-3 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-400 text-white flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
                 >
                   {isProcessing ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      비트 카빙 분석 중...
+                      분석 중...
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-3.5 h-3.5" />
-                      비트 카빙 실행
+                      LBA 카빙
                     </>
                   )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSweepVolumeSignatures}
+                  disabled={!drive || isProcessing || isSweeping}
+                  className="py-2 px-3 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white flex items-center justify-center gap-1 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSweeping ? 'animate-spin' : ''}`} />
+                  <span>{isSweeping ? '탐색 중...' : '전체 탐색'}</span>
                 </button>
               </div>
             </div>
 
-            <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-              대상 장치: {effectiveDriveModel} | 오프셋: {(targetLba * secSize).toLocaleString()} 바이트 위치 ({secSize}B/섹터)
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+              <span>
+                대상 장치: {effectiveDriveModel} | 오프셋: {(targetLba * secSize).toLocaleString()} 바이트 위치 ({secSize}B/섹터)
+              </span>
+              {isBrowserMountedDrive(drive) && (
+                <div className="flex flex-wrap items-center gap-1">
+                  {[
+                    { lba: 2128, label: 'LBA 2128 · PNG' },
+                    { lba: 2136, label: 'LBA 2136 · 삭제 PNG' },
+                    { lba: 2144, label: 'LBA 2144 · 삭제 PDF' }
+                  ].map(preset => (
+                    <button
+                      key={preset.lba}
+                      type="button"
+                      disabled={isProcessing || isSweeping}
+                      onClick={() => void inspectSingleLba(preset.lba)}
+                      className="px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-500 text-slate-700 dark:text-slate-200 cursor-pointer"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+
+            {sweepHits.length > 0 && (
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                  볼륨 시그니처 탐색 결과 ({sweepHits.length}개 파일 헤더 발견 — 클릭하여 복구/미리보기):
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sweepHits.map(hit => (
+                    <button
+                      key={hit.lba}
+                      type="button"
+                      onClick={() => void inspectSingleLba(hit.lba)}
+                      className={`px-2 py-1 rounded text-[11px] font-mono border cursor-pointer transition-colors ${
+                        targetLba === hit.lba
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:border-blue-500'
+                      }`}
+                    >
+                      LBA #{hit.lba} · {hit.signatureName} (.{hit.fileExtension}, {hit.confidenceScore}%)
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Recovery Results Section */}
@@ -418,10 +572,10 @@ export const BitCarvingRecoveryModal: React.FC<BitCarvingRecoveryModalProps> = (
               비트 카빙(Bit Carving) 동작 기준 안내
             </div>
             <p>
-              1. <strong>물리 Raw LBA 직독</strong>: Windows 관리자 권한의 Tauri 데스크톱 앱에서 물리 디스크(<code className="font-mono">\\.\PhysicalDriveN</code>)의 지정된 LBA 오프셋 바이트를 직접 판독하여 JPEG, PNG, PDF, ZIP, MP4, NTFS 부트 시그니처를 식별합니다.
+              1. <strong>Raw LBA 직독</strong>: 마운트된 브라우저 디스크 이미지(OPFS/.img) 또는 Tauri 데스크톱 물리 디스크(<code className="font-mono">\\.\PhysicalDriveN</code>)의 지정된 LBA 오프셋 바이트를 직접 판독하여 JPEG, PNG, PDF, ZIP, MP4, NTFS 부트 시그니처를 식별합니다.
             </p>
             <p>
-              2. <strong>무가공 원칙</strong>: Tauri 네이티브 IPC 연결이 없는 웹 브라우저 환경에서는 가짜 섹터 Hex 데이터를 생성하지 않고 네이티브 권한 필요 상태를 명확히 보고합니다.
+              2. <strong>무가공 원칙</strong>: 실물 디스크 핸들이나 마운트된 이미지가 없는 상태에서는 가짜 섹터 Hex 데이터를 생성하지 않고 마운트/연결 필요 상태를 명확히 보고합니다.
             </p>
           </div>
         </div>

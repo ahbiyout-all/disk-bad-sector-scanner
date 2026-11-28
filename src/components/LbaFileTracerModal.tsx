@@ -41,6 +41,7 @@ import {
   isSystemOrBootDrive,
   isTauriDesktopRuntime
 } from '../utils/nativeDriveEngine';
+import { isBrowserMountedDrive } from '../utils/browserImageMount';
 import {
   buildHeatmapSearchIndex,
   computeFileLbaHeatmap,
@@ -242,6 +243,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
   }, []);
 
   const tauriActive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
+  const mediaActive = tauriActive || isBrowserMountedDrive(drive);
 
   const [sortByCriticality, setSortByCriticality] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -464,7 +466,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
 
     if (
       !isOpen ||
-      !tauriActive ||
+      !mediaActive ||
       !selectedFileEntry ||
       selectedFileEntry.file.extents.length === 0
     ) {
@@ -490,7 +492,7 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
     });
   }, [
     isOpen,
-    tauriActive,
+    mediaActive,
     drive.id,
     selectedFileEntry,
     allKnownBadLbas
@@ -1651,11 +1653,11 @@ export const LbaFileTracerModal: React.FC<LbaFileTracerModalProps> = ({
             )}
           </div>
 
-          {!tauriActive && (
+          {!mediaActive && (
             <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
               <div className="text-[11px]">
-                실제 디스크의 MBR/GPT, VBR BPB, NTFS $MFT 및 FAT32 FAT1 클러스터 체인 판독은 Windows 관리자 권한이 부여된 Tauri 데스크톱 네이티브 IPC 환경에서만 수행됩니다.
+                실제 디스크의 MBR/GPT, VBR BPB, NTFS $MFT 및 FAT32 클러스터 체인 판독은 Tauri 데스크톱 IPC 또는 마운트된 브라우저 디스크 이미지(.img/OPFS)에서 수행됩니다.
               </div>
             </div>
           )}

@@ -32,8 +32,9 @@ import {
   getDriveIndexFromId,
   isSystemOrBootDrive,
   isTauriDesktopRuntime,
-  queryTauriRawSector
+  queryTauriRawSectorBytes
 } from '../utils/nativeDriveEngine';
+import { isBrowserMountedDrive } from '../utils/browserImageMount';
 
 type ZeroFillRepairMode = 'standard' | 'deep_ecc' | 'firmware_realloc';
 
@@ -366,6 +367,7 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
     const driveSnapshot = activeDrive;
     const driveIndex = getDriveIndexFromId(driveSnapshot);
     const tauriActive = isTauriDesktopRuntime() && driveIndex !== null;
+    const mediaReady = tauriActive || isBrowserMountedDrive(driveSnapshot);
     const blocksById = new Map<number, SectorBlock>(blocks.map(b => [b.id, b]));
     const stepsForMode = REPAIR_PIPELINE_STEPS[repairMode];
     const totalStepsPerSector = stepsForMode.length;
@@ -496,10 +498,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             }
           } else if (stepIdx === 1) {
             let verifyOk = Boolean(writeResult?.verifiedZeros);
-            if (tauriActive && driveIndex !== null) {
-              const readBack = await queryTauriRawSector(driveIndex, lba, 512);
-              if (readBack && readBack.length > 0) {
-                verifyOk = readBack.every(byte => byte === 0);
+            if (mediaReady) {
+              const readRes = await queryTauriRawSectorBytes(driveSnapshot, lba, 1);
+              if (readRes.supported && readRes.bytes.length > 0) {
+                verifyOk = readRes.bytes.every(byte => byte === 0);
               }
             }
             if (!verifyOk) {
@@ -514,12 +516,12 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
           }
         } else if (repairMode === 'deep_ecc') {
           if (stepIdx === 0) {
-            if (tauriActive && driveIndex !== null) {
-              const probeBytes = await queryTauriRawSector(driveIndex, lba, 512);
+            if (mediaReady) {
+              const probeRes = await queryTauriRawSectorBytes(driveSnapshot, lba, 1);
               setRepairLogs(prev => [
                 ...prev,
                 `[${timeStr}] [${i + 1}/${totalToRepair}] LBA #${lba.toLocaleString()} [Step 1/3] 사전 읽기 프로브 ${
-                  probeBytes ? `${probeBytes.length}B 응답` : '타임아웃/UNC (쓰기 격리 진행)'
+                  probeRes.supported && probeRes.bytes.length > 0 ? `${probeRes.bytes.length}B 응답` : '타임아웃/UNC (쓰기 격리 진행)'
                 }`
               ]);
             } else {
@@ -541,10 +543,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             }
           } else if (stepIdx === 2) {
             let verifyOk = Boolean(writeResult?.verifiedZeros);
-            if (tauriActive && driveIndex !== null) {
-              const readBack = await queryTauriRawSector(driveIndex, lba, 512);
-              if (readBack && readBack.length > 0) {
-                verifyOk = readBack.every(byte => byte === 0);
+            if (mediaReady) {
+              const readRes = await queryTauriRawSectorBytes(driveSnapshot, lba, 1);
+              if (readRes.supported && readRes.bytes.length > 0) {
+                verifyOk = readRes.bytes.every(byte => byte === 0);
               }
             }
             if (!verifyOk) {
@@ -560,8 +562,8 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
         } else {
           // firmware_realloc (4 steps)
           if (stepIdx === 0) {
-            if (tauriActive && driveIndex !== null) {
-              await queryTauriRawSector(driveIndex, lba, 512);
+            if (mediaReady) {
+              await queryTauriRawSectorBytes(driveSnapshot, lba, 1);
             }
             setRepairLogs(prev => [
               ...prev,
@@ -592,10 +594,10 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
             }
           } else if (stepIdx === 3) {
             let verifyOk = Boolean(writeResult?.verifiedZeros);
-            if (tauriActive && driveIndex !== null) {
-              const readBack = await queryTauriRawSector(driveIndex, lba, 512);
-              if (readBack && readBack.length > 0) {
-                verifyOk = readBack.every(byte => byte === 0);
+            if (mediaReady) {
+              const readRes = await queryTauriRawSectorBytes(driveSnapshot, lba, 1);
+              if (readRes.supported && readRes.bytes.length > 0) {
+                verifyOk = readRes.bytes.every(byte => byte === 0);
               }
             }
             if (!verifyOk) {
@@ -1016,14 +1018,28 @@ export const SmartRemapModal: React.FC<SmartRemapModalProps> = ({
 
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-2 max-h-44 overflow-y-auto space-y-1 font-mono text-xs">
               {targetableBlocks.length === 0 ? (
-                <div className="p-4 text-center text-slate-400 text-xs font-sans space-y-1">
+                <div className="p-4 text-center text-slate-400 text-xs font-sans space-y-2.5">
                   <div className="text-emerald-400 font-semibold flex items-center justify-center gap-1.5">
                     <CheckCircle2 className="w-4 h-4" />
                     현재 큐에 추가된 섹터 또는 감지된 배드섹터가 없습니다.
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    섹터 그리드에서 &quot;다중 선택&quot; 모드나 Ctrl+클릭으로 비연속 블록을 수복 큐에 추가할 수 있습니다.
+                    섹터 그리드에서 &quot;다중 선택&quot; 모드나 Ctrl+클릭으로 비연속 블록을 추가하거나, 비시스템 데이터 블록을 바로 큐에 등록할 수 있습니다.
                   </div>
+                  {blocks.length > 0 && !isProtectedSystemDrive && (
+                    <button
+                      type="button"
+                      disabled={isRepairing}
+                      onClick={() => {
+                        const safeTailBlock = blocks[Math.max(0, Math.floor(blocks.length * 0.75))];
+                        if (safeTailBlock) updateSelection([safeTailBlock.id]);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      데이터 후단 검증 블록(LBA #{blocks[Math.max(0, Math.floor(blocks.length * 0.75))]?.lba.toLocaleString()}) 큐에 추가
+                    </button>
+                  )}
                 </div>
               ) : (
                 targetableBlocks.map((block) => {

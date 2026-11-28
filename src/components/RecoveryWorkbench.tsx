@@ -38,6 +38,17 @@ import { LbaFileTracerModal } from './LbaFileTracerModal';
 import { SmartRemapModal } from './SmartRemapModal';
 import { LbaImageClonerModal } from './LbaImageClonerModal';
 import { SanitizeTrimModal } from './SanitizeTrimModal';
+import {
+  getDriveIndexFromId,
+  isTauriDesktopRuntime,
+  queryTauriRawSectorBytes,
+  queryTauriRawSectorRange,
+  queryTauriSanitizeCapabilities
+} from '../utils/nativeDriveEngine';
+import { isBrowserMountedDrive } from '../utils/browserImageMount';
+import { runForensicsPartitionInspection } from '../utils/forensicsDllBridge';
+import { runRecoveryCarveInspection, runRecoveryDdrescuePlan } from '../utils/recoveryDllBridge';
+import { traceAffectedFilesForLba } from '../utils/lbaFileTracer';
 
 export interface RecoveryWorkbenchProps {
   activeTool: RecoveryToolTab;
@@ -65,6 +76,8 @@ export interface RecoveryWorkbenchProps {
   onRescanDrives: () => Promise<void>;
   isRescanning?: boolean;
   onOpenRecoveryWizard?: () => void;
+  onMountOpfsDiagnosticDrive?: () => Promise<void> | void;
+  onMountLocalImage?: () => void;
 }
 
 export interface RecoveryStepItem {
@@ -369,13 +382,17 @@ export const RecoveryWorkbench: React.FC<RecoveryWorkbenchProps> = ({
   onRefreshHardware,
   onRescanDrives,
   isRescanning = false,
-  onOpenRecoveryWizard
+  onOpenRecoveryWizard,
+  onMountOpfsDiagnosticDrive,
+  onMountLocalImage
 }) => {
   const en = locale === 'en';
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isGuideExpanded, setIsGuideExpanded] = useState<boolean>(true);
   const [isAutoRunning, setIsAutoRunning] = useState<boolean>(false);
   const [autoRunMessage, setAutoRunMessage] = useState<string | null>(null);
+
+  const [autoRunStatus, setAutoRunStatus] = useState<'info' | 'success' | 'warning'>('info');
 
   // Retrieve structured JSON scenario guide data for activeTool
   const scenarioGuide = useMemo(() => {
@@ -386,16 +403,165 @@ export const RecoveryWorkbench: React.FC<RecoveryWorkbenchProps> = ({
 
   const handleAutoWizardRun = async () => {
     setIsAutoRunning(true);
-    setAutoRunMessage(en ? 'Executing Step 1 automatically...' : '1단계 자동 마법사 실행 중...');
     setCurrentStep(1);
+    setAutoRunStatus('info');
+    setAutoRunMessage(en ? 'Executing Step 1 real diagnostics...' : '1단계 실제 진단 및 데이터 수집 실행 중...');
 
-    await new Promise(r => setTimeout(r, 800));
-    setAutoRunMessage(en ? 'Step 1 completed successfully! Advancing to Step 2.' : '1단계가 성공적으로 완료되었습니다! 2단계로 이동합니다.');
+    try {
+      const tauriReady = isTauriDesktopRuntime();
 
-    await new Promise(r => setTimeout(r, 600));
-    setCurrentStep(2);
-    setIsAutoRunning(false);
-    setAutoRunMessage(null);
+      if (activeTool === 'remap') {
+        const defectiveIds = blocks
+          .filter(b => b.status === 'bad' || b.status === 'critical' || b.status === 'slow')
+          .map(b => b.id);
+        onSyncRepairQueue(defectiveIds);
+        if (defectiveIds.length > 0) {
+          setAutoRunStatus('success');
+          setAutoRunMessage(
+            en
+              ? `Step 1 complete: Queued ${defectiveIds.length} defective/slow block(s) into SMART Remap queue. Advancing to Step 2.`
+              : `1단계 완료: 결함/지연 블록 ${defectiveIds.length}개를 SMART 리맵 큐에 등록했습니다. 2단계로 이동합니다.`
+          );
+          setCurrentStep(2);
+        } else {
+          setAutoRunStatus('warning');
+          setAutoRunMessage(
+            en
+              ? 'Step 1 scanned blocks: 0 bad or slow sectors detected yet. Run a surface scan first or select blocks manually.'
+              : '1단계 점검 결과: 현재 검출된 불량/지연 블록이 0건입니다. 표면 검사를 실행하거나 블록을 수동 선택하세요.'
+          );
+        }
+        return;
+      }
+
+      if (!activeDrive) {
+        setAutoRunStatus('warning');
+        setAutoRunMessage(
+          en
+            ? 'No physical drive attached. Connect via Tauri Desktop or open the Expert Recovery Wizard to analyze a local .img/.dd file.'
+            : '연결된 물리 드라이브가 없습니다. Tauri 데스크톱을 연결하거나 "전문가 복구 마법사"에서 로컬 이미지(.img/.dd) 파일을 선택하세요.'
+        );
+        return;
+      }
+
+      const browserImgReady = isBrowserMountedDrive(activeDrive);
+      const mediaReady = tauriReady || browserImgReady;
+
+      if (activeTool === 'hex') {
+        if (!mediaReady) {
+          setAutoRunStatus('warning');
+          setAutoRunMessage(
+            en
+              ? 'Raw sector inspection requires Tauri Desktop IPC or a mounted disk image (.img/.dd).'
+              : '원시 섹터(LBA 0~33) 판독에는 Tauri 데스크톱 IPC 또는 마운트된 디스크 이미지(.img/.dd)가 필요합니다.'
+          );
+          return;
+        }
+        const res = await queryTauriRawSectorRange(activeDrive, 0, 34);
+        if (!res.supported || res.bytes.length < 512) {
+          setAutoRunStatus('warning');
+          setAutoRunMessage(res.reason || (en ? 'Failed to read LBA 0..33 partition table.' : 'LBA 0~33 파티션 테이블을 읽지 못했습니다.'));
+          return;
+        }
+        const pt = await runForensicsPartitionInspection(res.bytes, res.sectorSize || 512);
+        onOpenHexInspector(0);
+        setAutoRunStatus('success');
+        setAutoRunMessage(
+          en
+            ? `Step 1 complete: Detected ${pt.parsed.scheme} scheme (${pt.parsed.entries.length} partitions, MBR 0x55AA=${pt.parsed.mbrSignatureValid ? 'OK' : 'Invalid'}).`
+            : `1단계 완료: ${pt.parsed.scheme} 구조 감지 (파티션 ${pt.parsed.entries.length}개, MBR 0x55AA=${pt.parsed.mbrSignatureValid ? '유효' : '무효'}). 2단계로 이동합니다.`
+        );
+        setCurrentStep(2);
+        return;
+      }
+
+      if (activeTool === 'carving') {
+        const driveIdx = getDriveIndexFromId(activeDrive);
+        const firstBad = blocks.find(b => b.status === 'bad')?.lba ?? bitCarvingTargetLba;
+        if (!mediaReady || (!browserImgReady && driveIdx === null)) {
+          setAutoRunStatus('warning');
+          setAutoRunMessage(
+            en
+              ? 'Raw LBA carving requires Tauri Desktop IPC or a mounted disk image (.img/.bin).'
+              : 'Raw LBA 카빙에는 Tauri 데스크톱 IPC 또는 마운트된 디스크 이미지(.img/.bin)가 필요합니다.'
+          );
+          return;
+        }
+        const rawRes = await queryTauriRawSectorBytes(activeDrive, firstBad, 8);
+        if (!rawRes.supported || rawRes.bytes.length === 0) {
+          setAutoRunStatus('warning');
+          setAutoRunMessage(rawRes.reason || (en ? `Could not read raw bytes at LBA #${firstBad}.` : `LBA #${firstBad} 원시 바이트 판독에 실패했습니다.`));
+          return;
+        }
+        const carve = await runRecoveryCarveInspection(rawRes.bytes);
+        setAutoRunStatus('success');
+        setAutoRunMessage(
+          en
+            ? `Step 1 complete at LBA #${firstBad}: ${carve.signatureName} (confidence ${carve.confidenceScore}%, CRC32 0x${carve.crc32.toString(16).toUpperCase()}).`
+            : `1단계 완료 (LBA #${firstBad}): ${carve.signatureName} 식별 (신뢰도 ${carve.confidenceScore}%, CRC32 0x${carve.crc32.toString(16).toUpperCase()}). 2단계로 이동합니다.`
+        );
+        setCurrentStep(2);
+        return;
+      }
+
+      if (activeTool === 'tracer') {
+        const targetLba =
+          fileTracerTargetLba > 0
+            ? fileTracerTargetLba
+            : blocks.find(b => b.status === 'bad')?.lba ?? errorLogs[0]?.lba ?? 2048;
+        const traceRes = await traceAffectedFilesForLba(activeDrive, targetLba);
+        if (!traceRes.supported) {
+          setAutoRunStatus('warning');
+          setAutoRunMessage(traceRes.diagnosticNote);
+          return;
+        }
+        setAutoRunStatus('success');
+        setAutoRunMessage(
+          en
+            ? `Step 1 complete (LBA #${targetLba}): ${traceRes.filesystem} · ${traceRes.affectedFiles.length} affected file(s) across ${traceRes.mftRecordsScanned} records.`
+            : `1단계 완료 (LBA #${targetLba}): ${traceRes.filesystem} · ${traceRes.mftRecordsScanned}개 레코드 분석, 영향 파일 ${traceRes.affectedFiles.length}건 식별. 2단계로 이동합니다.`
+        );
+        setCurrentStep(2);
+        return;
+      }
+
+      if (activeTool === 'cloner') {
+        const sLba = lbaClonerRange ? lbaClonerRange.startLba : 0;
+        const maxLba = Math.max(sLba, (activeDrive.totalSectors || 2048) - 1);
+        const eLba = lbaClonerRange ? lbaClonerRange.endLba : Math.min(maxLba, sLba + 16383);
+        const plan = await runRecoveryDdrescuePlan(
+          [{ startLba: sLba, sectorCount: Math.max(1, eLba - sLba + 1), status: 'non_tried', attempts: 0 }],
+          128
+        );
+        onOpenLbaCloner({ startLba: sLba, endLba: eLba });
+        setAutoRunStatus('success');
+        setAutoRunMessage(
+          en
+            ? `Step 1 complete: Range LBA ${sLba.toLocaleString()}~${eLba.toLocaleString()} initialized (${plan.intervals.length} domain interval).`
+            : `1단계 완료: LBA ${sLba.toLocaleString()}~${eLba.toLocaleString()} 복제 범위 및 ddrescue 플랜(${plan.intervals.length}개 구간) 설정됨. 2단계로 이동합니다.`
+        );
+        setCurrentStep(2);
+        return;
+      }
+
+      if (activeTool === 'sanitize') {
+        const cap = await queryTauriSanitizeCapabilities(activeDrive);
+        setAutoRunStatus(cap.supported ? 'success' : 'warning');
+        setAutoRunMessage(
+          cap.supported
+            ? en
+              ? `Step 1 complete: Protocol ${cap.protocol}, TRIM=${cap.trimSupported ? 'Supported' : 'No'}, SystemDrive=${cap.isSystemDrive ? 'Locked' : 'Unlocked'}.`
+              : `1단계 완료: 프로토콜 ${cap.protocol}, TRIM=${cap.trimSupported ? '지원' : '미지원'}, 시스템 보호=${cap.isSystemDrive ? '잠금' : '해제 가능'}. 2단계로 이동합니다.`
+            : cap.reason || (en ? 'Tauri Desktop IPC required for hardware sanitize inspection.' : '하드웨어 보안 정책 조회에는 Tauri 데스크톱 IPC가 필요합니다.')
+        );
+        if (cap.supported) setCurrentStep(2);
+      }
+    } catch (err: any) {
+      setAutoRunStatus('warning');
+      setAutoRunMessage(err?.message || String(err) || 'Auto wizard execution failed.');
+    } finally {
+      setIsAutoRunning(false);
+    }
   };
 
   const tools: {
@@ -528,10 +694,34 @@ export const RecoveryWorkbench: React.FC<RecoveryWorkbenchProps> = ({
         {isGuideExpanded && (
           <div className="p-4 space-y-4">
             {autoRunMessage && (
-              <div className="flex items-center gap-2 p-2.5 rounded bg-blue-600/10 border border-blue-600/30 text-blue-700 dark:text-blue-300 text-xs font-semibold">
-                {isAutoRunning && <Cpu className="w-4 h-4 animate-spin shrink-0" />}
-                {!isAutoRunning && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
-                <span>{autoRunMessage}</span>
+              <div
+                className={`flex items-center justify-between gap-2 p-2.5 rounded border text-xs font-semibold ${
+                  autoRunStatus === 'success'
+                    ? 'bg-emerald-600/10 border-emerald-600/30 text-emerald-700 dark:text-emerald-300'
+                    : autoRunStatus === 'warning'
+                    ? 'bg-amber-600/10 border-amber-600/30 text-amber-800 dark:text-amber-300'
+                    : 'bg-blue-600/10 border-blue-600/30 text-blue-700 dark:text-blue-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {isAutoRunning ? (
+                    <Cpu className="w-4 h-4 animate-spin shrink-0" />
+                  ) : autoRunStatus === 'warning' ? (
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  )}
+                  <span>{autoRunMessage}</span>
+                </div>
+                {!isAutoRunning && (
+                  <button
+                    type="button"
+                    onClick={() => setAutoRunMessage(null)}
+                    className="text-[11px] opacity-75 hover:opacity-100 cursor-pointer shrink-0 px-1.5"
+                  >
+                    {en ? 'Dismiss' : '닫기'}
+                  </button>
+                )}
               </div>
             )}
 
@@ -586,7 +776,7 @@ export const RecoveryWorkbench: React.FC<RecoveryWorkbenchProps> = ({
                   {en ? activeStepItem.descriptionEn : activeStepItem.descriptionKo}
                 </p>
                 <div className="text-[11px] text-blue-600 dark:text-blue-400 font-medium flex items-center gap-1.5 pt-0.5">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-600 dark:bg-blue-400 animate-pulse" />
+                  <Sparkles className="w-3 h-3 shrink-0" />
                   <span>{en ? activeStepItem.actionHintEn : activeStepItem.actionHintKo}</span>
                 </div>
               </div>
@@ -630,15 +820,47 @@ export const RecoveryWorkbench: React.FC<RecoveryWorkbenchProps> = ({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void onRescanDrives()}
-            disabled={isRescanning}
-            className="h-8 px-3.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 self-start sm:self-center"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
-            <span>{t(locale, 'nav.rescan')}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-center">
+            {onMountOpfsDiagnosticDrive && (
+              <button
+                type="button"
+                onClick={() => void onMountOpfsDiagnosticDrive()}
+                className="h-8 px-3.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <HardDrive className="w-3.5 h-3.5" />
+                <span>{en ? 'Mount 8MB OPFS Image' : '진단용 이미지 마운트 (OPFS 8MB)'}</span>
+              </button>
+            )}
+            {onMountLocalImage && (
+              <button
+                type="button"
+                onClick={onMountLocalImage}
+                className="h-8 px-3.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <FileSearch className="w-3.5 h-3.5" />
+                <span>{en ? 'Load .img/.dd File' : '로컬 이미지 파일 마운트'}</span>
+              </button>
+            )}
+            {onOpenRecoveryWizard && (
+              <button
+                type="button"
+                onClick={onOpenRecoveryWizard}
+                className="h-8 px-3.5 rounded-md border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{en ? 'Expert Recovery Wizard' : '복구 마법사 열기'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void onRescanDrives()}
+              disabled={isRescanning}
+              className="h-8 px-3.5 rounded-md border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
+              <span>{t(locale, 'nav.rescan')}</span>
+            </button>
+          </div>
         </section>
       ) : (
         <div>

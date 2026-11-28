@@ -112,6 +112,13 @@ import { safeStorage } from './utils/safeStorage';
 import { DiskSentinelMigrationBundle, mergeScanRecords } from './utils/dataMigration';
 import { ContiguousDegradationZone, PredictiveFailureReport, analyzePredictiveFailure } from './utils/predictiveFailureAnalysis';
 import {
+  createAndMountOpfsDiagnosticDrive,
+  exportMountedBrowserImageBlob,
+  isBrowserMountedDrive,
+  mountBrowserImageFile
+} from './utils/browserImageMount';
+import { triggerBlobDownload } from './utils/realRecoveryEngine';
+import {
   Github,
   BookOpen,
   Building2,
@@ -124,7 +131,11 @@ import {
   SlidersHorizontal,
   RefreshCw,
   Zap,
-  RotateCcw
+  RotateCcw,
+  Wand2,
+  Database,
+  FolderOpen,
+  Download
 } from 'lucide-react';
 
 export default function App() {
@@ -350,14 +361,31 @@ export default function App() {
   const [thermalHistoryByDrive, setThermalHistoryByDrive] = useState<Record<string, ThermalHistoryPoint[]>>({});
   const [smartSelfTestByDrive, setSmartSelfTestByDrive] = useState<Record<string, SmartSelfTestState>>({});
 
+  const userUnmountedDiagnosticRef = useRef<boolean>(false);
+
   const checkNativeEngineConnection = useCallback(async () => {
     setBridgeDiagnostics(prev => ({ ...prev, checking: true }));
     try {
-      const [allDrives, bridgeOk] = await Promise.all([
+      const [discoveredDrives, bridgeOk] = await Promise.all([
         rescanAllDrives([]),
         detectNativeBridgeAvailable(true)
       ]);
       const tauriOk = isTauriDesktopRuntime();
+
+      let allDrives = discoveredDrives;
+      if (
+        allDrives.length === 0 &&
+        !tauriOk &&
+        !bridgeOk &&
+        !userUnmountedDiagnosticRef.current
+      ) {
+        try {
+          await createAndMountOpfsDiagnosticDrive();
+          allDrives = await rescanAllDrives([]);
+        } catch {
+          // ignore OPFS auto-mount failure if storage is unavailable
+        }
+      }
 
       setDrives(allDrives);
       if (allDrives.length > 0) {
@@ -439,13 +467,67 @@ export default function App() {
     };
   }, [bridgeDiagnostics.bridgeReachable]);
 
+  const localImageInputRef = useRef<HTMLInputElement | null>(null);
+  const [isMountingImage, setIsMountingImage] = useState<boolean>(false);
+
+  const handleMountOpfsDiagnosticDrive = useCallback(async () => {
+    userUnmountedDiagnosticRef.current = false;
+    setIsMountingImage(true);
+    try {
+      const mounted = await createAndMountOpfsDiagnosticDrive();
+      const updated = await checkNativeEngineConnection();
+      setSelectedDriveId(mounted.id);
+      setSelectedMethodId(getDefaultMethodForDrive(mounted));
+      soundManager.playSuccess();
+      dispatchNotification(
+        '진단용 FAT32 디스크 이미지 마운트 완료',
+        `${mounted.model} (${updated.length}개 장치 활성) — 표면 검사 및 복구 도구를 바로 실행할 수 있습니다.`
+      );
+    } catch (err) {
+      console.error('Failed to mount OPFS diagnostic drive:', err);
+    } finally {
+      setIsMountingImage(false);
+    }
+  }, [checkNativeEngineConnection, dispatchNotification]);
+
+  const handleMountLocalImageFile = useCallback(async (file: File) => {
+    setIsMountingImage(true);
+    try {
+      const mounted = await mountBrowserImageFile(file, {
+        sectorSize: 512,
+        persistToOpfs: file.size <= 32 * 1024 * 1024
+      });
+      await checkNativeEngineConnection();
+      setSelectedDriveId(mounted.id);
+      setSelectedMethodId(getDefaultMethodForDrive(mounted));
+      soundManager.playSuccess();
+      dispatchNotification(
+        '로컬 디스크 이미지 마운트 완료',
+        `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB) 장치가 연결되었습니다.`
+      );
+    } catch (err) {
+      console.error('Failed to mount local image file:', err);
+    } finally {
+      setIsMountingImage(false);
+    }
+  }, [checkNativeEngineConnection, dispatchNotification]);
+
+  const handleExportActiveBrowserImage = useCallback(async () => {
+    if (!activeDrive || !isBrowserMountedDrive(activeDrive)) return;
+    const exported = await exportMountedBrowserImageBlob(activeDrive.id);
+    if (exported) {
+      triggerBlobDownload(exported.blob, exported.fileName);
+      soundManager.playSuccess();
+    }
+  }, [activeDrive]);
+
   const handleRescanDrives = useCallback(async () => {
     setIsRescanningDrives(true);
     try {
       const updated = await checkNativeEngineConnection();
       soundManager.playClick();
       if (updated.length > 0) {
-        dispatchNotification('디스크 장치 재검색 완료', `물리 스토리지 ${updated.length}대가 Tauri 네이티브 엔진에 인식되었습니다.`);
+        dispatchNotification('디스크 장치 재검색 완료', `스토리지 장치 ${updated.length}대가 진단 엔진에 인식되었습니다.`);
       }
     } catch (err) {
       console.error('Error rescanning drives:', err);
@@ -468,6 +550,9 @@ export default function App() {
     const res = await invokeTauriEjectPhysicalDrive(targetDrive);
     if (!res.success) {
       return { success: false, message: res.message };
+    }
+    if (ejectDriveId === 'drive-browser-image-opfs-diagnostic-8mb') {
+      userUnmountedDiagnosticRef.current = true;
     }
     setDrives(prev => {
       const remaining = prev.filter(d => d.id !== ejectDriveId);
@@ -2078,7 +2163,7 @@ export default function App() {
         scanRecordsCount={scanRecords.length}
         isScanning={telemetry.status === 'scanning'}
         healthScore={calculatedHealth}
-        isNativeReady={bridgeDiagnostics.tauriAvailable || bridgeDiagnostics.bridgeReachable}
+        isNativeReady={bridgeDiagnostics.tauriAvailable || bridgeDiagnostics.bridgeReachable || isBrowserMountedDrive(activeDrive)}
         watchdogRuleCount={watchdogRules.filter(r => r.enabled).length}
         watchdogAlertCount={watchdogEvents.length}
         hasUpdate={hasUpdate}
@@ -2112,10 +2197,25 @@ export default function App() {
           locale={locale}
           onChangeLocale={handleChangeLocale}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+          onMountLocalImage={() => localImageInputRef.current?.click()}
         />
 
         {/* Main Workspace Viewport */}
         <main className="flex-1 w-full max-w-[1440px] mx-auto px-3 sm:px-5 py-3.5 sm:py-4 space-y-3">
+          <input
+            ref={localImageInputRef}
+            type="file"
+            accept=".img,.dd,.bin,.raw,.iso,.vhd,*/*"
+            className="hidden"
+            onChange={e => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) {
+                void handleMountLocalImageFile(file);
+              }
+            }}
+          />
+
           {/* Real-time Alert Banner when Bad Sectors are detected */}
           <AlertBanner
             badCount={badCount}
@@ -2127,45 +2227,65 @@ export default function App() {
             onRequestNotification={handleRequestNotification}
           />
 
-          {/* Browser Empty State & Native Tauri / Local Bridge Launch Guide when no physical disk is attached */}
+          {/* Browser Empty State & Immediate Image Mount / Native Tauri Guide */}
           {!['history', 'fleet', 'integrity', 'recovery', 'tools', 'settings'].includes(activeTab) && !activeDrive && (
             <section className="bg-white dark:bg-[#0F172A] border border-slate-200 dark:border-slate-800 rounded-md p-5 sm:p-7 space-y-5">
               {isInitialProbing ? (
                 <div className="py-10 flex flex-col items-center justify-center text-center space-y-2.5">
                   <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
                 <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  물리 드라이브 확인 중...
+                  스토리지 장치 및 OPFS 이미지 확인 중...
                 </div>
               </div>
             ) : (
               <>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
                   <div className="space-y-1">
                     <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-                      연결된 물리 디스크 없음
+                      {locale === 'en' ? 'Mount Disk Image or Connect Physical Drive' : '디스크 이미지 마운트 또는 물리 디스크 연결'}
                     </h2>
                     <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                      실제 내·외장 디스크(<code className="font-mono text-slate-800 dark:text-slate-200">\\.\PhysicalDrive0~31</code>) 인식 및 Verify·Read·Butterfly·Erase 검사는 Tauri 데스크톱 앱에서 실행하세요.
+                      {locale === 'en'
+                        ? 'Create a real OPFS 8MB FAT32 diagnostic volume or load a local .img/.dd/.bin file to run Surface Scan, Hex/GPT, Bit Carving, File Tracer, SMART Remap, and ddrescue cloning right in your browser.'
+                        : '브라우저에서 8MB FAT32 진단 이미지를 즉시 생성·마운트하거나 로컬 디스크 이미지(.img/.dd/.bin)를 열어 표면 검사, Hex/GPT, 비트 카빙, 파일 추적, 리맵 및 ddrescue 복제를 바로 실행할 수 있습니다.'}
                     </p>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
-                      onClick={() => void checkNativeEngineConnection()}
-                      disabled={bridgeDiagnostics.checking}
-                      className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-50"
+                      onClick={() => void handleMountOpfsDiagnosticDrive()}
+                      disabled={isMountingImage}
+                      className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap shrink-0"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${bridgeDiagnostics.checking ? 'animate-spin' : ''}`} />
-                      <span>연결 재확인</span>
+                      <Database className={`w-3.5 h-3.5 ${isMountingImage ? 'animate-spin' : ''}`} />
+                      <span>{locale === 'en' ? 'Mount 8MB FAT32 Diagnostic Volume' : '진단용 이미지 생성 및 마운트 (OPFS 8MB)'}</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => openExternalDeviceModal('connected')}
-                      className="px-3.5 py-2 rounded-md border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                      onClick={() => localImageInputRef.current?.click()}
+                      disabled={isMountingImage}
+                      className="px-3.5 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap shrink-0"
                     >
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>장치 슬롯 보기</span>
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>{locale === 'en' ? 'Mount Local Image (.img/.dd)' : '로컬 이미지 마운트 (.img/.dd)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsRecoveryWizardOpen(true)}
+                      className="px-3.5 py-2 rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Wand2 className="w-3.5 h-3.5" />
+                      <span>{locale === 'en' ? 'Recovery Wizard' : '복구 마법사'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void checkNativeEngineConnection()}
+                      disabled={bridgeDiagnostics.checking}
+                      className="px-3.5 py-2 rounded-md border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${bridgeDiagnostics.checking ? 'animate-spin' : ''}`} />
+                      <span>{locale === 'en' ? 'Recheck Native' : '장치 재확인'}</span>
                     </button>
                   </div>
                 </div>
@@ -2264,10 +2384,31 @@ export default function App() {
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
+                            onClick={() => localImageInputRef.current?.click()}
+                            disabled={isMountingImage}
+                            className="px-1.5 py-0.5 rounded border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-[10px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                            title="로컬 .img/.dd/.bin 디스크 이미지 파일 추가 마운트"
+                          >
+                            <FolderOpen className="w-2.5 h-2.5" />
+                            <span>이미지</span>
+                          </button>
+                          {isBrowserMountedDrive(activeDrive) && (
+                            <button
+                              type="button"
+                              onClick={() => void handleExportActiveBrowserImage()}
+                              className="px-1.5 py-0.5 rounded border border-blue-500/30 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-[10px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                              title="수정/복구된 디스크 이미지를 .img 파일로 다운로드"
+                            >
+                              <Download className="w-2.5 h-2.5" />
+                              <span>저장</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
                             onClick={() => void handleRescanDrives()}
                             disabled={isRescanningDrives}
                             className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[10px] font-medium flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-50"
-                            title="내·외장 물리 디스크(PhysicalDrive0~31) 재검색"
+                            title="내·외장 물리 디스크 및 OPFS 이미지 재검색"
                           >
                             <RefreshCw className={`w-2.5 h-2.5 ${isRescanningDrives ? 'animate-spin' : ''}`} />
                             <span>재검색</span>
@@ -2944,6 +3085,8 @@ export default function App() {
               onRescanDrives={handleRescanDrives}
               isRescanning={isRescanningDrives}
               onOpenRecoveryWizard={() => setIsRecoveryWizardOpen(true)}
+              onMountOpfsDiagnosticDrive={handleMountOpfsDiagnosticDrive}
+              onMountLocalImage={() => localImageInputRef.current?.click()}
             />
           </Suspense>
         )}
@@ -2978,6 +3121,8 @@ export default function App() {
               onOpenHexInspector={(lba = 0) => openRecoveryTool('hex', { targetLba: lba })}
               onOpenRemapModal={() => openRecoveryTool('remap')}
               onOpenSanitizeTrim={() => openRecoveryTool('sanitize')}
+              onMountOpfsDiagnosticDrive={handleMountOpfsDiagnosticDrive}
+              onMountLocalImage={() => localImageInputRef.current?.click()}
             />
           </Suspense>
         )}
@@ -3170,11 +3315,11 @@ export default function App() {
             }`} />
             <span className="font-semibold text-slate-700 dark:text-slate-200 font-sans">
               {
-                !activeDrive ? 'Tauri IPC 대기' :
+                !activeDrive ? '이미지/장치 대기' :
                 scanStatus === 'scanning' ? `검사 중 (${scannedPercentage.toFixed(1)}%)` :
                 scanStatus === 'paused' ? '일시 정지' :
                 scanStatus === 'completed' ? '완료' :
-                '대기'
+                '준비'
               }
             </span>
           </div>
@@ -3183,7 +3328,7 @@ export default function App() {
           <span className="truncate max-w-[240px]">
             {activeDrive
               ? `${activeDrive.name} (${activeDrive.capacityGb !== null ? `${activeDrive.capacityGb} GB` : 'N/A'})`
-              : '연결된 디스크 없음'}
+              : '장착된 디스크 또는 이미지 없음'}
           </span>
 
           {activeDrive && (
@@ -3196,7 +3341,11 @@ export default function App() {
 
         <div className="flex items-center gap-2.5 shrink-0">
           <span className="hidden md:inline text-emerald-600 dark:text-emerald-400 font-semibold">
-            {activeDrive?.hardwareSpecs?.probeMethod || 'Tauri IPC'}
+            {activeDrive
+              ? isBrowserMountedDrive(activeDrive)
+                ? 'Browser OPFS / File.slice()'
+                : activeDrive.hardwareSpecs?.probeMethod || 'Tauri IPC'
+              : 'OPFS / Tauri IPC'}
           </span>
           <span className="text-slate-300 dark:text-slate-700 hidden md:inline">|</span>
           <span>건강: <strong className={calculatedHealth === null ? 'text-slate-400' : calculatedHealth >= 80 ? 'text-emerald-500' : 'text-red-500'}>{calculatedHealth !== null ? `${calculatedHealth}%` : 'N/A'}</strong></span>

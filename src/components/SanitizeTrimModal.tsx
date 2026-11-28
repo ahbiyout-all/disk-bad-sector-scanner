@@ -17,6 +17,7 @@ import {
   queryTauriRawSectorBytes,
   queryTauriSanitizeCapabilities
 } from '../utils/nativeDriveEngine';
+import { isBrowserMountedDrive } from '../utils/browserImageMount';
 import {
   RecoveryWipePatternResult,
   RecoveryWipeVerifyResult,
@@ -56,6 +57,8 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
   const [wipeBusy, setWipeBusy] = useState<boolean>(false);
 
   const tauriActive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
+  const browserImageActive = isBrowserMountedDrive(drive);
+  const controlActive = tauriActive || browserImageActive;
 
   const isMountedRef = useRef<boolean>(true);
   const isOpenRef = useRef<boolean>(isOpen);
@@ -245,7 +248,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
   };
 
   const handleVerifyPhysicalLbaClean = async () => {
-    if (wipeBusy || !tauriActive) return;
+    if (wipeBusy || !controlActive) return;
     const reqDrive = drive;
     const reqDriveId = drive.id;
     const constByte = parseConstByte();
@@ -339,11 +342,11 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
 
         {/* Body */}
         <div className={`p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
-          {!tauriActive && (
+          {!controlActive && (
             <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
               <div className="text-[11px]">
-                Windows 관리자 권한 Tauri 데스크톱 네이티브 IPC 환경에서만 실제 드라이브 보안 상태(Word 128 / NVMe OACS·FNA·SANICAP), 볼륨 TRIM(`defrag /L`), 보안 삭제를 실행할 수 있습니다.
+                Windows 관리자 권한 Tauri 데스크톱 네이티브 IPC 환경 또는 마운트된 브라우저 디스크 이미지(.img/OPFS)에서 실제 볼륨 TRIM 및 보안 소거·재판독 검증을 실행할 수 있습니다.
               </div>
             </div>
           )}
@@ -379,7 +382,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <select
                 value={selectedVolume}
-                disabled={!tauriActive || (cap?.mountedVolumes.length || 0) === 0 || executing !== null}
+                disabled={!controlActive || (cap?.mountedVolumes.length || 0) === 0 || executing !== null}
                 onChange={e => setSelectedVolume(e.target.value)}
                 className="flex-1 px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-slate-900 dark:text-slate-100 disabled:opacity-40"
               >
@@ -390,13 +393,13 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
                     </option>
                   ))
                 ) : (
-                  <option value="">마운트된 Windows 볼륨 없음</option>
+                  <option value="">마운트된 볼륨 없음</option>
                 )}
               </select>
 
               <button
                 type="button"
-                disabled={!tauriActive || !selectedVolume || executing !== null}
+                disabled={!controlActive || !selectedVolume || executing !== null}
                 onClick={() => void handleRunTrim()}
                 className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
               >
@@ -474,7 +477,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
               <button
                 type="button"
                 disabled={
-                  !tauriActive ||
+                  !controlActive ||
                   isSystemBlocked ||
                   cap?.protocol !== 'NVMe' ||
                   !cap?.nvmeFormat.formatSupported ||
@@ -493,7 +496,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
               <button
                 type="button"
                 disabled={
-                  !tauriActive ||
+                  !controlActive ||
                   isSystemBlocked ||
                   cap?.protocol !== 'NVMe' ||
                   !cap?.nvmeFormat.cryptoEraseSupported ||
@@ -512,7 +515,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
               <button
                 type="button"
                 disabled={
-                  !tauriActive ||
+                  !controlActive ||
                   isSystemBlocked ||
                   cap?.protocol !== 'ATA' ||
                   !cap?.ataSecurity.supported ||
@@ -622,7 +625,7 @@ export const SanitizeTrimModal: React.FC<SanitizeTrimModalProps> = ({
               >
                 1바이트 변조 탐지 테스트
               </button>
-              {tauriActive && (
+              {controlActive && (
                 <button
                   type="button"
                   disabled={wipeBusy}

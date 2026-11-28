@@ -10,8 +10,10 @@ import {
   queryTauriBitCarving,
   queryTauriParallelScan,
   queryTauriRawSector,
+  queryTauriRawSectorBytes,
   queryTauriTrayGuardianCheck
 } from './nativeDriveEngine';
+import { isBrowserMountedDrive, readMountedBrowserImageRange } from './browserImageMount';
 
 export enum DSSectorStatus {
   DS_STATUS_GOOD     = 0, // < 10ms
@@ -389,7 +391,71 @@ export async function DS_ScanMultipleDrivesParallel(
     }
   }
 
-  for (const target of unsupportedTargets) {
+  const browserTargets = targets.filter(t => {
+    const md = drives?.find(d => d.id === t.driveId);
+    return !t.driveId.startsWith('drive-tauri-physical-') && (isBrowserMountedDrive(md) || t.driveId.startsWith('drive-browser-image-'));
+  });
+  const remainingUnsupported = unsupportedTargets.filter(
+    t => !browserTargets.some(bt => bt.driveId === t.driveId)
+  );
+
+  await Promise.all(
+    browserTargets.map(async target => {
+      const matchedDrive = drives?.find(d => d.id === target.driveId);
+      const secBytes = matchedDrive?.hardwareSpecs?.logicalSectorSize || 512;
+      const startLbaNum = Math.max(0, Number(target.startLba));
+      const totalAvailable = matchedDrive?.totalSectors || Number(target.sectorCount) || 2048;
+      const spanSectors = Math.min(totalAvailable - startLbaNum, Math.max(1, Number(target.sectorCount)));
+      const step = Math.max(64, Math.min(512, target.burstStep || 128));
+      const t0 = performance.now();
+      let scannedSectors = 0;
+      let badFound = 0;
+      let slowFound = 0;
+      const latencies: number[] = [];
+
+      for (let off = 0; off < spanSectors; off += step) {
+        const take = Math.min(step, spanSectors - off);
+        const r0 = performance.now();
+        const bytes = await readMountedBrowserImageRange(
+          target.driveId,
+          (startLbaNum + off) * secBytes,
+          take * secBytes
+        );
+        const lat = Math.max(0.05, performance.now() - r0);
+        latencies.push(lat);
+        if (bytes.length === 0) badFound += take;
+        else if (lat >= 50) slowFound += take;
+        scannedSectors += take;
+        if (onProgressUpdate) {
+          onProgressUpdate(target.driveId, Math.min(99, Math.round((scannedSectors / Math.max(1, spanSectors)) * 100)), badFound);
+        }
+      }
+
+      const elapsedMs = Math.max(1, Math.round(performance.now() - t0));
+      const avgLatencyMs = latencies.length > 0
+        ? Number((latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(2))
+        : 0.1;
+      const throughputMbSec = Number((((scannedSectors * secBytes) / (1024 * 1024)) / (elapsedMs / 1000)).toFixed(1));
+      if (onProgressUpdate) {
+        onProgressUpdate(target.driveId, 100, badFound);
+      }
+      summaries.push({
+        driveIndex: target.driveIndex,
+        driveId: target.driveId,
+        driveName: target.driveName,
+        totalSectorsScanned: BigInt(scannedSectors),
+        badSectorsFound: badFound,
+        slowSectorsFound: slowFound,
+        elapsedMs,
+        avgLatencyMs,
+        throughputMbSec,
+        isCompleted: true,
+        statusCode: badFound > 0 ? DSSectorStatus.DS_STATUS_BAD : DSSectorStatus.DS_STATUS_GOOD
+      });
+    })
+  );
+
+  for (const target of remainingUnsupported) {
     if (onProgressUpdate) {
       onProgressUpdate(target.driveId, 100, 0);
     }
@@ -405,7 +471,7 @@ export async function DS_ScanMultipleDrivesParallel(
       throughputMbSec: null,
       isCompleted: false,
       statusCode: DSSectorStatus.DS_STATUS_ABORTED,
-      unsupportedReason: 'Tauri 데스크톱 네이티브 IPC 환경에서만 물리 드라이브 병렬 스캔을 실행할 수 있습니다.'
+      unsupportedReason: 'Tauri 데스크톱 네이티브 IPC 환경 또는 마운트된 브라우저 디스크 이미지에서만 병렬 스캔을 실행할 수 있습니다.'
     });
   }
 
@@ -654,16 +720,45 @@ export async function DS_ExecuteBitCarvingRecovery(
     };
   }
 
+  if (drive && isBrowserMountedDrive(drive)) {
+    const readRes = await queryTauriRawSectorBytes(drive, targetLba, Math.max(1, Math.min(64, span)));
+    if (readRes.supported && readRes.bytes.length > 0) {
+      const { sigType, sigName } = classifySignatureFromBytes(readRes.bytes, 'MountedImage');
+      const { hexPreview, rawAsciiPreview } = formatHexAndAscii(readRes.bytes);
+      return {
+        sourceLba: targetLba,
+        signatureType: sigType,
+        signatureName: sigName,
+        carvedSizeBytes: readRes.bytes.length,
+        eccRecoveredBits: 0,
+        isSalvaged: true,
+        hexPreview,
+        rawAsciiPreview
+      };
+    }
+    return {
+      sourceLba: targetLba,
+      signatureType: 0,
+      signatureName: '이미지 섹터 범위 초과 또는 빈 버퍼',
+      carvedSizeBytes: 0,
+      eccRecoveredBits: 0,
+      isSalvaged: false,
+      hexPreview: '',
+      rawAsciiPreview: '',
+      errorReason: readRes.reason || `LBA #${targetLba} 섹터를 읽을 수 없습니다.`
+    };
+  }
+
   return {
     sourceLba: targetLba,
     signatureType: 0,
-    signatureName: '판독 불가 (Tauri 데스크톱 IPC 필요)',
+    signatureName: '판독 불가 (대상 디스크 또는 이미지 필요)',
     carvedSizeBytes: 0,
     eccRecoveredBits: 0,
     isSalvaged: false,
     hexPreview: '',
     rawAsciiPreview: '',
-    errorReason: 'Tauri 데스크톱 네이티브 IPC(Windows 관리자 권한)로 물리 디스크에 연결된 상태에서만 Raw LBA 섹터 바이트를 판독할 수 있습니다.'
+    errorReason: 'Tauri 데스크톱 물리 디스크 또는 마운트된 로컬 디스크 이미지가 선택된 상태에서 Raw LBA 섹터 바이트를 판독할 수 있습니다.'
   };
 }
 

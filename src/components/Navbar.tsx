@@ -6,6 +6,7 @@ import {
   BellOff,
   Download,
   FileCheck,
+  FolderOpen,
   HardDrive,
   Menu,
   Moon,
@@ -40,6 +41,7 @@ export interface NavbarProps {
   locale: AppLocale;
   onChangeLocale: (locale: AppLocale) => void;
   onOpenCommandPalette: () => void;
+  onMountLocalImage: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -63,7 +65,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenReport,
   locale,
   onChangeLocale,
-  onOpenCommandPalette
+  onOpenCommandPalette,
+  onMountLocalImage
 }) => {
   const currentDrive = drives.find(d => d.id === selectedDriveId) || drives[0];
   const temp = currentDrive?.temperatureC ?? currentDrive?.hardwareSpecs?.currentTempC ?? null;
@@ -146,6 +149,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </select>
           </div>
+          <button
+            type="button"
+            onClick={onMountLocalImage}
+            className="h-8 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 shadow-xs transition-colors"
+            title="로컬 디스크 이미지 (.img/.dd/.bin) 파일 마운트"
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">이미지 마운트</span>
+          </button>
         </div>
 
         {/* Plain Text Concise Hardware Telemetry (Zero Pills) */}

@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AppLocale,
   DiskDrive,
   ErrorLogItem,
+  IntegrityProbeResult,
   IntegrityWatchEntry,
   IntegrityWatchStatus,
   SectorBlock
@@ -20,6 +21,11 @@ import {
   queryTauriPickIntegrityPaths,
   queryTauriProbePathsIntegrity
 } from '../utils/nativeDriveEngine';
+import {
+  getMountedBrowserImageEntry,
+  isBrowserMountedDrive,
+  readMountedBrowserImageRange
+} from '../utils/browserImageMount';
 import {
   evaluateExtentIntegrityNative,
   evaluateExtentIntegritySync,
@@ -87,7 +93,18 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
   const [integrityEngine, setIntegrityEngine] = useState<IntegrityEngineStatus | null>(null);
   const [extentEvalMap, setExtentEvalMap] = useState<Record<string, ExtentIntegrityReport>>({});
 
+  const filePickerRef = useRef<HTMLInputElement | null>(null);
+  const folderPickerRef = useRef<HTMLInputElement | null>(null);
+  const browserFilesRef = useRef<Map<string, File>>(new Map());
+
   const tauriAvailable = isTauriDesktopRuntime();
+
+  const computeSha256Hex = async (bytes: ArrayBuffer): Promise<string> => {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  };
 
   React.useEffect(() => {
     let active = true;
@@ -186,27 +203,124 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
       });
       return;
     }
-    if (!tauriAvailable) {
-      setFeedback({
-        type: 'error',
-        message:
-          locale === 'en'
-            ? 'Win32 FSCTL_GET_RETRIEVAL_POINTERS & SHA-256 verification require Tauri Desktop IPC.'
-            : '물리 LBA 익스텐트(FSCTL_GET_RETRIEVAL_POINTERS) 및 SHA-256 스트리밍 검증은 Tauri 데스크톱 환경에서만 실행됩니다.'
-      });
-      return;
-    }
 
     setIsProbing(true);
     setFeedback(null);
     try {
-      const probed = await queryTauriProbePathsIntegrity(roots, 200, 512 * 1024 * 1024);
-      if (probed === null) {
-        setFeedback({
-          type: 'error',
-          message: locale === 'en' ? 'Native Tauri IPC call failed.' : '네이티브 Tauri IPC 호출에 실패했습니다.'
-        });
-        return;
+      let probed: IntegrityProbeResult[] | null = null;
+
+      if (tauriAvailable) {
+        probed = await queryTauriProbePathsIntegrity(roots, 200, 512 * 1024 * 1024);
+        if (probed === null) {
+          setFeedback({
+            type: 'error',
+            message: locale === 'en' ? 'Native Tauri IPC call failed.' : '네이티브 Tauri IPC 호출에 실패했습니다.'
+          });
+          return;
+        }
+      } else {
+        const results: IntegrityProbeResult[] = [];
+        for (const root of roots) {
+          if (root.startsWith('image://')) {
+            const driveId = root.slice('image://'.length);
+            const imgEntry = getMountedBrowserImageEntry(driveId);
+            if (!imgEntry) {
+              results.push({
+                filePath: root,
+                driveIndex: null,
+                sizeBytes: 0,
+                modifiedMs: Date.now(),
+                sha256: null,
+                extents: [],
+                status: 'missing',
+                note: '마운트 해제된 이미지'
+              });
+              continue;
+            }
+            const totalSectors = imgEntry.drive.totalSectors || Math.floor(imgEntry.file.size / imgEntry.sectorSize);
+            const probeRegions = [
+              { label: 'LBA_0_MBR_GPT.bin', startLba: 0, sectorCount: Math.min(34, totalSectors) },
+              ...(totalSectors > 2048
+                ? [{ label: 'LBA_2048_VBR_FAT.bin', startLba: 2048, sectorCount: Math.min(64, totalSectors - 2048) }]
+                : [])
+            ];
+            for (const reg of probeRegions) {
+              const bytes = await readMountedBrowserImageRange(
+                driveId,
+                reg.startLba * imgEntry.sectorSize,
+                reg.sectorCount * imgEntry.sectorSize
+              );
+              const copy = new Uint8Array(bytes.length);
+              copy.set(bytes);
+              const sha256 = await computeSha256Hex(copy.buffer);
+              results.push({
+                filePath: `${root}\\${reg.label}`,
+                driveIndex: 0,
+                sizeBytes: bytes.length,
+                modifiedMs: Date.now(),
+                sha256,
+                extents: [
+                  {
+                    startLba: reg.startLba,
+                    endLba: reg.startLba + reg.sectorCount - 1,
+                    sectorCount: reg.sectorCount
+                  }
+                ],
+                status: 'ok',
+                note: `${imgEntry.drive.model} (${reg.sectorCount} sectors)`
+              });
+            }
+            continue;
+          }
+
+          const matchedFiles: Array<[string, File]> = Array.from<[string, File]>(
+            browserFilesRef.current.entries()
+          ).filter(
+            ([path]) => path === root || path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)
+          );
+          if (matchedFiles.length === 0) {
+            results.push({
+              filePath: root,
+              driveIndex: null,
+              sizeBytes: 0,
+              modifiedMs: Date.now(),
+              sha256: null,
+              extents: [],
+              status: 'missing',
+              note: '브라우저 세션에서 파일 재선택 필요'
+            });
+            continue;
+          }
+
+          for (const [vPath, file] of matchedFiles.slice(0, 200)) {
+            try {
+              const buf = await file.arrayBuffer();
+              const sha256 = await computeSha256Hex(buf);
+              results.push({
+                filePath: vPath,
+                driveIndex: null,
+                sizeBytes: file.size,
+                modifiedMs: file.lastModified || Date.now(),
+                sha256,
+                extents: [],
+                status: 'ok',
+                note: 'Browser Web Crypto SHA-256'
+              });
+            } catch {
+              results.push({
+                filePath: vPath,
+                driveIndex: null,
+                sizeBytes: file.size,
+                modifiedMs: file.lastModified || Date.now(),
+                sha256: null,
+                extents: [],
+                status: 'unreadable',
+                note: '파일 읽기 권한 만료'
+              });
+            }
+          }
+        }
+        probed = results;
       }
 
       const normalizePathKey = (p: string) => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
@@ -250,7 +364,7 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
         message:
           locale === 'en'
             ? `Verified ${probed.length} files (${correlated.bitRotAlerts.length} bit-rot, ${correlated.badLbaAlerts.length} bad LBA overlap).`
-            : `총 ${probed.length}개 파일 검증 완료 (Bit-Rot ${correlated.bitRotAlerts.length}건, 배드섹터 LBA 중첩 ${correlated.badLbaAlerts.length}건).`
+            : `총 ${probed.length}개 항목 SHA-256 검증 완료 (Bit-Rot ${correlated.bitRotAlerts.length}건, 배드섹터 LBA 중첩 ${correlated.badLbaAlerts.length}건).`
       });
     } finally {
       setIsProbing(false);
@@ -268,13 +382,11 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
 
   const handlePickNative = async (pickFolder: boolean) => {
     if (!tauriAvailable) {
-      setFeedback({
-        type: 'error',
-        message:
-          locale === 'en'
-            ? 'Native file/folder picker requires Tauri Windows Desktop app.'
-            : '네이티브 탐색기 선택 창은 Tauri Windows 데스크톱 앱에서 열립니다.'
-      });
+      if (pickFolder) {
+        folderPickerRef.current?.click();
+      } else {
+        filePickerRef.current?.click();
+      }
       return;
     }
     const picked = await queryTauriPickIntegrityPaths(pickFolder);
@@ -283,11 +395,38 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
     }
   };
 
+  const handleBrowserFilesPicked = async (fileList: FileList | null, fromFolder: boolean) => {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    const addedRoots = new Set<string>();
+    for (const file of files.slice(0, 200)) {
+      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+      const vPath = rel && rel.length > 0 ? rel : file.name;
+      browserFilesRef.current.set(vPath, file);
+      if (fromFolder && rel && rel.includes('/')) {
+        addedRoots.add(rel.split('/')[0]);
+      } else {
+        addedRoots.add(vPath);
+      }
+    }
+    await handleAddRoots(Array.from(addedRoots));
+  };
+
   const handleAddManualPath = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualPath.trim()) return;
     const p = manualPath.trim();
     setManualPath('');
+    if (!tauriAvailable) {
+      setFeedback({
+        type: 'error',
+        message:
+          locale === 'en'
+            ? 'In web browser mode, use "Add Folder" or "Add Files" buttons to grant browser file read permission.'
+            : '웹 브라우저에서는 보안상 직접 경로 입력 대신 상단 "폴더 추가" 또는 "파일 추가" 버튼으로 로컬 파일 권한을 부여해 주세요.'
+      });
+      return;
+    }
     await handleAddRoots([p]);
   };
 
@@ -364,6 +503,31 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            <input
+              ref={folderPickerRef}
+              type="file"
+              {...({ webkitdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+              multiple
+              className="hidden"
+              onChange={e => {
+                const files = e.target.files;
+                void handleBrowserFilesPicked(files, true).finally(() => {
+                  e.target.value = '';
+                });
+              }}
+            />
+            <input
+              ref={filePickerRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={e => {
+                const files = e.target.files;
+                void handleBrowserFilesPicked(files, false).finally(() => {
+                  e.target.value = '';
+                });
+              }}
+            />
             <button
               type="button"
               onClick={() => void handlePickNative(true)}
@@ -382,6 +546,17 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
               <FilePlus className="w-3.5 h-3.5 text-sky-500" />
               <span>{t(locale, 'integrity.addFiles')}</span>
             </button>
+            {!tauriAvailable && activeDrive && isBrowserMountedDrive(activeDrive) && (
+              <button
+                type="button"
+                onClick={() => void handleAddRoots([`image://${activeDrive.id}`])}
+                disabled={isProbing}
+                className="min-h-[40px] px-3 py-2 rounded-md border border-blue-500/40 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-xs font-semibold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer disabled:opacity-50"
+              >
+                <Binary className="w-3.5 h-3.5" />
+                <span>{locale === 'en' ? 'Hash Mounted Image' : '장착 이미지 부트/파티션 해시 감시'}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => void runProbeForRoots(watchRoots, false)}
@@ -451,10 +626,10 @@ export const FolderLbaIntegrityPanel: React.FC<FolderLbaIntegrityPanelProps> = (
         )}
 
         {!tauriAvailable && (
-          <div className="p-2.5 rounded border border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/30 text-xs text-amber-800 dark:text-amber-300">
+          <div className="p-2.5 rounded border border-blue-500/30 bg-blue-50/70 dark:bg-blue-950/30 text-xs text-blue-800 dark:text-blue-200">
             {locale === 'en'
-              ? 'Browser preview detected: native Win32 NTFS/exFAT retrieval pointers (FSCTL_GET_RETRIEVAL_POINTERS) and file SHA-256 verification require Tauri Desktop.'
-              : '브라우저 미리보기 모드입니다. 실제 파일의 물리 LBA 익스텐트(FSCTL_GET_RETRIEVAL_POINTERS) 및 SHA-256 Bit-Rot 검증은 Tauri 데스크톱(관리자 권한)에서 실행됩니다.'}
+              ? 'Browser Web Crypto mode: add local files/folders or hash a mounted OPFS/.img disk image to compute real SHA-256 digests and track bit-rot across scans.'
+              : '브라우저 Web Crypto SHA-256 엔진 활성: 상단 "폴더 추가" / "파일 추가"로 로컬 파일을 선택하거나 장착된 디스크 이미지의 부트·파티션 해시를 등록해 실제 Bit-Rot 무결성 감시를 수행할 수 있습니다.'}
           </div>
         )}
 

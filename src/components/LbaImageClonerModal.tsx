@@ -13,7 +13,8 @@ import {
   Layers,
   Eraser,
   RefreshCw,
-  Activity
+  Activity,
+  Download
 } from 'lucide-react';
 import {
   DdrescueBackendStatus,
@@ -45,6 +46,8 @@ import {
   runRecoveryDdrescuePlan
 } from '../utils/recoveryDllBridge';
 import { parsePartitionTableFromRawBytes } from '../utils/partitionParser';
+import { isBrowserMountedDrive, readMountedBrowserImageRange } from '../utils/browserImageMount';
+import { triggerBlobDownload } from '../utils/realRecoveryEngine';
 
 interface LbaImageClonerModalProps {
   isOpen: boolean;
@@ -81,6 +84,10 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   const [recoveryPlan, setRecoveryPlan] = useState<RecoveryDdrescuePlanResult | null>(null);
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clonedBytesRef = useRef<Uint8Array | null>(null);
+  const cloneStopRequestedRef = useRef<boolean>(false);
+  const mapFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [hasDownloadableImage, setHasDownloadableImage] = useState<boolean>(false);
   const isMountedRef = useRef<boolean>(true);
   const isOpenRef = useRef<boolean>(isOpen);
   isOpenRef.current = isOpen;
@@ -88,6 +95,8 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   activeDriveIdRef.current = drive.id;
   const planReqIdRef = useRef<number>(0);
   const tauriActive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
+  const browserImageActive = isBrowserMountedDrive(drive);
+  const mediaActive = tauriActive || browserImageActive;
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -144,15 +153,18 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
     setRecoveryPlan(null);
     setStatusMessage(null);
     setErrorMessage(null);
+    clonedBytesRef.current = null;
+    cloneStopRequestedRef.current = false;
+    setHasDownloadableImage(false);
 
     let cancelled = false;
-    if (tauriActive) {
+    if (mediaActive) {
       const parsedIdx = parseInt(drive.id.replace('drive-tauri-physical-', ''), 10);
       const expectedIdx = Number.isNaN(parsedIdx) ? null : parsedIdx;
       void (async () => {
         const [rangeRes, liveSnap] = await Promise.all([
           queryTauriRawSectorRange(drive, 0, 34),
-          queryTauriDdrescueBackupStatus()
+          tauriActive ? queryTauriDdrescueBackupStatus() : Promise.resolve(null)
         ]);
         if (cancelled || !isMountedRef.current) return;
         if (rangeRes.supported && rangeRes.bytes.length >= 512) {
@@ -180,7 +192,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, drive.id, initialRange, maxLba, tauriActive]);
+  }, [isOpen, drive.id, initialRange, maxLba, tauriActive, mediaActive]);
 
   useEffect(() => {
     if (!isRunning || !isOpen || !tauriActive) {
@@ -307,14 +319,8 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   const rangeSectorCount = parsedEnd - parsedStart + 1;
   const estimatedSizeMb = ((rangeSectorCount * sectorSize) / (1024 * 1024)).toFixed(2);
 
-  const handleLoadMap = async () => {
-    setErrorMessage(null);
-    const res = await invokeTauriLoadCloneMap(mapPath);
-    if (!res.ok || !res.jsonContent) {
-      setErrorMessage(res.error || '맵 파일을 불러올 수 없습니다.');
-      return;
-    }
-    const loaded = parseCloneMapJson(res.jsonContent);
+  const applyLoadedMapJson = async (jsonContent: string) => {
+    const loaded = parseCloneMapJson(jsonContent);
     if (!loaded) {
       setErrorMessage('유효한 ddrescue 복제 맵 JSON 형식이 아닙니다.');
       return;
@@ -337,9 +343,30 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
     );
   };
 
+  const handleLoadMap = async () => {
+    setErrorMessage(null);
+    if (!tauriActive) {
+      mapFileInputRef.current?.click();
+      return;
+    }
+    const res = await invokeTauriLoadCloneMap(mapPath);
+    if (!res.ok || !res.jsonContent) {
+      setErrorMessage(res.error || '맵 파일을 불러올 수 없습니다.');
+      return;
+    }
+    await applyLoadedMapJson(res.jsonContent);
+  };
+
   const handleSaveMap = async () => {
     if (!session) return;
-    const res = await invokeTauriSaveCloneMap(session.mapPath || mapPath, serializeCloneMapJson(session));
+    const json = serializeCloneMapJson(session);
+    if (!tauriActive) {
+      const baseName = (session.mapPath || mapPath).split(/[\\/]/).pop() || 'ddrescue_clone.map.json';
+      triggerBlobDownload(new Blob([json], { type: 'application/json' }), baseName);
+      setStatusMessage(`복제 도메인 맵(.map.json) 다운로드 완료: ${baseName}`);
+      return;
+    }
+    const res = await invokeTauriSaveCloneMap(session.mapPath || mapPath, json);
     if (res.ok) {
       setStatusMessage(`복제 상태 맵 저장됨: ${session.mapPath || mapPath}`);
     } else if (res.error) {
@@ -347,18 +374,30 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
     }
   };
 
+  const handleDownloadClonedImage = () => {
+    const buf = clonedBytesRef.current;
+    if (!buf || buf.length === 0) return;
+    const fileName =
+      outputPath.split(/[\\/]/).pop()?.trim() ||
+      `${drive.model.replace(/[^a-zA-Z0-9._-]/g, '_')}_LBA${parsedStart}-${parsedEnd}.img`;
+    const copy = new Uint8Array(buf.length);
+    copy.set(buf);
+    triggerBlobDownload(new Blob([copy.buffer], { type: 'application/octet-stream' }), fileName);
+    setStatusMessage(`복제 이미지 파일 다운로드 시작: ${fileName} (${(buf.length / (1024 * 1024)).toFixed(2)} MB)`);
+  };
+
   const handleStartBackendDdrescue = async (resumeExisting = false) => {
     setErrorMessage(null);
     setStatusMessage(null);
 
-    if (!tauriActive) {
+    if (!mediaActive) {
       setErrorMessage(
-        'Tauri 데스크톱 네이티브 IPC 환경(Windows 관리자 권한)에서만 물리 섹터를 .img 파일로 직접 복제할 수 있습니다.'
+        'Tauri 데스크톱 네이티브 IPC 환경 또는 마운트된 브라우저 디스크 이미지(.img/OPFS)에서만 섹터 이미지 복제를 실행할 수 있습니다.'
       );
       return;
     }
 
-    if (!pathValidation.valid) {
+    if (tauriActive && !pathValidation.valid) {
       setErrorMessage(pathValidation.reason || '출력 경로가 유효하지 않습니다.');
       return;
     }
@@ -367,6 +406,172 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
       resumeExisting && session
         ? session
         : createInitialCloneSession(drive, parsedStart, parsedEnd, outputPath, mapPath, chunkSectors);
+
+    if (browserImageActive) {
+      const totalCloneSectors = Math.max(1, baseSession.rangeEndLba - baseSession.rangeStartLba + 1);
+      const totalBytes = totalCloneSectors * sectorSize;
+      if (totalBytes > 256 * 1024 * 1024) {
+        setErrorMessage('브라우저 메모리 복제 최대 범위(256 MB)를 초과했습니다. 시작/종료 LBA 범위를 256 MB 이하로 분할 지정하세요.');
+        return;
+      }
+
+      const imageBuf =
+        resumeExisting && clonedBytesRef.current && clonedBytesRef.current.length === totalBytes
+          ? clonedBytesRef.current
+          : new Uint8Array(totalBytes);
+      clonedBytesRef.current = imageBuf;
+      cloneStopRequestedRef.current = false;
+      setHasDownloadableImage(false);
+      setIsRunning(true);
+
+      const startedAt = Date.now();
+      let workingIntervals = [...baseSession.intervals];
+      let finishedSectors = workingIntervals
+        .filter(iv => iv.status === 'finished')
+        .reduce((acc, iv) => acc + iv.sectorCount, 0);
+      let badSectors = workingIntervals
+        .filter(iv => iv.status === 'bad_sector')
+        .reduce((acc, iv) => acc + iv.sectorCount, 0);
+
+      const pendingWork: Array<{ startLba: number; sectorCount: number }> = workingIntervals
+        .filter(iv => iv.status !== 'finished' && iv.status !== 'bad_sector')
+        .map(iv => ({ startLba: iv.startLba, sectorCount: iv.sectorCount }));
+
+      if (pendingWork.length === 0) {
+        pendingWork.push({ startLba: baseSession.rangeStartLba, sectorCount: totalCloneSectors });
+      }
+
+      const nextIntervals = [...workingIntervals.filter(iv => iv.status === 'finished' || iv.status === 'bad_sector')];
+
+      for (const seg of pendingWork) {
+        let cursor = seg.startLba;
+        let rem = seg.sectorCount;
+        while (rem > 0) {
+          if (!isMountedRef.current || !isOpenRef.current || cloneStopRequestedRef.current) {
+            break;
+          }
+          const take = Math.min(chunkSectors, rem);
+          const byteOffset = cursor * sectorSize;
+          const byteLen = take * sectorSize;
+          const chunkBytes = await readMountedBrowserImageRange(drive.id, byteOffset, byteLen);
+          const destOffset = (cursor - baseSession.rangeStartLba) * sectorSize;
+          if (chunkBytes.length > 0 && destOffset + chunkBytes.length <= imageBuf.length) {
+            imageBuf.set(chunkBytes, destOffset);
+            finishedSectors += take;
+            nextIntervals.push({
+              startLba: cursor,
+              sectorCount: take,
+              status: 'finished',
+              attempts: 1
+            });
+          } else {
+            badSectors += take;
+            nextIntervals.push({
+              startLba: cursor,
+              sectorCount: take,
+              status: 'bad_sector',
+              attempts: maxRetries
+            });
+          }
+          cursor += take;
+          rem -= take;
+
+          const elapsedMs = Math.max(1, Date.now() - startedAt);
+          const bytesWritten = finishedSectors * sectorSize;
+          const throughputMbSec = bytesWritten / (1024 * 1024) / (elapsedMs / 1000);
+          const remainingTail = rem > 0 ? [{ startLba: cursor, sectorCount: rem, status: 'non_tried' as const, attempts: 0 }] : [];
+          const snapshotIntervals = [...nextIntervals, ...remainingTail];
+
+          const snap: DdrescueBackendStatus = {
+            isRunning: true,
+            phase: 'copying',
+            driveIndex: 0,
+            driveModel: drive.model,
+            driveSerial: drive.serialNumber,
+            sectorSize,
+            rangeStartLba: baseSession.rangeStartLba,
+            rangeEndLba: baseSession.rangeEndLba,
+            totalSectors: totalCloneSectors,
+            outputPath: baseSession.outputPath,
+            mapPath: baseSession.mapPath,
+            chunkSectors,
+            maxRetries,
+            zeroFillBad: autoZeroFillBad,
+            currentLba: cursor,
+            finishedSectors,
+            nonTriedSectors: Math.max(0, totalCloneSectors - finishedSectors - badSectors),
+            nonTrimmedSectors: 0,
+            nonScrapedSectors: 0,
+            badSectors,
+            pass1AttemptedSectors: finishedSectors + badSectors,
+            pass1RescuedSectors: finishedSectors,
+            pass2RescuedSectors: 0,
+            pass2AttemptedSectors: 0,
+            pass3AttemptedSectors: 0,
+            pass3RescuedSectors: 0,
+            rescuedOnRetrySectors: 0,
+            totalRetryAttempts: 0,
+            bytesWritten,
+            elapsedMs,
+            throughputMbSec,
+            intervals: snapshotIntervals,
+            recentEvents: []
+          };
+          syncSnapshotToSession(snap);
+          await new Promise(r => setTimeout(r, 4));
+        }
+        if (cloneStopRequestedRef.current) break;
+      }
+
+      if (!isMountedRef.current || !isOpenRef.current) return;
+      const wasPaused = cloneStopRequestedRef.current;
+      const finalElapsedMs = Math.max(1, Date.now() - startedAt);
+      const finalBytesWritten = finishedSectors * sectorSize;
+      const finalSnap: DdrescueBackendStatus = {
+        isRunning: false,
+        phase: wasPaused ? 'paused' : 'completed',
+        driveIndex: 0,
+        driveModel: drive.model,
+        driveSerial: drive.serialNumber,
+        sectorSize,
+        rangeStartLba: baseSession.rangeStartLba,
+        rangeEndLba: baseSession.rangeEndLba,
+        totalSectors: totalCloneSectors,
+        outputPath: baseSession.outputPath,
+        mapPath: baseSession.mapPath,
+        chunkSectors,
+        maxRetries,
+        zeroFillBad: autoZeroFillBad,
+        currentLba: baseSession.rangeEndLba,
+        finishedSectors,
+        nonTriedSectors: Math.max(0, totalCloneSectors - finishedSectors - badSectors),
+        nonTrimmedSectors: 0,
+        nonScrapedSectors: 0,
+        badSectors,
+        pass1AttemptedSectors: finishedSectors + badSectors,
+        pass1RescuedSectors: finishedSectors,
+        pass2RescuedSectors: 0,
+        pass2AttemptedSectors: 0,
+        pass3AttemptedSectors: 0,
+        pass3RescuedSectors: 0,
+        rescuedOnRetrySectors: 0,
+        totalRetryAttempts: 0,
+        bytesWritten: finalBytesWritten,
+        elapsedMs: finalElapsedMs,
+        throughputMbSec: finalBytesWritten / (1024 * 1024) / (finalElapsedMs / 1000),
+        intervals: nextIntervals,
+        recentEvents: []
+      };
+      syncSnapshotToSession(finalSnap);
+      setIsRunning(false);
+      setHasDownloadableImage(!wasPaused && finalBytesWritten > 0);
+      setStatusMessage(
+        wasPaused
+          ? '브라우저 LBA 이미지 복제가 일시 정지되었습니다. "맵 저장"으로 도메인 맵을 저장할 수 있습니다.'
+          : `브라우저 LBA 이미지 복제 완료 — ${finishedSectors.toLocaleString()} 섹터(${(finalBytesWritten / (1024 * 1024)).toFixed(2)} MB) 추출 완료. 하단 "복제 이미지(.img) 다운로드"로 저장하세요.`
+      );
+      return;
+    }
 
     const res = await invokeTauriStartDdrescueBackup({
       drive,
@@ -390,6 +595,10 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   };
 
   const handlePauseBackendDdrescue = async () => {
+    if (browserImageActive) {
+      cloneStopRequestedRef.current = true;
+      return;
+    }
     const res = await invokeTauriPauseDdrescueBackup();
     if (res.ok && res.status) {
       syncSnapshotToSession(res.status);
@@ -397,9 +606,23 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
   };
 
   const handleZeroFillBadSectors = async () => {
-    if (!session || !tauriActive || isRunning || isZeroFilling) return;
+    if (!session || !mediaActive || isRunning || isZeroFilling) return;
     const badIntervals = session.intervals.filter(iv => iv.status === 'bad_sector');
     if (badIntervals.length === 0) return;
+
+    if (browserImageActive && clonedBytesRef.current) {
+      let zeroed = 0;
+      for (const iv of badIntervals) {
+        const startByte = (iv.startLba - session.rangeStartLba) * session.sectorSize;
+        const len = iv.sectorCount * session.sectorSize;
+        if (startByte >= 0 && startByte + len <= clonedBytesRef.current.length) {
+          clonedBytesRef.current.fill(0, startByte, startByte + len);
+          zeroed += iv.sectorCount;
+        }
+      }
+      setStatusMessage(`복제 버퍼 내 BAD 섹터 ${zeroed.toLocaleString()}개 영역에 0x00 패딩을 적용했습니다.`);
+      return;
+    }
 
     setIsZeroFilling(true);
     setErrorMessage(null);
@@ -520,13 +743,13 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
 
         {/* Body */}
         <div className={`p-4 sm:p-5 space-y-4 text-xs ${isInline ? '' : 'overflow-y-auto'}`}>
-          {!tauriActive && (
+          {!mediaActive && (
             <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
               <div>
-                <div className="font-bold">Tauri 데스크톱 네이티브 IPC 필요</div>
+                <div className="font-bold">Tauri 데스크톱 IPC 또는 브라우저 이미지 마운트 필요</div>
                 <p className="text-[11px] opacity-90">
-                  현재 웹 브라우저 미리보기 환경에서는 물리 디스크 핸들에 접근할 수 없습니다. Windows 관리자 권한으로 실행된 Tauri 데스크톱 앱에서 백엔드 스레드 ddrescue 복제와 .map.json 이어받기가 실행됩니다.
+                  물리 디스크 직접 복제는 Tauri 데스크톱 앱에서 실행되며, 웹에서는 OPFS/로컬 디스크 이미지(.img/.dd)를 장착하면 브라우저 ddrescue 복제 및 이미지 다운로드를 즉시 실행할 수 있습니다.
                 </p>
               </div>
             </div>
@@ -658,9 +881,22 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                   onChange={e => setMapPath(e.target.value)}
                   className="flex-1 min-w-0 px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-[11px] text-slate-900 dark:text-slate-100"
                 />
+                <input
+                  ref={mapFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={async e => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    const txt = await file.text();
+                    await applyLoadedMapJson(txt);
+                  }}
+                />
                 <button
                   type="button"
-                  disabled={isRunning || !tauriActive}
+                  disabled={isRunning || !mediaActive}
                   onClick={() => void handleLoadMap()}
                   title="기존 .map.json 복제 세션 불러오기"
                   className="px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-40"
@@ -687,7 +923,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
             </div>
           </div>
 
-          {!pathValidation.valid && (
+          {tauriActive && !pathValidation.valid && (
             <div className="p-2.5 rounded-lg border border-red-500/40 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 shrink-0" />
               <span>{pathValidation.reason}</span>
@@ -972,22 +1208,33 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {session && (
               <button
                 type="button"
-                disabled={isRunning || !tauriActive}
+                disabled={isRunning || !mediaActive}
                 onClick={() => void handleSaveMap()}
                 className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
               >
                 <Save className="w-3.5 h-3.5" />
-                맵 저장
+                {tauriActive ? '맵 저장' : '도메인 맵(.map.json) 다운로드'}
+              </button>
+            )}
+            {browserImageActive && hasDownloadableImage && (
+              <button
+                type="button"
+                disabled={isRunning}
+                onClick={handleDownloadClonedImage}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+              >
+                <Download className="w-3.5 h-3.5" />
+                복제 이미지(.img) 다운로드
               </button>
             )}
             {session && stats && stats.badSectors > 0 && (
               <button
                 type="button"
-                disabled={isRunning || isZeroFilling || !tauriActive}
+                disabled={isRunning || isZeroFilling || !mediaActive}
                 onClick={() => void handleZeroFillBadSectors()}
                 className="px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
               >
@@ -1012,7 +1259,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                 {session && session.phase === 'paused' && (
                   <button
                     type="button"
-                    disabled={!tauriActive || !pathValidation.valid}
+                    disabled={!mediaActive || (tauriActive && !pathValidation.valid)}
                     onClick={() => void handleStartBackendDdrescue(true)}
                     className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                   >
@@ -1022,7 +1269,7 @@ export const LbaImageClonerModal: React.FC<LbaImageClonerModalProps> = ({
                 )}
                 <button
                   type="button"
-                  disabled={!tauriActive || !pathValidation.valid}
+                  disabled={!mediaActive || (tauriActive && !pathValidation.valid)}
                   onClick={() => void handleStartBackendDdrescue(false)}
                   className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                 >

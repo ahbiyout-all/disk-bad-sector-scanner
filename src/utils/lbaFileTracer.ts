@@ -328,9 +328,12 @@ export async function traceAffectedFilesForLba(
     ...overrides
   });
 
-  if (!isTauriDesktopRuntime() || !drive.id.startsWith('drive-tauri-physical-')) {
+  const isTauriDrive = isTauriDesktopRuntime() && drive.id.startsWith('drive-tauri-physical-');
+  const isBrowserImage = drive.id.startsWith('drive-browser-image-');
+
+  if (!isTauriDrive && !isBrowserImage) {
     return makeEmpty(
-      'Tauri 데스크톱 네이티브 IPC 환경(Windows 관리자 권한)에서만 물리 디스크의 MBR/GPT/MFT 메타데이터를 직접 판독해 손상 LBA 영향 파일을 추적할 수 있습니다.'
+      'Tauri 데스크톱 네이티브 물리 드라이브 또는 마운트된 로컬 디스크 이미지(.img/.dd/.bin)에서 MBR/GPT/MFT/FAT 메타데이터를 판독해 영향 파일을 추적할 수 있습니다.'
     );
   }
 

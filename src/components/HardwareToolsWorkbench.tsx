@@ -67,6 +67,8 @@ export interface HardwareToolsWorkbenchProps {
   onOpenHexInspector: (lba?: number) => void;
   onOpenRemapModal: () => void;
   onOpenSanitizeTrim: () => void;
+  onMountOpfsDiagnosticDrive?: () => Promise<void> | void;
+  onMountLocalImage?: () => void;
 }
 
 export const HardwareToolsWorkbench: React.FC<HardwareToolsWorkbenchProps> = ({
@@ -95,7 +97,9 @@ export const HardwareToolsWorkbench: React.FC<HardwareToolsWorkbenchProps> = ({
   onRunWatchdogNow,
   onOpenHexInspector,
   onOpenRemapModal,
-  onOpenSanitizeTrim
+  onOpenSanitizeTrim,
+  onMountOpfsDiagnosticDrive,
+  onMountLocalImage
 }) => {
   const en = locale === 'en';
 
@@ -212,15 +216,37 @@ export const HardwareToolsWorkbench: React.FC<HardwareToolsWorkbenchProps> = ({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void onRescanDrives()}
-            disabled={isRescanning}
-            className="h-8 px-3.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 self-start sm:self-center"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
-            <span>{t(locale, 'nav.rescan')}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-center">
+            {onMountOpfsDiagnosticDrive && (
+              <button
+                type="button"
+                onClick={() => void onMountOpfsDiagnosticDrive()}
+                className="h-8 px-3.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>{en ? 'Mount 8MB OPFS Image' : '진단용 이미지 마운트 (OPFS 8MB)'}</span>
+              </button>
+            )}
+            {onMountLocalImage && (
+              <button
+                type="button"
+                onClick={onMountLocalImage}
+                className="h-8 px-3.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>{en ? 'Load .img/.dd File' : '로컬 이미지 마운트'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void onRescanDrives()}
+              disabled={isRescanning}
+              className="h-8 px-3.5 rounded-md border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
+              <span>{t(locale, 'nav.rescan')}</span>
+            </button>
+          </div>
         </section>
       ) : (
         <div>
