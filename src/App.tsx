@@ -147,6 +147,13 @@ export default function App() {
     return true; // Default to dark mode for diagnostic monitors
   });
   const [locale, setLocale] = useState<AppLocale>(() => loadSavedLocale());
+  const [scanBlockCount, setScanBlockCount] = useState<number>(() => {
+    const saved = Number(safeStorage.getItem('disk_scanner_block_count'));
+    return [250, 500, 1000, 2500, 5000].includes(saved) ? saved : 1000;
+  });
+  useEffect(() => {
+    safeStorage.setItem('disk_scanner_block_count', String(scanBlockCount));
+  }, [scanBlockCount]);
   const handleChangeLocale = useCallback((nextLocale: AppLocale) => {
     setLocale(nextLocale);
     saveLocale(nextLocale);
@@ -565,14 +572,6 @@ export default function App() {
     return { success: true, message: res.message };
   }, [selectedDriveId]);
 
-  // Initialize blank blocks preview when drive changes
-  const initDriveBlocks = useCallback((drive: DiskDrive) => {
-    const { blocks: initialBlocks } = generateBlocksForDrive(drive, TOTAL_SCAN_BLOCKS);
-    lastInitializedDriveRef.current = { id: drive.id, totalSectors: drive.totalSectors };
-    setIdleBlocks(initialBlocks);
-    setSelectedBlock(null);
-  }, []);
-
   // Focused task for active drive & inspector stage
   const activeTask = useMemo(() => {
     if (!activeDrive) return null;
@@ -582,6 +581,20 @@ export default function App() {
     if (runningForDrive) return runningForDrive;
     return tasks.find(t => t.driveId === activeDrive.id) || null;
   }, [tasks, activeTaskId, activeDrive]);
+
+  // Initialize blank blocks preview when drive changes
+  const initDriveBlocks = useCallback((drive: DiskDrive) => {
+    const { blocks: initialBlocks } = generateBlocksForDrive(drive, scanBlockCount);
+    lastInitializedDriveRef.current = { id: drive.id, totalSectors: drive.totalSectors };
+    setIdleBlocks(initialBlocks);
+    setSelectedBlock(null);
+  }, [scanBlockCount]);
+
+  useEffect(() => {
+    if (activeDrive && !activeTask) {
+      initDriveBlocks(activeDrive);
+    }
+  }, [scanBlockCount, activeDrive, activeTask, initDriveBlocks]);
 
   const blocks = useMemo(
     () => (activeTask ? activeTask.blocks : idleBlocks),
@@ -690,6 +703,7 @@ export default function App() {
 
   // Telemetry & Scan Settings
   const [scanMode, setScanMode] = useState<'quick' | 'full'>('full');
+
   const [scanSpeedMultiplier, setScanSpeedMultiplier] = useState<number>(() => {
     const saved = Number(safeStorage.getItem('disk_scanner_speed_multiplier'));
     return [1, 2, 5, 10].includes(saved) ? saved : 2;
@@ -1659,7 +1673,7 @@ export default function App() {
         }
       }
 
-      const { blocks: initialBlocks } = generateBlocksForDrive(targetDrive, TOTAL_SCAN_BLOCKS);
+      const { blocks: initialBlocks } = generateBlocksForDrive(targetDrive, scanBlockCount);
       const totalB = initialBlocks.length;
       const clampedStartPct = Math.max(0, Math.min(95, rangeStartPct));
       const clampedEndPct = Math.max(clampedStartPct + 1, Math.min(100, rangeEndPct));
@@ -2555,13 +2569,40 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Scan Resolution Block Unit Selector */}
+                <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                    <span>검사 해상도 단위 (블록 수)</span>
+                    <span className="font-bold text-slate-700 dark:text-slate-300">{scanBlockCount.toLocaleString()} 블록</span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1">
+                    {[250, 500, 1000, 2500, 5000].map(cnt => {
+                      const active = scanBlockCount === cnt;
+                      return (
+                        <button
+                          key={cnt}
+                          type="button"
+                          onClick={() => setScanBlockCount(cnt)}
+                          className={`py-1 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer border ${
+                            active
+                              ? 'bg-blue-600 border-blue-600 text-white shadow-2xs'
+                              : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {cnt >= 1000 ? `${cnt / 1000}k` : cnt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 {/* Quick Scan Toggle (Every 10th Block Sampling) */}
                 {(() => {
                   const isQuick = scanMode === 'quick';
                   const clampedStartPct = Math.max(0, Math.min(95, rangeStartPct));
                   const clampedEndPct = Math.max(clampedStartPct + 1, Math.min(100, rangeEndPct));
-                  const startB = Math.floor((clampedStartPct / 100) * (TOTAL_SCAN_BLOCKS - 1));
-                  const endB = Math.max(startB, Math.floor((clampedEndPct / 100) * (TOTAL_SCAN_BLOCKS - 1)));
+                  const startB = Math.floor((clampedStartPct / 100) * (scanBlockCount - 1));
+                  const endB = Math.max(startB, Math.floor((clampedEndPct / 100) * (scanBlockCount - 1)));
                   const rangeBlockTotal = endB - startB + 1;
                   const targetBlockCount = isQuick
                     ? Math.floor((endB - startB) / 10) + 1
